@@ -172,12 +172,16 @@ function apiBootstrap_(user) {
    Object.keys(API_TABLES).forEach(t => schema[t] = apiSchema_(t, lists));
 
    const out = {
-      user: { email: user.email, name: user.name, role: user.role, tanks: user.tanks },
+      user: { id: user.id, email: user.email, name: user.name, role: user.role, tanks: user.tanks },
       appName: API_CONFIG.appName,
       schema: schema,
       data: data
    };
    if (user.role === "Admin") out.users = apiGetUsers_();
+   // User ID -> name, so the app can show who uploaded or changed things.
+   if (user.role === "Admin" || user.role === "Editor") {
+      out.people = apiGetUsers_().map(u => ({ id: u.id, name: u.name || u.email }));
+   }
    Object.assign(out, apiReceiptsBootstrap_(user, lists));
    return out;
 }
@@ -387,16 +391,39 @@ function apiGetUsers_() {
    const col = name => h.indexOf(name);
    // Row numbers are worked out before skipping blank rows, so an empty
    // row in the middle of the tab can't shift edits onto the wrong person.
-   return values.map((r, i) => ({ r: r, row: i + 1 })).slice(1)
+   const users = values.map((r, i) => ({ r: r, row: i + 1 })).slice(1)
       .filter(x => String(x.r[col("Email")]).trim() !== "")
       .map(({ r, row }) => ({
          row: row,
+         id: col("User ID") === -1 ? "" : String(r[col("User ID")]).trim(),
          email: String(r[col("Email")]).trim().toLowerCase(),
          name: String(r[col("Name")] || "").trim(),
          role: API_ROLES.indexOf(String(r[col("Role")]).trim()) !== -1 ? String(r[col("Role")]).trim() : "Viewer",
          tanks: String(r[col("Editable Tanks")] || "").split(",").map(s => s.trim()).filter(Boolean),
          active: r[col("Active")] === true || String(r[col("Active")]).toUpperCase() === "TRUE"
       }));
+   // Anyone typed straight into the sheet without a User ID gets one.
+   if (col("User ID") !== -1 && users.some(u => !u.id)) {
+      let next = apiMaxUserNumber_(users);
+      users.forEach(u => {
+         if (u.id) return;
+         u.id = "USR-" + (++next);
+         sheet.getRange(u.row, col("User ID") + 1).setValue(u.id);
+      });
+   }
+   return users;
+}
+
+function apiMaxUserNumber_(users) {
+   return users.reduce((m, u) => {
+      const n = Number(String(u.id).replace(/^\D+/, ""));
+      return isNaN(n) ? m : Math.max(m, n);
+   }, 0);
+}
+
+// Who did something, as stored in the sheet: the User ID.
+function apiWho_(user) {
+   return user.id || user.email;
 }
 
 function apiSaveUser_(req, user) {
@@ -407,14 +434,21 @@ function apiSaveUser_(req, user) {
    const role = API_ROLES.indexOf(u.role) !== -1 ? u.role : null;
    if (!role) throw apiError_("INVALID", "Choose a role.");
    const active = u.active !== false;
-   if (email === user.email && (role !== "Admin" || !active)) {
-      throw apiError_("INVALID", "You can't remove your own admin access.");
+
+   const all = apiGetUsers_();
+   // Existing users are matched by User ID (so their email can be changed).
+   const existing = u.id ? all.find(x => x.id === u.id) : null;
+   if (u.id && !existing) throw apiError_("STALE", "That user no longer exists. Refresh and try again.");
+   const clash = all.find(x => x.email === email && (!existing || x.id !== existing.id));
+   if (clash) throw apiError_("INVALID", email + " is already on the list (" + clash.id + ").");
+   if (existing && existing.id === user.id) {
+      if (role !== "Admin" || !active) throw apiError_("INVALID", "You can't remove your own admin access.");
+      if (email !== existing.email) throw apiError_("INVALID", "You can't change your own email here. Edit it in the App Users tab if you need to.");
    }
+
    const tankIds = apiReadTable_("tanks").rows.map(t => t["Tank ID"]);
    const tanks = (u.tanks || []).filter(t => tankIds.indexOf(t) !== -1);
-
    const sheet = apiEnsureSupportTabs_().users;
-   const existing = apiGetUsers_().find(x => x.email === email);
    const record = { "Email": email, "Name": String(u.name || "").trim(), "Role": role,
                     "Editable Tanks": role === "Editor" ? tanks.join(", ") : "", "Active": active };
 
@@ -422,11 +456,12 @@ function apiSaveUser_(req, user) {
       const before = { "Email": existing.email, "Name": existing.name, "Role": existing.role,
                        "Editable Tanks": existing.tanks.join(", "), "Active": existing.active };
       const changes = apiWriteChanges_(sheet, existing.row, before, record);
-      if (changes.length) apiLog_(user, "Edit", "App Users", email, changes.join("; "));
+      if (changes.length) apiLog_(user, "Edit", "App Users", existing.id, changes.join("; "));
    } else {
+      record["User ID"] = "USR-" + (apiMaxUserNumber_(all) + 1);
       record["Added"] = new Date();
       apiAppendRow_(sheet, record);
-      apiLog_(user, "Add", "App Users", email, apiDescribe_(record));
+      apiLog_(user, "Add", "App Users", record["User ID"], apiDescribe_(record));
    }
    return { users: apiGetUsers_() };
 }
@@ -587,23 +622,23 @@ function apiEnsureSupportTabs_() {
    let users = ss.getSheetByName(API_CONFIG.usersSheetName);
    if (!users) {
       users = ss.insertSheet(API_CONFIG.usersSheetName);
-      users.getRange(1, 1, 1, 7).setValues([["Email", "Name", "Role", "Editable Tanks", "Active", "Added", "Notes"]])
+      users.getRange(1, 1, 1, 8).setValues([["User ID", "Email", "Name", "Role", "Editable Tanks", "Active", "Added", "Notes"]])
          .setFontWeight("bold").setBackground("#d9d9d9");
-      users.appendRow([Session.getEffectiveUser().getEmail().toLowerCase(), "Chris Ayers", "Admin", "", true, new Date(),
+      users.appendRow(["USR-1", Session.getEffectiveUser().getEmail().toLowerCase(), "Chris Ayers", "Admin", "", true, new Date(),
                        "Owner. Editable Tanks: comma-separated Tank IDs (Editors only)."]);
       users.setFrozenRows(1);
-      users.getRange("E2:E").insertCheckboxes();
-      users.getRange("C2:C").setDataValidation(SpreadsheetApp.newDataValidation()
+      users.getRange("F2:F").insertCheckboxes();
+      users.getRange("D2:D").setDataValidation(SpreadsheetApp.newDataValidation()
          .requireValueInList(API_ROLES, true).setAllowInvalid(false).build());
-      users.getRange("F2:F").setNumberFormat("m/d/yyyy");
-      users.setColumnWidths(1, 1, 220);
-      users.setColumnWidths(4, 1, 200);
-      users.setColumnWidths(7, 1, 320);
+      users.getRange("G2:G").setNumberFormat("m/d/yyyy");
+      users.setColumnWidths(2, 1, 220);
+      users.setColumnWidths(5, 1, 200);
+      users.setColumnWidths(8, 1, 320);
    }
    let log = ss.getSheetByName(API_CONFIG.logSheetName);
    if (!log) {
       log = ss.insertSheet(API_CONFIG.logSheetName);
-      log.getRange(1, 1, 1, 6).setValues([["Timestamp", "User", "Action", "Table", "Record", "Changes"]])
+      log.getRange(1, 1, 1, 6).setValues([["Timestamp", "User ID", "Action", "Table", "Record", "Changes"]])
          .setFontWeight("bold").setBackground("#d9d9d9");
       log.setFrozenRows(1);
       log.getRange("A2:A").setNumberFormat("m/d/yyyy h:mm am/pm");
@@ -615,7 +650,10 @@ function apiEnsureSupportTabs_() {
 }
 
 function apiLog_(user, action, table, record, changes) {
-   apiEnsureSupportTabs_().log.appendRow([new Date(), user.email, action, table, record, changes || ""]);
+   const log = apiEnsureSupportTabs_().log;
+   const row = apiLastDataRow_(log) + 1;
+   if (row > log.getMaxRows()) log.insertRowAfter(log.getMaxRows());
+   log.getRange(row, 1, 1, 6).setValues([[new Date(), apiWho_(user), action, table, record, changes || ""]]);
 }
 
 

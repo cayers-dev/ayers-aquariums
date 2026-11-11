@@ -155,14 +155,14 @@ function apiUploadReceipt_(req, user) {
    const id = apiNextReceiptId_();
    const folder = DriveApp.getFolderById(RECEIPTS_CONFIG.folderId);
    const file = folder.createFile(Utilities.newBlob(bytes, mimeType, fileName));
-   file.setDescription(id + " · uploaded by " + user.email + " via " + API_CONFIG.appName);
+   file.setDescription(id + " · uploaded by " + (user.name || user.email) + " (" + apiWho_(user) + ") via " + API_CONFIG.appName);
 
    if (r.vendor) r.vendor = apiEnsureVendor_(r.vendor, user);
 
    const values = {
       "Receipt ID": id, "File Name": fileName, "Vendor": r.vendor, "Purchase Date": r.purchaseDate,
       "Total": r.total, "Notes": r.notes, "Photo Link": file.getUrl(), "Drive File ID": file.getId(),
-      "Uploaded By": user.email, "Uploaded At": new Date(), "Status": "Active"
+      "Uploaded By": apiWho_(user), "Uploaded At": new Date(), "Status": "Active"
    };
    apiAppendRow_(tabs.receipts, values);
    apiLog_(user, "Upload", "Receipts", id, apiDescribe_({ "File Name": fileName, "Vendor": r.vendor,
@@ -271,7 +271,7 @@ function apiAddReceiptLinks_(tabs, receiptId, itemIds, user) {
    const added = [];
    itemIds.forEach(itemId => {
       if (active[itemId] || added.indexOf(itemId) !== -1) return;
-      apiAppendRow_(tabs.links, { "Receipt ID": receiptId, "Item ID": itemId, "Linked By": user.email,
+      apiAppendRow_(tabs.links, { "Receipt ID": receiptId, "Item ID": itemId, "Linked By": apiWho_(user),
                                   "Date Linked": new Date(), "Active": true });
       added.push(itemId);
    });
