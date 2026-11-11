@@ -623,7 +623,7 @@
       const errBox = $(".form-error", form);
       errBox.hidden = true;
       const missing = $$("[required]", form).filter(el => !el.disabled && String(el.value).trim() === "")
-        .map(el => { const l = el.id && $("label[for='" + el.id + "']", form); return l ? l.textContent.replace(/\s*\*\s*$/, "") : el.name; });
+        .map(el => { if (el.dataset.label) return el.dataset.label; const l = el.id && $("label[for='" + el.id + "']", form); return l ? l.textContent.replace(/\s*\*\s*$/, "") : el.name; });
       if (missing.length) {
         errBox.textContent = "Please fill in: " + missing.join(", ") + ".";
         errBox.hidden = false;
@@ -668,33 +668,97 @@
     });
   }
 
+  // Searchable picker: one text field that filters a tappable list below it.
+  // items: [{ value, label, sub, group, img }]
+  function comboHtml(f, items) {
+    const id = "f_" + f.name.replace(/\W+/g, "_");
+    let lastGroup = null;
+    const opts = items.map(it => {
+      let head = "";
+      if (it.group && it.group !== lastGroup) { head = '<div class="combo-group">' + esc(it.group) + '</div>'; lastGroup = it.group; }
+      const search = [it.label, it.value, it.sub, it.group].filter(Boolean).join(" ").toLowerCase();
+      return head + '<button type="button" class="combo-opt" role="option" data-value="' + esc(it.value) + '" data-label="' + esc(it.label) + '" data-search="' + esc(search) + '">' +
+        (it.img ? '<img class="thumb" loading="lazy" alt="" src="' + esc(thumbUrl(it.img)) + '">' : '<span class="thumb">' + esc(String(it.value).split("-")[0]) + '</span>') +
+        '<span class="body"><span class="title">' + esc(it.label) + '</span><span class="sub">' + esc([it.value, it.sub].filter(Boolean).join(" · ")) + '</span></span></button>';
+    }).join("");
+    return '<div class="field combo" data-combo>' +
+      '<label for="' + id + '_q">' + esc(f.label || f.name) + (f.required ? ' <span class="req">*</span>' : "") + '</label>' +
+      '<input type="hidden" name="' + esc(f.name) + '" data-label="' + esc(f.label || f.name) + '"' + (f.required ? " required" : "") + '>' +
+      '<div class="combo-box"><input type="text" id="' + id + '_q" class="combo-input" role="combobox" aria-expanded="false" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="' + esc(f.placeholder || "Tap to choose or type to search") + '">' +
+      '<button type="button" class="combo-clear" aria-label="Clear" hidden>' + ICONS.close + '</button></div>' +
+      '<div class="combo-list" role="listbox" hidden>' + (opts || "") + '<div class="combo-empty"' + (opts ? " hidden" : "") + '>No matches</div></div>' +
+    '</div>';
+  }
+
+  function wireCombo(root) {
+    const hidden = $("input[type=hidden]", root);
+    const input = $(".combo-input", root);
+    const list = $(".combo-list", root);
+    const clear = $(".combo-clear", root);
+    const opts = $$(".combo-opt", list);
+    const groups = $$(".combo-group", list);
+    const empty = $(".combo-empty", list);
+    const open = () => { list.hidden = false; input.setAttribute("aria-expanded", "true"); };
+    const close = () => { list.hidden = true; input.setAttribute("aria-expanded", "false"); };
+    const filter = q => {
+      q = q.trim().toLowerCase();
+      const words = q.split(/\s+/).filter(Boolean);
+      opts.forEach(o => { o.hidden = !words.every(w => o.dataset.search.indexOf(w) !== -1); });
+      groups.forEach(g => {
+        let n = g.nextElementSibling, any = false;
+        while (n && !n.classList.contains("combo-group")) { if (n.classList.contains("combo-opt") && !n.hidden) any = true; n = n.nextElementSibling; }
+        g.hidden = !any;
+      });
+      empty.hidden = opts.some(o => !o.hidden);
+    };
+    const pick = o => {
+      hidden.value = o.dataset.value;
+      input.value = o.dataset.label;
+      opts.forEach(x => x.classList.toggle("on", x === o));
+      clear.hidden = false;
+      close();
+      input.blur();
+    };
+    input.addEventListener("focus", () => { if (!hidden.value) { filter(input.value); open(); } });
+    input.addEventListener("click", () => { if (hidden.value) { input.select(); } filter(hidden.value ? "" : input.value); open(); });
+    input.addEventListener("input", () => {
+      hidden.value = "";
+      opts.forEach(x => x.classList.remove("on"));
+      clear.hidden = !input.value;
+      filter(input.value);
+      open();
+    });
+    input.addEventListener("keydown", e => {
+      if (e.key === "Escape") close();
+      if (e.key === "Enter") { e.preventDefault(); const first = opts.find(o => !o.hidden); if (first && !list.hidden) pick(first); }
+    });
+    list.addEventListener("click", e => { const o = e.target.closest(".combo-opt"); if (o) pick(o); });
+    clear.addEventListener("click", () => {
+      hidden.value = ""; input.value = ""; clear.hidden = true;
+      opts.forEach(x => x.classList.remove("on"));
+      filter(""); open(); input.focus();
+    });
+    document.addEventListener("click", e => { if (!root.contains(e.target)) close(); }, true);
+  }
+
   function assignmentForm(tankId) {
     const inTank = new Set(tankAssignments(tankId, true).map(a => a["Item ID"]));
-    const optgroups = ITEM_TYPES.map(ty => {
+    const items = [];
+    ITEM_TYPES.forEach(ty => {
       const T = TYPES[ty];
-      const opts = state.data[ty].filter(r => !isRetired(r) && !inTank.has(r[T.id]))
+      state.data[ty].filter(r => !isRetired(r) && !inTank.has(r[T.id]))
         .sort((a, b) => String(T.title(a)).localeCompare(String(T.title(b))))
-        .map(r => '<option value="' + esc(r[T.id]) + '">' + esc(T.title(r) + " (" + r[T.id] + ")") + '</option>').join("");
-      return opts ? '<optgroup label="' + esc(T.label) + '">' + opts + '</optgroup>' : "";
-    }).join("");
-    const filter = '<div class="field"><label for="f_filter">Find</label><input type="text" id="f_filter" placeholder="Type to narrow the list" autocomplete="off"></div>';
+        .forEach(r => items.push({ value: r[T.id], label: T.title(r), sub: T.sub(r), group: T.label, img: T.img(r) }));
+    });
     openSheet({
       title: "Add to " + tankName(tankId),
       submitLabel: "Add",
-      body: filter +
-        fieldHtml({ name: "Item ID", label: "Item", type: "select", required: true, html: '<option value=""></option>' + optgroups }) +
+      body:
+        comboHtml({ name: "Item ID", label: "Item", required: true, placeholder: "Tap to choose, or type to search" }, items) +
         fieldHtml({ name: "Date Added", type: "date" }, today()) +
         fieldHtml({ name: "Notes", type: "longtext" }, "") +
         '<p class="hint">Only admins can add new species, equipment or plants to the lists. Ask Chris if something is missing.</p>',
-      onReady: form => {
-        const sel = $("select[name='Item ID']", form);
-        const all = $$("option", sel).map(o => ({ o: o, text: o.textContent.toLowerCase() }));
-        $("#f_filter", form).addEventListener("input", e => {
-          const q = e.target.value.trim().toLowerCase();
-          all.forEach(x => { if (x.o.value) x.o.hidden = !!q && x.text.indexOf(q) === -1; });
-          $$("optgroup", sel).forEach(g => { g.hidden = !$$("option", g).some(o => !o.hidden); });
-        });
-      },
+      onReady: form => $$("[data-combo]", form).forEach(wireCombo),
       onSubmit: vals => write("add", { table: "assignments", values: { "Tank ID": tankId, "Item ID": vals["Item ID"], "Date Added": vals["Date Added"], "Notes": vals["Notes"] } }, "Added to tank")
     });
   }
