@@ -16,7 +16,7 @@
 
 const API_CONFIG = {
    // OAuth "Web application" client ID from Google Cloud Console.
-   clientId: "PASTE_CLIENT_ID_HERE",
+   clientId: "53317218551-r9sk421q1ndrvb0hmivv20n4jt376to5.apps.googleusercontent.com",
    usersSheetName: "App Users",
    logSheetName: "Change Log",
    appName: "Ayers Aquariums"
