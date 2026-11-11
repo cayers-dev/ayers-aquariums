@@ -140,6 +140,13 @@ function apiUploadReceipt_(req, user) {
    const bytes = Utilities.base64Decode(String(img.data).replace(/^data:[^,]*,/, ""));
    if (bytes.length > RECEIPTS_CONFIG.maxImageBytes) throw apiError_("INVALID", "That photo is too large.");
 
+   // Admins can assign records at upload time (optional).
+   const itemIds = (req.itemIds || []).map(s => String(s).trim()).filter(Boolean);
+   if (itemIds.length) {
+      apiRequireAdmin_(user);
+      apiCheckLinkTargets_(itemIds);
+   }
+
    const ext = { "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif",
                  "image/heic": ".heic", "image/heif": ".heif" }[mimeType];
    const fileName = apiFileNameWithExt_(r.fileName, ext);
@@ -160,7 +167,8 @@ function apiUploadReceipt_(req, user) {
    apiAppendRow_(tabs.receipts, values);
    apiLog_(user, "Upload", "Receipts", id, apiDescribe_({ "File Name": fileName, "Vendor": r.vendor,
       "Purchase Date": r.purchaseDate, "Total": r.total, "Notes": r.notes }));
-   return { added: { table: "receipts", id: id } };
+   const linked = itemIds.length ? apiAddReceiptLinks_(tabs, id, itemIds, user) : [];
+   return { added: { table: "receipts", id: id }, linked: linked };
 }
 
 
@@ -243,24 +251,32 @@ function apiLinkReceipt_(req, user) {
    if (!rec) throw apiError_("NOT_FOUND", "That receipt no longer exists.");
    const itemIds = (req.itemIds || []).map(s => String(s).trim()).filter(Boolean);
    if (!itemIds.length) throw apiError_("INVALID", "Choose at least one record to link.");
+   apiCheckLinkTargets_(itemIds);
+   return { linked: apiAddReceiptLinks_(tabs, rec["Receipt ID"], itemIds, user) };
+}
 
+// Throws if any ID isn't a tank, species, equipment, plant or medication.
+function apiCheckLinkTargets_(itemIds) {
    const known = {};
    RECEIPT_LINK_TABLES.forEach(t => apiReadTable_(t).rows.forEach(row => known[row[API_TABLES[t].id]] = true));
+   itemIds.forEach(itemId => { if (!known[itemId]) throw apiError_("INVALID", itemId + " doesn't exist."); });
+}
+
+// Adds one Receipt Links row per new record; skips ones already linked.
+function apiAddReceiptLinks_(tabs, receiptId, itemIds, user) {
    const active = {};
    apiReadReceiptLinks_().forEach(l => {
-      if (l["Receipt ID"] === rec["Receipt ID"] && l["Active"] === true && !l["Date Unlinked"]) active[l["Item ID"]] = true;
+      if (l["Receipt ID"] === receiptId && l["Active"] === true && !l["Date Unlinked"]) active[l["Item ID"]] = true;
    });
-
    const added = [];
    itemIds.forEach(itemId => {
-      if (!known[itemId]) throw apiError_("INVALID", itemId + " doesn't exist.");
       if (active[itemId] || added.indexOf(itemId) !== -1) return;
-      apiAppendRow_(tabs.links, { "Receipt ID": rec["Receipt ID"], "Item ID": itemId, "Linked By": user.email,
+      apiAppendRow_(tabs.links, { "Receipt ID": receiptId, "Item ID": itemId, "Linked By": user.email,
                                   "Date Linked": new Date(), "Active": true });
       added.push(itemId);
    });
-   if (added.length) apiLog_(user, "Link receipt", "Receipt Links", rec["Receipt ID"], "Linked to: " + added.join(", "));
-   return { linked: added };
+   if (added.length) apiLog_(user, "Link receipt", "Receipt Links", receiptId, "Linked to: " + added.join(", "));
+   return added;
 }
 
 function apiUnlinkReceipt_(req, user) {
