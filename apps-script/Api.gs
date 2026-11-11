@@ -203,6 +203,13 @@ function apiLimitToAssignedTanks_(out, user) {
    const allTankIds = {};
    out.data.tanks.forEach(t => allTankIds[t["Tank ID"]] = true);
    const visible = id => !!mine[id];
+   // An item's "In tanks" list still shows every tank it's in: for tanks
+   // this person isn't assigned to, send only the tank's ID and name.
+   const names = {};
+   out.data.tanks.forEach(t => names[t["Tank ID"]] = t["Tank Name"]);
+   out.otherAssignments = out.data.assignments
+      .filter(r => !visible(r["Tank ID"]) && r["Active"] === true && !r["Date Removed"])
+      .map(r => ({ "Item ID": r["Item ID"], "Tank ID": r["Tank ID"], "Tank Name": names[r["Tank ID"]] || r["Tank ID"], "Date Added": r["Date Added"] }));
    out.data.tanks = out.data.tanks.filter(t => visible(t["Tank ID"]));
    out.data.assignments = out.data.assignments.filter(r => visible(r["Tank ID"]));
    out.data.waterParameters = out.data.waterParameters.filter(r => visible(r["Tank ID"]));
