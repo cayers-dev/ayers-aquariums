@@ -96,7 +96,7 @@ function apiReadSheetRows_(sheet, keyField) {
       headers.forEach((h, c) => {
          if (!h || h in obj) return;
          const v = values[r][c];
-         if (h === "Uploaded At" && v instanceof Date) obj[h] = Utilities.formatDate(v, tz, "yyyy-MM-dd HH:mm");
+         if (/ At$/.test(h) && v instanceof Date) obj[h] = Utilities.formatDate(v, tz, "yyyy-MM-dd HH:mm");
          else if (h === "Total" && typeof v === "number") obj[h] = v.toFixed(2);
          else obj[h] = v instanceof Date ? Utilities.formatDate(v, tz, "yyyy-MM-dd")
                      : (typeof v === "number" ? shown[r][c] : v);

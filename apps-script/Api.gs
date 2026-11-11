@@ -96,6 +96,13 @@ function apiRoute_(req, user) {
       case "retireReceipt":     return apiWrite_(() => apiRetireReceipt_(req, user));
       case "linkReceipt":       return apiWrite_(() => apiLinkReceipt_(req, user));
       case "unlinkReceipt":     return apiWrite_(() => apiUnlinkReceipt_(req, user));
+      // Water testing (WaterTests.gs)
+      case "logWaterTest":        return apiWrite_(() => apiLogWaterTest_(req, user));
+      case "updateWaterReading":  return apiWrite_(() => apiUpdateWaterReading_(req, user));
+      case "retireWaterReading":  return apiWrite_(() => apiRetireWaterReading_(req, user));
+      case "updateWaterSession":  return apiWrite_(() => apiUpdateWaterSession_(req, user));
+      case "saveTestType":        return apiWrite_(() => apiSaveTestType_(req, user));
+      case "retireTestType":      return apiWrite_(() => apiRetireTestType_(req, user));
       default: throw apiError_("BAD_REQUEST", "Unknown action.");
    }
 }
@@ -183,6 +190,7 @@ function apiBootstrap_(user) {
       out.people = apiGetUsers_().map(u => ({ id: u.id, name: u.name || u.email }));
    }
    Object.assign(out, apiReceiptsBootstrap_(user, lists));
+   Object.assign(out, apiWaterBootstrap_(user));
    return out;
 }
 
@@ -244,7 +252,7 @@ function apiSchema_(table, lists) {
       .filter(h => API_FORMULA_COLUMNS.indexOf(h) === -1)
       .map(h => {
          const f = { name: h, type: "text" };
-         if (h === def.id) f.readOnly = true;
+         if (h === def.id || h === "Test Type ID") f.readOnly = true;
          if (listDefs[h]) { f.type = "list"; f.options = lists[listDefs[h][0]] || []; f.strict = listDefs[h][1]; }
          else if (API_NUMBER_FIELDS.indexOf(h) !== -1) f.type = "number";
          else if (API_DATE_PATTERN.test(h)) f.type = "date";
@@ -305,6 +313,8 @@ function apiAdd_(req, user) {
       const dupe = apiReadTable_("waterParameters").rows.find(r =>
          r["Tank ID"] === tankId && String(r["Parameter"]).toLowerCase() === String(values["Parameter"]).toLowerCase());
       if (dupe) throw apiError_("INVALID", tankId + " already has " + values["Parameter"] + ". Edit it instead.");
+      const tt = apiReadTestTypes_().find(t => String(t["Name"]).toLowerCase() === String(values["Parameter"]).toLowerCase());
+      if (tt) { values["Test Type ID"] = tt["Test Type ID"]; if (!values["Units"]) values["Units"] = tt["Units"]; }
       const row = apiAppendRow_(apiSheet_(def.sheetKey), values);
       apiLog_(user, "Add", def.label, tankId + " / " + values["Parameter"], apiDescribe_(values));
       return { added: { table: table, row: row } };
@@ -389,6 +399,7 @@ function apiGetUsers_() {
    const values = sheet.getDataRange().getValues();
    const h = values[0].map(x => String(x).trim());
    const col = name => h.indexOf(name);
+   const tanksCol = col("Assigned Tanks") !== -1 ? col("Assigned Tanks") : col("Editable Tanks");
    // Row numbers are worked out before skipping blank rows, so an empty
    // row in the middle of the tab can't shift edits onto the wrong person.
    const users = values.map((r, i) => ({ r: r, row: i + 1 })).slice(1)
@@ -399,7 +410,7 @@ function apiGetUsers_() {
          email: String(r[col("Email")]).trim().toLowerCase(),
          name: String(r[col("Name")] || "").trim(),
          role: API_ROLES.indexOf(String(r[col("Role")]).trim()) !== -1 ? String(r[col("Role")]).trim() : "Viewer",
-         tanks: String(r[col("Editable Tanks")] || "").split(",").map(s => s.trim()).filter(Boolean),
+         tanks: String(r[tanksCol] || "").split(",").map(s => s.trim()).filter(Boolean),
          active: r[col("Active")] === true || String(r[col("Active")]).toUpperCase() === "TRUE"
       }));
    // Anyone typed straight into the sheet without a User ID gets one.
@@ -449,12 +460,14 @@ function apiSaveUser_(req, user) {
    const tankIds = apiReadTable_("tanks").rows.map(t => t["Tank ID"]);
    const tanks = (u.tanks || []).filter(t => tankIds.indexOf(t) !== -1);
    const sheet = apiEnsureSupportTabs_().users;
-   const record = { "Email": email, "Name": String(u.name || "").trim(), "Role": role,
-                    "Editable Tanks": role === "Editor" ? tanks.join(", ") : "", "Active": active };
+   // Admins see and change every tank, so they have no assigned tanks.
+   const tanksHeader = apiHasHeader_(sheet, "Assigned Tanks") ? "Assigned Tanks" : "Editable Tanks";
+   const record = { "Email": email, "Name": String(u.name || "").trim(), "Role": role, "Active": active };
+   record[tanksHeader] = role === "Admin" ? "" : tanks.join(", ");
 
    if (existing) {
-      const before = { "Email": existing.email, "Name": existing.name, "Role": existing.role,
-                       "Editable Tanks": existing.tanks.join(", "), "Active": existing.active };
+      const before = { "Email": existing.email, "Name": existing.name, "Role": existing.role, "Active": existing.active };
+      before[tanksHeader] = existing.tanks.join(", ");
       const changes = apiWriteChanges_(sheet, existing.row, before, record);
       if (changes.length) apiLog_(user, "Edit", "App Users", existing.id, changes.join("; "));
    } else {
@@ -622,10 +635,10 @@ function apiEnsureSupportTabs_() {
    let users = ss.getSheetByName(API_CONFIG.usersSheetName);
    if (!users) {
       users = ss.insertSheet(API_CONFIG.usersSheetName);
-      users.getRange(1, 1, 1, 8).setValues([["User ID", "Email", "Name", "Role", "Editable Tanks", "Active", "Added", "Notes"]])
+      users.getRange(1, 1, 1, 8).setValues([["User ID", "Email", "Name", "Role", "Assigned Tanks", "Active", "Added", "Notes"]])
          .setFontWeight("bold").setBackground("#d9d9d9");
       users.appendRow(["USR-1", Session.getEffectiveUser().getEmail().toLowerCase(), "Chris Ayers", "Admin", "", true, new Date(),
-                       "Owner. Editable Tanks: comma-separated Tank IDs (Editors only)."]);
+                       "Owner. Assigned Tanks: comma-separated Tank IDs (Editors edit them + log tests; Viewers log tests)."]);
       users.setFrozenRows(1);
       users.getRange("F2:F").insertCheckboxes();
       users.getRange("D2:D").setDataValidation(SpreadsheetApp.newDataValidation()
