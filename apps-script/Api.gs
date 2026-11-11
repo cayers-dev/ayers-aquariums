@@ -459,9 +459,22 @@ function apiHasHeader_(sheet, name) {
    return name.toLowerCase() in apiHeaderMap_(sheet).map;
 }
 
+// Last row that has real content. Unchecked checkboxes (FALSE) and blank
+// cells don't count, so a column of empty checkboxes doesn't push new
+// rows to the bottom of the tab.
+function apiLastDataRow_(sheet) {
+   const last = sheet.getLastRow();
+   if (last < 2) return 1;
+   const values = sheet.getRange(1, 1, last, Math.max(sheet.getLastColumn(), 1)).getValues();
+   for (let r = values.length - 1; r >= 1; r--) {
+      if (values[r].some(c => c !== "" && c !== false && c !== null)) return r + 1;
+   }
+   return 1;
+}
+
 function apiAppendRow_(sheet, values) {
    const hm = apiHeaderMap_(sheet);
-   const row = Math.max(sheet.getLastRow() + 1, 2);
+   const row = apiLastDataRow_(sheet) + 1;
    if (row > sheet.getMaxRows()) sheet.insertRowAfter(sheet.getMaxRows());
    if (row > 2) {
       sheet.getRange(2, 1, 1, hm.lastCol)
