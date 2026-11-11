@@ -84,8 +84,16 @@ function waterSetup() {
    const dd = ss.getSheetByName("DropDownOptions");
    if (dd) {
       const dh = dd.getRange(1, 1, 1, dd.getLastColumn()).getValues()[0].map(h => String(h).trim());
-      const col = dh.indexOf("Water Parameter") + 1;
+      let col = dh.indexOf("Water Parameter") + 1;
+      if (!col) {
+         // The heading may be a formula that also produced the old list.
+         const f = dd.getRange(1, 1, 1, dd.getLastColumn()).getFormulas()[0];
+         col = f.findIndex(x => /Water Parameter/.test(x)) + 1;
+      }
       if (col) {
+         const oldFormula = dd.getRange(1, col).getFormula();
+         if (oldFormula) notes.push("DropDownOptions heading formula replaced (was: " + oldFormula + ")");
+         dd.getRange(1, col).setValue("Water Parameter");
          dd.getRange(2, col, Math.max(dd.getMaxRows() - 1, 1), 1).clearContent();
          dd.getRange(2, col).setFormula(
             "=IFERROR(SORT(FILTER('Test Types'!B2:B,'Test Types'!F2:F=\"Active\",'Test Types'!B2:B<>\"\")," +
