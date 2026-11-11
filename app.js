@@ -1125,7 +1125,11 @@
                     placeholder: "Choose or type a new vendor" }, vendorItems()) +
         fieldHtml({ name: "purchaseDate", label: "Purchase date", type: "date" }, today()) +
         '<div class="field"><label for="f_total">Total</label><input type="text" inputmode="decimal" id="f_total" name="total" placeholder="0.00" autocomplete="off"></div>' +
-        fieldHtml({ name: "notes", label: "Notes", type: "longtext" }, ""),
+        fieldHtml({ name: "notes", label: "Notes", type: "longtext" }, "") +
+        (isAdmin() ? '<div class="form-section"><h3>Assign to records <span class="opt">optional</span></h3>' +
+          comboHtml({ name: "itemIds", label: "Records on this receipt", mode: "multi",
+                      placeholder: "Search tanks, species, equipment, plants, medications" }, linkableItems(new Set())) +
+          '<p class="hint">Leave empty to assign later from the receipt’s page.</p></div>' : ""),
       onReady: form => {
         $$("[data-combo]", form).forEach(wireCombo);
         const file = $("#f_photo", form), btn = $("[data-pick-photo]", form), prev = $(".photo-preview", form);
@@ -1160,10 +1164,12 @@
         if (!image) throw new Error("Please add a photo of the receipt.");
         const total = String(vals.total || "").replace(/[$,\s]/g, "");
         if (total && isNaN(Number(total))) throw new Error("Total must be an amount like 24.99.");
+        const itemIds = isAdmin() ? String(vals.itemIds || "").split(",").filter(Boolean) : [];
         return write("uploadReceipt", {
           receipt: { fileName: vals.fileName, vendor: vals.vendor, purchaseDate: vals.purchaseDate, total: total, notes: vals.notes },
-          image: { data: image.data, mimeType: image.mimeType }
-        }, "Receipt uploaded");
+          image: { data: image.data, mimeType: image.mimeType },
+          itemIds: itemIds
+        }, itemIds.length ? "Receipt uploaded and assigned" : "Receipt uploaded");
       }
     });
   }
@@ -1201,10 +1207,7 @@
     });
   }
 
-  function linkReceiptForm(id) {
-    const r = findReceipt(id);
-    if (!r) return;
-    const already = new Set(receiptLinksFor(id).map(l => l["Item ID"]));
+  function linkableItems(already) {
     const items = [];
     RECEIPT_LINK_TYPES.forEach(ty => {
       const T = TYPES[ty];
@@ -1215,6 +1218,13 @@
                      disabled: already.has(rid), note: already.has(rid) ? "Linked" : "" });
       });
     });
+    return items;
+  }
+
+  function linkReceiptForm(id) {
+    const r = findReceipt(id);
+    if (!r) return;
+    const items = linkableItems(new Set(receiptLinksFor(id).map(l => l["Item ID"])));
     openSheet({
       title: "Assign " + receiptTitle(r),
       submitLabel: "Link",
