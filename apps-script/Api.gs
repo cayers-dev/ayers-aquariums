@@ -89,6 +89,13 @@ function apiRoute_(req, user) {
       case "retire":            return apiWrite_(() => apiRetire_(req, user));
       case "removeAssignment":  return apiWrite_(() => apiRemoveAssignment_(req, user));
       case "saveUser":          return apiWrite_(() => apiSaveUser_(req, user));
+      // Receipts (Receipts.gs)
+      case "uploadReceipt":     return apiWrite_(() => apiUploadReceipt_(req, user));
+      case "receiptPhoto":      return apiReceiptPhoto_(req, user);
+      case "updateReceipt":     return apiWrite_(() => apiUpdateReceipt_(req, user));
+      case "retireReceipt":     return apiWrite_(() => apiRetireReceipt_(req, user));
+      case "linkReceipt":       return apiWrite_(() => apiLinkReceipt_(req, user));
+      case "unlinkReceipt":     return apiWrite_(() => apiUnlinkReceipt_(req, user));
       default: throw apiError_("BAD_REQUEST", "Unknown action.");
    }
 }
@@ -171,6 +178,7 @@ function apiBootstrap_(user) {
       data: data
    };
    if (user.role === "Admin") out.users = apiGetUsers_();
+   Object.assign(out, apiReceiptsBootstrap_(user, lists));
    return out;
 }
 
