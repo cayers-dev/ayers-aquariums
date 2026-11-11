@@ -216,7 +216,7 @@ img { max-width: 100%; }
 .signin h1 { margin: 6px 0 0; font-size: 26px; }
 .signin p { margin: 0; color: var(--muted); max-width: 340px; }
 .signin .notice { color: var(--danger); background: var(--danger-soft); padding: 10px 14px; border-radius: 12px; max-width: 360px; }
-#gsi-button { min-height: 44px; }
+#gsi-button { color-scheme: light; min-height: 44px; }
 
 /* ---------- Misc ---------- */
 .spinner {
