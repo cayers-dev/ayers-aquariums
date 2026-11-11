@@ -207,6 +207,7 @@
     state.receipts = r.receipts || [];
     state.receiptLinks = r.receiptLinks || [];
     state.vendors = r.vendors || [];
+    state.people = r.people || [];
   }
 
   async function refresh(silent) {
@@ -533,9 +534,9 @@
   function viewUsers() {
     const users = (state.users || []).slice().sort((a, b) => (b.active - a.active) || a.email.localeCompare(b.email));
     const rows = users.map(u =>
-      '<div class="list-item user-row ' + (u.active ? "" : "dim") + '" data-act="edit-user" data-email="' + esc(u.email) + '">' +
+      '<div class="list-item user-row ' + (u.active ? "" : "dim") + '" data-act="edit-user" data-id="' + esc(u.id) + '">' +
       '<div class="body"><div class="title">' + esc(u.name || u.email) + '</div>' +
-      '<div class="sub">' + esc(u.email) + '</div>' +
+      '<div class="sub">' + esc([u.id, u.email].filter(Boolean).join(" · ")) + '</div>' +
       (u.role === "Editor" ? '<div class="sub">Edits: ' + esc(u.tanks.map(tankName).join(", ") || "no tanks yet") + '</div>' : "") + '</div>' +
       '<span class="pill ' + (u.role === "Admin" ? "edit" : "") + '">' + esc(u.active ? u.role : "Inactive") + '</span></div>').join("");
     return {
@@ -894,16 +895,20 @@
     });
   }
 
-  function userForm(email) {
-    const editing = !!email;
-    const u = editing ? state.users.find(x => x.email === email) : { email: "", name: "", role: "Viewer", tanks: [], active: true };
+  function userForm(id) {
+    const editing = !!id;
+    const u = editing ? state.users.find(x => x.id === id) : { id: "", email: "", name: "", role: "Viewer", tanks: [], active: true };
+    if (!u) { toast("That user changed. Refresh and try again.", true); return; }
+    const isMe = editing && state.me && u.id === state.me.id;
     const tanks = state.data.tanks.slice().sort((a, b) => String(a["Tank Name"]).localeCompare(String(b["Tank Name"])));
     const tankBoxes = tanks.map(t => '<label class="check"><input type="checkbox" name="tank:' + esc(t["Tank ID"]) + '"' +
       (u.tanks.indexOf(t["Tank ID"]) !== -1 ? " checked" : "") + '> ' + esc(t["Tank Name"]) + ' <span class="meta">' + esc(t["Tank ID"]) + '</span></label>').join("");
     openSheet({
       title: editing ? "Edit user" : "Add user",
       body:
-        '<div class="field"><label for="f_email">Google account email <span class="req">*</span></label><input type="email" id="f_email" name="email" value="' + esc(u.email) + '" required' + (editing ? " readonly" : "") + ' autocomplete="off"></div>' +
+        (editing ? '<div class="field"><label>User ID</label><input type="text" value="' + esc(u.id) + '" readonly></div>' : "") +
+        '<div class="field"><label for="f_email">Google account email <span class="req">*</span></label><input type="email" id="f_email" name="email" value="' + esc(u.email) + '" required' + (isMe ? " readonly" : "") + ' autocomplete="off">' +
+          (editing && !isMe ? '<div class="hint">Changing the email keeps this person’s User ID and history.</div>' : "") + '</div>' +
         '<div class="field"><label for="f_name">Name</label><input type="text" id="f_name" name="name" value="' + esc(u.name) + '"></div>' +
         '<div class="field"><label for="f_role">Role</label><select id="f_role" name="role">' +
           ["Admin", "Editor", "Viewer"].map(r => '<option' + (r === u.role ? " selected" : "") + '>' + r + '</option>').join("") + '</select>' +
@@ -915,7 +920,7 @@
       },
       onSubmit: async (vals, form) => {
         const picked = $$("input[name^='tank:']", form).filter(el => el.checked).map(el => el.name.slice(5));
-        const payload = { email: editing ? u.email : vals.email, name: vals.name, role: vals.role, tanks: picked, active: vals.active };
+        const payload = { id: editing ? u.id : undefined, email: isMe ? u.email : vals.email, name: vals.name, role: vals.role, tanks: picked, active: vals.active };
         busy(true);
         try {
           const res = await api("saveUser", { user: payload });
@@ -953,10 +958,14 @@
     const n = Number(String(v).replace(/[$,]/g, ""));
     return isNaN(n) ? String(v) : n.toLocaleString(undefined, { style: "currency", currency: "USD" });
   }
-  function personName(email) {
-    if (state.me && email === state.me.email) return "You";
-    const u = (state.users || []).find(x => x.email === email);
-    return u && u.name ? u.name : email;
+  // Accepts a User ID (USR-1) or, for older rows, an email.
+  function personName(who) {
+    if (!who) return "";
+    if (state.me && (who === state.me.id || who === state.me.email)) return "You";
+    const p = (state.people || []).find(x => x.id === who);
+    if (p) return p.name;
+    const u = (state.users || []).find(x => x.email === who || x.id === who);
+    return u ? (u.name || u.email) : who;
   }
   const receiptSortKey = r => (r["Purchase Date"] || "") + " " + (r["Uploaded At"] || "");
 
@@ -1302,7 +1311,7 @@
         if (e.target.closest("button") && e.target.closest("button") !== el) return;
         location.hash = d.href;
         break;
-      case "edit-user": userForm(d.email); break;
+      case "edit-user": userForm(d.id); break;
     }
   });
 
