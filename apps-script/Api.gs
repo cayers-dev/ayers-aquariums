@@ -385,10 +385,12 @@ function apiGetUsers_() {
    const values = sheet.getDataRange().getValues();
    const h = values[0].map(x => String(x).trim());
    const col = name => h.indexOf(name);
-   return values.slice(1)
-      .filter(r => String(r[col("Email")]).trim() !== "")
-      .map((r, i) => ({
-         row: i + 2,
+   // Row numbers are worked out before skipping blank rows, so an empty
+   // row in the middle of the tab can't shift edits onto the wrong person.
+   return values.map((r, i) => ({ r: r, row: i + 1 })).slice(1)
+      .filter(x => String(x.r[col("Email")]).trim() !== "")
+      .map(({ r, row }) => ({
+         row: row,
          email: String(r[col("Email")]).trim().toLowerCase(),
          name: String(r[col("Name")] || "").trim(),
          role: API_ROLES.indexOf(String(r[col("Role")]).trim()) !== -1 ? String(r[col("Role")]).trim() : "Viewer",
