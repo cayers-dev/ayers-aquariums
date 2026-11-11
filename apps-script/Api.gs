@@ -191,7 +191,24 @@ function apiBootstrap_(user) {
    }
    Object.assign(out, apiReceiptsBootstrap_(user, lists));
    Object.assign(out, apiWaterBootstrap_(user));
+   if (user.role !== "Admin") apiLimitToAssignedTanks_(out, user);
    return out;
+}
+
+// Editors and Viewers only receive the tanks assigned to them (and the
+// assignments, ranges, water tests and receipt links for those tanks).
+function apiLimitToAssignedTanks_(out, user) {
+   const mine = {};
+   user.tanks.forEach(t => mine[t] = true);
+   const allTankIds = {};
+   out.data.tanks.forEach(t => allTankIds[t["Tank ID"]] = true);
+   const visible = id => !!mine[id];
+   out.data.tanks = out.data.tanks.filter(t => visible(t["Tank ID"]));
+   out.data.assignments = out.data.assignments.filter(r => visible(r["Tank ID"]));
+   out.data.waterParameters = out.data.waterParameters.filter(r => visible(r["Tank ID"]));
+   if (out.waterSessions) out.waterSessions = out.waterSessions.filter(r => visible(r["Tank ID"]));
+   if (out.waterTests) out.waterTests = out.waterTests.filter(r => visible(r["Tank ID"]));
+   if (out.receiptLinks) out.receiptLinks = out.receiptLinks.filter(l => !allTankIds[l["Item ID"]] || visible(l["Item ID"]));
 }
 
 function apiReadTable_(table) {
