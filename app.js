@@ -400,11 +400,11 @@
           '<span class="pill">' + counts.equipment + ' equipment</span>' +
           (counts.plants ? '<span class="pill">' + counts.plants + ' plants</span>' : "") +
           (isRetired(t) ? '<span class="pill retired">Retired</span>' : "") +
-          (!isAdmin() && canEditTank(id) ? '<span class="pill edit">You can edit</span>' : "") +
+          "" +
         '</div></a>';
     }).join("");
     const addBtn = isAdmin() ? '<div class="actions" style="margin:0 0 12px"><button class="btn primary" data-act="add-record" data-type="tanks">' + ICONS.plus + 'Add tank</button></div>' : "";
-    return { title: "Ayers Aquariums", html: addBtn + (cards || '<div class="empty">No tanks yet.</div>') };
+    return { title: "Ayers Aquariums", html: addBtn + (cards || '<div class="empty">' + (isAdmin() ? "No tanks yet." : "No tanks are assigned to you yet. Ask Chris to add you to a tank.") + '</div>') };
   }
 
   // ---------- Tank detail ----------
@@ -556,7 +556,7 @@
       title: "Users",
       html: '<div class="actions" style="margin:0 0 12px"><button class="btn primary" data-act="add-user">' + ICONS.plus + 'Add user</button></div>' +
         '<div class="card list">' + (rows || '<div class="empty">No users.</div>') + '</div>' +
-        '<p class="hint">Admins can change everything. Editors can change only the tanks you pick for them. Viewers can only look. Users sign in with the Google account email listed here.</p>'
+        '<p class="hint">Admins see and change everything. Editors see, edit and log water tests on their assigned tanks. Viewers see and log water tests on their assigned tanks. Everyone can browse species, equipment, plants and medications. Users sign in with the Google account email listed here.</p>'
     };
   }
 
@@ -572,6 +572,7 @@
         '<div class="k">Name</div><div>' + esc(me.name || "") + '</div>' +
         '<div class="k">Email</div><div>' + esc(me.email) + '</div>' +
         '<div class="k">Role</div><div>' + esc(me.role) + '</div>' +
+        '<div class="k">Can see</div><div>' + esc(me.role === "Admin" ? "All tanks" : assigned) + '</div>' +
         '<div class="k">Can edit</div><div>' + esc(tankList) + '</div>' +
         '<div class="k">Can log tests</div><div>' + esc(testList) + '</div></div>' +
         '<div class="actions"><button class="btn" data-act="refresh">Refresh data</button><button class="btn danger" data-act="sign-out">Sign out</button></div>' +
@@ -928,14 +929,14 @@
         '<div class="field"><label for="f_name">Name</label><input type="text" id="f_name" name="name" value="' + esc(u.name) + '"></div>' +
         '<div class="field"><label for="f_role">Role</label><select id="f_role" name="role">' +
           ["Admin", "Editor", "Viewer"].map(r => '<option' + (r === u.role ? " selected" : "") + '>' + r + '</option>').join("") + '</select>' +
-          '<div class="hint">Admin: everything. Editor: edit + log tests on assigned tanks. Viewer: look, and log tests on assigned tanks.</div></div>' +
+          '<div class="hint">Admin: everything. Editor: sees, edits + logs tests on assigned tanks. Viewer: sees + logs tests on assigned tanks.</div></div>' +
         '<div class="field" id="tank-picks"' + (u.role === "Admin" ? " hidden" : "") + '><label>Assigned tanks</label>' +
-          '<div class="hint" id="tank-picks-hint">' + (u.role === "Editor" ? "Can edit these tanks and log water tests on them." : "Can log water tests on these tanks.") + '</div>' + tankBoxes + '</div>' +
+          '<div class="hint" id="tank-picks-hint">' + (u.role === "Editor" ? "Can see and edit these tanks and log water tests on them." : "Can see these tanks and log water tests on them.") + '</div>' + tankBoxes + '</div>' +
         '<div class="field"><label class="check"><input type="checkbox" name="active"' + (u.active ? " checked" : "") + '> Active (can sign in)</label></div>',
       onReady: form => {
         $("#f_role", form).addEventListener("change", e => {
           $("#tank-picks", form).hidden = e.target.value === "Admin";
-          $("#tank-picks-hint", form).textContent = e.target.value === "Editor" ? "Can edit these tanks and log water tests on them." : "Can log water tests on these tanks.";
+          $("#tank-picks-hint", form).textContent = e.target.value === "Editor" ? "Can see and edit these tanks and log water tests on them." : "Can see these tanks and log water tests on them.";
         });
       },
       onSubmit: async (vals, form) => {
@@ -1405,7 +1406,7 @@
 
   function viewWater(tankId) {
     tankId = tankId || defaultWaterTank();
-    if (!tankId) return { title: "Water", html: '<div class="empty">No tanks yet.</div>' };
+    if (!tankId) return { title: "Water", html: '<div class="empty">' + (isAdmin() ? "No tanks yet." : "No tanks are assigned to you yet.") + '</div>' };
     const types = activeTypes().concat(state.testTypes.filter(t => !isLive(t) && readings(tankId, t["Test Type ID"]).length));
     const tested = types.filter(t => readings(tankId, t["Test Type ID"]).length);
     const untested = types.filter(t => !readings(tankId, t["Test Type ID"]).length);
