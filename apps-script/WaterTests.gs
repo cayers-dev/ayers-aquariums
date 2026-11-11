@@ -80,6 +80,26 @@ function waterSetup() {
       notes.push("Added Test Type ID column to Water Parameters");
    }
    const pCol = wh.indexOf("Parameter"), idCol = wh.indexOf("Test Type ID"), uCol = wh.indexOf("Units");
+   // 2b. DropDownOptions "Water Parameter" list follows the active test types (in Order).
+   const dd = ss.getSheetByName("DropDownOptions");
+   if (dd) {
+      const dh = dd.getRange(1, 1, 1, dd.getLastColumn()).getValues()[0].map(h => String(h).trim());
+      const col = dh.indexOf("Water Parameter") + 1;
+      if (col) {
+         dd.getRange(2, col, Math.max(dd.getMaxRows() - 1, 1), 1).clearContent();
+         dd.getRange(2, col).setFormula(
+            "=IFERROR(SORT(FILTER('Test Types'!B2:B,'Test Types'!F2:F=\"Active\",'Test Types'!B2:B<>\"\")," +
+            "FILTER('Test Types'!E2:E,'Test Types'!F2:F=\"Active\",'Test Types'!B2:B<>\"\"),TRUE),\"\")");
+         const colA1 = dd.getRange(2, col, dd.getMaxRows() - 1, 1).getA1Notation();
+         const rule = SpreadsheetApp.newDataValidation()
+            .requireValueInRange(dd.getRange(colA1), true).setAllowInvalid(false).build();
+         wp.getRange(2, pCol + 1, wp.getMaxRows() - 1, 1).setDataValidation(rule);
+         notes.push("Water Parameter dropdowns now list the active test types");
+      }
+   }
+
+   // 3. Rename parameters (after the dropdown lists the new names).
+   SpreadsheetApp.flush();
    const last = apiLastDataRow_(wp);
    if (last >= 2) {
       const rng = wp.getRange(2, 1, last - 1, wh.length);
@@ -98,24 +118,6 @@ function waterSetup() {
       });
       rng.setValues(v);
       notes.push("Water Parameters: renamed " + renamed + " parameter(s), linked Test Type IDs");
-   }
-
-   // 3. DropDownOptions "Water Parameter" list follows the active test types (in Order).
-   const dd = ss.getSheetByName("DropDownOptions");
-   if (dd) {
-      const dh = dd.getRange(1, 1, 1, dd.getLastColumn()).getValues()[0].map(h => String(h).trim());
-      const col = dh.indexOf("Water Parameter") + 1;
-      if (col) {
-         dd.getRange(2, col, Math.max(dd.getMaxRows() - 1, 1), 1).clearContent();
-         dd.getRange(2, col).setFormula(
-            "=IFERROR(SORT(FILTER('Test Types'!B2:B,'Test Types'!F2:F=\"Active\",'Test Types'!B2:B<>\"\")," +
-            "FILTER('Test Types'!E2:E,'Test Types'!F2:F=\"Active\",'Test Types'!B2:B<>\"\"),TRUE),\"\")");
-         const colA1 = dd.getRange(2, col, dd.getMaxRows() - 1, 1).getA1Notation();
-         const rule = SpreadsheetApp.newDataValidation()
-            .requireValueInRange(dd.getRange(colA1), true).setAllowInvalid(false).build();
-         wp.getRange(2, pCol + 1, wp.getMaxRows() - 1, 1).setDataValidation(rule);
-         notes.push("Water Parameter dropdowns now list the active test types");
-      }
    }
 
    // 4. App Users: "Editable Tanks" -> "Assigned Tanks".
