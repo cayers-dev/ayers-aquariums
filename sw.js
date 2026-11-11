@@ -1,6 +1,6 @@
 // Ayers Aquariums service worker: caches the app shell so it opens fast.
 // Data always comes live from the server and is never cached here.
-const CACHE = "aa-shell-v3";
+const CACHE = "aa-shell-v4";
 const SHELL = ["./", "index.html", "styles.css", "app.js", "config.js", "manifest.webmanifest",
                "icons/icon.svg", "icons/icon-192.png", "icons/apple-touch-icon.png"];
 

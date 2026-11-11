@@ -677,9 +677,10 @@
       let head = "";
       if (it.group && it.group !== lastGroup) { head = '<div class="combo-group">' + esc(it.group) + '</div>'; lastGroup = it.group; }
       const search = [it.label, it.value, it.sub, it.group].filter(Boolean).join(" ").toLowerCase();
-      return head + '<button type="button" class="combo-opt" role="option" data-value="' + esc(it.value) + '" data-label="' + esc(it.label) + '" data-search="' + esc(search) + '">' +
+      return head + '<button type="button" class="combo-opt' + (it.disabled ? " is-off" : "") + '" role="option"' + (it.disabled ? ' disabled aria-disabled="true"' : "") + ' data-value="' + esc(it.value) + '" data-label="' + esc(it.label) + '" data-search="' + esc(search) + '">' +
         (it.img ? '<img class="thumb" loading="lazy" alt="" src="' + esc(thumbUrl(it.img)) + '">' : '<span class="thumb">' + esc(String(it.value).split("-")[0]) + '</span>') +
-        '<span class="body"><span class="title">' + esc(it.label) + '</span><span class="sub">' + esc([it.value, it.sub].filter(Boolean).join(" · ")) + '</span></span></button>';
+        '<span class="body"><span class="title">' + esc(it.label) + '</span><span class="sub">' + esc([it.value, it.sub].filter(Boolean).join(" · ")) + '</span></span>' +
+        (it.note ? '<span class="pill">' + esc(it.note) + '</span>' : "") + '</button>';
     }).join("");
     return '<div class="field combo" data-combo>' +
       '<label for="' + id + '_q">' + esc(f.label || f.name) + (f.required ? ' <span class="req">*</span>' : "") + '</label>' +
@@ -730,9 +731,9 @@
     });
     input.addEventListener("keydown", e => {
       if (e.key === "Escape") close();
-      if (e.key === "Enter") { e.preventDefault(); const first = opts.find(o => !o.hidden); if (first && !list.hidden) pick(first); }
+      if (e.key === "Enter") { e.preventDefault(); const first = opts.find(o => !o.hidden && !o.disabled); if (first && !list.hidden) pick(first); }
     });
-    list.addEventListener("click", e => { const o = e.target.closest(".combo-opt"); if (o) pick(o); });
+    list.addEventListener("click", e => { const o = e.target.closest(".combo-opt"); if (o && !o.disabled) pick(o); });
     clear.addEventListener("click", () => {
       hidden.value = ""; input.value = ""; clear.hidden = true;
       opts.forEach(x => x.classList.remove("on"));
@@ -746,9 +747,14 @@
     const items = [];
     ITEM_TYPES.forEach(ty => {
       const T = TYPES[ty];
-      state.data[ty].filter(r => !isRetired(r) && !inTank.has(r[T.id]))
+      // Items already in this tank stay in the list, greyed out and labelled, so nobody thinks they're missing.
+      state.data[ty].filter(r => !isRetired(r) || inTank.has(r[T.id]))
         .sort((a, b) => String(T.title(a)).localeCompare(String(T.title(b))))
-        .forEach(r => items.push({ value: r[T.id], label: T.title(r), sub: T.sub(r), group: T.label, img: T.img(r) }));
+        .forEach(r => {
+          const there = inTank.has(r[T.id]);
+          items.push({ value: r[T.id], label: T.title(r), sub: T.sub(r), group: T.label, img: T.img(r),
+                       disabled: there, note: there ? "In tank" : "" });
+        });
     });
     openSheet({
       title: "Add to " + tankName(tankId),

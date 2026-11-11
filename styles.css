@@ -254,6 +254,7 @@ img { max-width: 100%; }
   position: sticky; top: 0; z-index: 1; padding: 6px 12px; font-size: 12px; font-weight: 700;
   text-transform: uppercase; letter-spacing: .04em; color: var(--muted); background: var(--surface-2);
 }
+
 .combo-opt {
   display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
   padding: 8px 12px; border: 0; border-top: 1px solid var(--border); background: transparent;
@@ -266,6 +267,10 @@ img { max-width: 100%; }
 .combo-opt .sub { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .combo-opt.on, .combo-opt:active { background: var(--surface-2); }
 .combo-opt.on .title { color: var(--primary); }
+.combo-opt .pill { margin-left: auto; flex: none; }
+.combo-opt.is-off { cursor: default; }
+.combo-opt.is-off .thumb, .combo-opt.is-off .body { opacity: .45; }
+.combo-opt.is-off:active { background: transparent; }
 .combo-empty { padding: 14px; text-align: center; color: var(--muted); }
 
 [hidden] { display: none !important; }
