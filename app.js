@@ -1312,6 +1312,7 @@
     return m ? new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0)) : null;
   }
   const fmtDT = s => { const d = parseDT(s); return d ? d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " + d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }) : ""; };
+  const fmtDTLong = s => { const d = parseDT(s); return d ? d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" }) + " · " + d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }) : ""; };
   const fmtNum = v => { const n = num(v); return n === null ? String(v) : String(Math.round(n * 1000) / 1000); };
   function localNow() {
     const d = new Date(), p = n => String(n).padStart(2, "0");
@@ -1410,8 +1411,21 @@
       svg += '<circle class="pt' + (off ? " off" : "") + '" cx="' + x(p._t).toFixed(1) + '" cy="' + y(num(p["Value"])).toFixed(1) + '" r="' + (off ? 4.5 : (big ? 3.5 : 2.8)) + '"/>';
     });
     svg += '</svg>';
-    const data = points.map(p => [x(p._t) / W, fmtDT(p["Tested At"]), fmtNum(p["Value"]) + unitsOf(t), p["Result"]]);
-    return '<div class="trend-wrap" data-points="' + esc(JSON.stringify(data)) + '">' + svg + '<div class="trend-tip" hidden></div></div>';
+    // Details for the hover / tap pop-up, one entry per point (x and y as fractions of the chart).
+    const data = points.map(p => {
+      const s = state.waterSessions.find(z => z["Session ID"] === p["Session ID"]) || {};
+      const mn = num(p["Range Min"]), mx = num(p["Range Max"]);
+      return {
+        x: x(p._t) / W, y: y(num(p["Value"])) / H,
+        id: p["Test ID"], sid: p["Session ID"],
+        when: fmtDTLong(p["Tested At"]), val: fmtNum(p["Value"]) + unitsOf(t), res: p["Result"] || "",
+        range: (mn === null && mx === null) ? "" : rangeText({ min: mn, max: mx }, t),
+        method: p["Method"] || "", by: personName(p["Tested By"]),
+        note: p["Notes"] || "", snote: s["Notes"] || ""
+      };
+    });
+    return '<div class="trend-wrap" data-name="' + esc(t["Name"]) + '" data-points="' + esc(JSON.stringify(data)) + '">' + svg +
+      '<div class="trend-tip" role="tooltip" hidden></div></div>';
   }
 
   function waterCard(tankId, t) {
@@ -1748,24 +1762,80 @@
     });
   }
 
-  function showTrendTip(wrap, clientX) {
+  // Pop-up with the details of one reading, placed over its point on the chart.
+  // Mouse: shows while the pointer is over a point. Touch: tap the chart to show the nearest point.
+  function trendPick(wrap, clientX, clientY, strict) {
     const pts = JSON.parse(wrap.dataset.points || "[]");
-    if (!pts.length) return;
-    const rect = wrap.getBoundingClientRect();
-    const fx = (clientX - rect.left) / rect.width;
-    let best = pts[0];
-    pts.forEach(p => { if (Math.abs(p[0] - fx) < Math.abs(best[0] - fx)) best = p; });
-    const tip = $(".trend-tip", wrap);
-    tip.textContent = best[1] + " · " + best[2] + (best[3] && best[3] !== "In range" ? " · " + best[3] : "");
-    tip.hidden = false;
+    if (!pts.length) return null;
+    const rect = $(".trend", wrap).getBoundingClientRect();
+    const px = clientX - rect.left, py = clientY - rect.top;
+    let best = null, bestD = Infinity;
+    pts.forEach((p, i) => {
+      const dx = p.x * rect.width - px, dy = p.y * rect.height - py;
+      const d = strict ? Math.hypot(dx, dy) : Math.abs(dx);
+      if (d < bestD) { bestD = d; best = i; }
+    });
+    if (strict && bestD > 14) return null;
+    return best;
   }
+  function showTrendTip(wrap, idx) {
+    const tip = $(".trend-tip", wrap);
+    const pts = JSON.parse(wrap.dataset.points || "[]");
+    const p = pts[idx];
+    if (!p) { hideTrendTip(wrap); return; }
+    if (tip.dataset.idx === String(idx) && !tip.hidden) return;
+    tip.dataset.idx = String(idx);
+    const row = (k, v) => v ? '<div class="tt-row"><span>' + esc(k) + '</span><span>' + esc(v) + '</span></div>' : "";
+    tip.innerHTML =
+      '<div class="tt-head"><div><div class="tt-name">' + esc(wrap.dataset.name || "") + '</div><div class="tt-val">' + esc(p.val) + '</div></div>' + resultPill(p.res) + '</div>' +
+      '<div class="tt-when">' + esc(p.when) + '</div>' +
+      row("Range", p.range || "No range set") + row("Method", p.method) + row("Tested by", p.by) +
+      (p.note ? '<div class="tt-note"><span>Reading note</span>' + esc(p.note) + '</div>' : "") +
+      (p.snote ? '<div class="tt-note"><span>Test note</span>' + esc(p.snote) + '</div>' : "");
+    tip.hidden = false;
+    // Highlight the point.
+    $$(".pt.hl", wrap).forEach(c => c.classList.remove("hl"));
+    const c = $$(".trend .pt", wrap)[idx];
+    if (c) c.classList.add("hl");
+    // Place above the point (below if there is no room), kept inside the chart's width.
+    const box = wrap.getBoundingClientRect(), svgR = $(".trend", wrap).getBoundingClientRect();
+    const ptX = p.x * svgR.width + (svgR.left - box.left), ptY = p.y * svgR.height + (svgR.top - box.top);
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    const left = Math.max(0, Math.min(box.width - tw, ptX - tw / 2));
+    const above = ptY - th - 12;
+    const spaceAbove = box.top + above;
+    tip.style.left = left + "px";
+    tip.style.top = (spaceAbove >= 64 ? above : ptY + 12) + "px";
+  }
+  function hideTrendTip(wrap) {
+    const tip = $(".trend-tip", wrap);
+    if (!tip) return;
+    tip.hidden = true; tip.dataset.idx = "";
+    $$(".pt.hl", wrap).forEach(c => c.classList.remove("hl"));
+  }
+  document.addEventListener("pointermove", e => {
+    if (e.pointerType !== "mouse") return;
+    const wrap = e.target.closest && e.target.closest(".trend-wrap");
+    $$(".trend-wrap").forEach(w => { if (w !== wrap) hideTrendTip(w); });
+    if (!wrap) return;
+    const idx = trendPick(wrap, e.clientX, e.clientY, true);
+    if (idx === null) hideTrendTip(wrap); else showTrendTip(wrap, idx);
+  });
+  document.addEventListener("scroll", () => $$(".trend-wrap").forEach(hideTrendTip), { passive: true, capture: true });
 
   // ------------------------------------------------------------------
   // Events
   // ------------------------------------------------------------------
   document.addEventListener("click", e => {
     const tw = e.target.closest(".trend-wrap");
-    if (tw && !e.target.closest(".water-card")) { showTrendTip(tw, e.clientX); return; }
+    $$(".trend-wrap").forEach(w => { if (w !== tw) hideTrendTip(w); });
+    if (tw && !e.target.closest(".water-card")) {
+      // Tap (touch) or click on the big chart: show the nearest reading; tap the pop-up to close it.
+      if (e.target.closest(".trend-tip")) { hideTrendTip(tw); return; }
+      const idx = trendPick(tw, e.clientX, e.clientY, false);
+      if (idx !== null) showTrendTip(tw, idx);
+      return;
+    }
     const el = e.target.closest("[data-act]");
     if (!el || !state.me) return;
     const act = el.dataset.act;
@@ -1854,7 +1924,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "14";
+  const APP_VERSION = "15";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

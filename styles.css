@@ -329,7 +329,19 @@ img { max-width: 100%; }
 .trend .line { fill: none; stroke: var(--primary); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
 .trend .pt { fill: var(--primary); stroke: var(--surface); stroke-width: 1.5; }
 .trend .pt.off { fill: var(--danger); stroke: var(--surface); stroke-width: 2; }
-.trend-tip { margin-top: 6px; font-size: 13px; font-weight: 600; text-align: center; color: var(--text); }
+.trend .pt.hl { stroke: var(--text); stroke-width: 2; }
+.trend-tip { position: absolute; z-index: 5; width: max-content; max-width: min(260px, 100%); padding: 10px 12px; border-radius: 12px;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border); box-shadow: 0 4px 18px rgba(0, 0, 0, .18);
+  font-size: 13px; line-height: 1.35; pointer-events: auto; cursor: default; }
+.tt-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.tt-name { font-size: 12px; color: var(--muted); }
+.tt-val { font-size: 17px; font-weight: 700; white-space: nowrap; }
+.tt-when { color: var(--muted); margin: 2px 0 6px; }
+.tt-row { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; }
+.tt-row span:first-child, .tt-note span { color: var(--muted); }
+.tt-row span:last-child { text-align: right; }
+.tt-note { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+.tt-note span { display: block; font-size: 12px; }
 .latest-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; margin-bottom: 6px; }
 .lg-item { padding: 8px 10px; border-radius: 10px; background: var(--surface-2); }
 .lg-item .k { font-size: 12px; color: var(--muted); }
