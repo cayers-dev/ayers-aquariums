@@ -396,3 +396,18 @@ a.btn { text-decoration: none; }
 .wt-tr.is-off .wt-val, .wt-tr.is-bad .wt-val { border-color: var(--danger); color: var(--danger); }
 .wt-tr.is-ok .wt-val { border-color: var(--good); }
 .pill-stack { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex: none; }
+
+/* ---------- Maintenance ---------- */
+.wc-line { display: flex; align-items: center; gap: 5px; margin-top: 4px; }
+.wc-line svg { width: 15px; height: 15px; flex: none; color: var(--primary); }
+.wc-summary .wc-big { font-size: 22px; font-weight: 700; }
+.suffix-wrap { position: relative; }
+.suffix-wrap input { padding-right: 42px; }
+.suffix-wrap span { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 14px; pointer-events: none; }
+.check-list { display: flex; flex-direction: column; gap: 8px; }
+.trend .wc-mark line { stroke: #8a6cd1; stroke-width: 1.2; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+.trend .wc-mark circle { fill: #8a6cd1; }
+.wc-key { display: flex; align-items: center; justify-content: flex-end; gap: 6px; font-size: 11px; color: var(--muted); margin-top: 2px; }
+.wc-key-line { width: 0; height: 12px; border-left: 1.5px dashed #8a6cd1; }
+.tabbar a span { white-space: nowrap; }
+@media (max-width: 430px) { .tabbar a { font-size: 11px; } .tabbar a svg { width: 22px; height: 22px; } }

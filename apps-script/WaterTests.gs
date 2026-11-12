@@ -293,9 +293,9 @@ function apiResultFor_(value, min, max) {
 function apiParseDateTime_(v) {
    if (!v) return new Date();
    const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?$/);
-   if (!m) throw apiError_("INVALID", "Test time must look like 2026-11-11 15:30.");
+   if (!m) throw apiError_("INVALID", "Date/time must look like 2026-11-11 15:30.");
    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4] || 0), Number(m[5] || 0));
-   if (d.getTime() > Date.now() + 10 * 60 * 1000) throw apiError_("INVALID", "The test time can't be in the future.");
+   if (d.getTime() > Date.now() + 10 * 60 * 1000) throw apiError_("INVALID", "The date/time can't be in the future.");
    return d;
 }
 

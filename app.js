@@ -34,7 +34,10 @@
     waterTests: [],
     methods: ["Strip", "Liquid", "Digital"],
     waterTank: (function () { try { return localStorage.getItem("aa_water_tank") || ""; } catch (e) { return ""; } })(),
-    waterDays: (function () { try { return Number(localStorage.getItem("aa_water_days")) || 60; } catch (e) { return 60; } })()
+    waterDays: (function () { try { return Number(localStorage.getItem("aa_water_days")) || 60; } catch (e) { return 60; } })(),
+    waterChanges: [],
+    showRetiredMaint: false,
+    maintTank: (function () { try { return localStorage.getItem("aa_maint_tank") || ""; } catch (e) { return ""; } })()
   };
 
   // ------------------------------------------------------------------
@@ -100,6 +103,7 @@
     water: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5c3.2 4 5.5 7.2 5.5 10.2a5.5 5.5 0 0 1-11 0c0-3 2.3-6.2 5.5-10.2z"/><path d="M9.2 14.5a2.9 2.9 0 0 0 2.8 2.6"/></svg>',
     receipts: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6M9 16h3"/></svg>',
     camera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
+    maint: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.2L3.5 17.3a1.8 1.8 0 0 0 2.5 2.5l5.8-5.8a4 4 0 0 0 5.2-5.4l-2.6 2.6-2.3-.4-.4-2.3z"/></svg>',
     plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>'
   };
 
@@ -220,6 +224,7 @@
     state.waterSessions = r.waterSessions || [];
     state.waterTests = r.waterTests || [];
     if (r.methods) state.methods = r.methods;
+    state.waterChanges = r.waterChanges || [];
   }
 
   async function refresh(silent) {
@@ -359,11 +364,12 @@
       case "receipts": view = canReceipts() ? viewReceipts() : viewTanks(); break;
       case "water": view = route.args[1] ? viewWaterType(route.args[0], route.args[1]) : viewWater(route.args[0]); break;
       case "testtypes": view = isAdmin() ? viewTestTypes() : viewWater(); break;
+      case "maint": view = viewMaintenance(route.args[0]); break;
       case "receipt": view = canReceipts() ? viewReceipt(route.args[0]) : viewTanks(); break;
       default: view = viewTanks();
     }
     const tab = route.name === "tank" ? "tanks" : route.name === "item" ? "browse" : route.name === "receipt" ? "receipts" : route.name === "testtypes" ? "water" : route.name;
-    const tabs = [["tanks", "Tanks"], ["water", "Test"], ["browse", "Browse"]]
+    const tabs = [["tanks", "Tanks"], ["water", "Test"], ["maint", "Maint."], ["browse", "Browse"]]
       .concat(canReceipts() ? [["receipts", "Receipts"]] : [])
       .concat(isAdmin() ? [["users", "Users"]] : [])
       .concat([["account", "Account"]]);
@@ -396,6 +402,7 @@
         '<div class="row1"><h2>' + esc(t["Tank Name"]) + '</h2>' +
         (t["Volume (gal)"] ? '<span class="vol">' + esc(t["Volume (gal)"]) + ' gal</span>' : "") + '</div>' +
         '<div class="meta">' + esc([id, t["Aquarium Type"], t["Manufacturer"]].filter(Boolean).join(" · ")) + '</div>' +
+        (isRetired(t) ? "" : '<div class="meta wc-line">' + ICONS.water + esc(lastWaterChangeText(id)) + '</div>') +
         '<div class="counts">' +
           '<span class="pill">' + counts.species + ' livestock</span>' +
           '<span class="pill">' + counts.equipment + ' equipment</span>' +
@@ -469,7 +476,7 @@
     return {
       title: t["Tank Name"], back: true,
       html: hero + group("species", "Livestock") + group("equipment", "Equipment") + group("plants", "Plants") +
-            waterSection(id) + paramsHtml + receiptsSection(id) + detailsSection("tanks", t, "Tank details") + removedHtml
+            waterSection(id) + maintSection(id) + paramsHtml + receiptsSection(id) + detailsSection("tanks", t, "Tank details") + removedHtml
     };
   }
 
@@ -1388,6 +1395,18 @@
       svg += '<rect class="band" x="' + L + '" y="' + y1.toFixed(1) + '" width="' + (W - L - R) + '" height="' + Math.max(1.5, y2 - y1).toFixed(1) + '"/>';
     }
     svg += '<line class="axis" x1="' + L + '" x2="' + (W - R) + '" y1="' + (H - B) + '" y2="' + (H - B) + '"/>';
+    // Water changes in this window: dashed marker with a small drop at the bottom.
+    const tankOfPts = points.length ? points[0]["Tank ID"] : "";
+    let wcCount = 0;
+    waterChangesFor(tankOfPts).forEach(w => {
+      const d = parseDT(w["Performed At"]);
+      if (!d || d < cut || d > now) return;
+      wcCount++;
+      const wx = x(d).toFixed(1);
+      svg += '<g class="wc-mark"><title>' + esc("Water change " + fmtDT(w["Performed At"]) + (wcAmount(w) ? " · " + wcAmount(w) : "")) + '</title>' +
+        '<line x1="' + wx + '" x2="' + wx + '" y1="' + T + '" y2="' + (H - B) + '"/>' +
+        '<circle cx="' + wx + '" cy="' + (H - B) + '" r="2.6"/></g>';
+    });
     const dataLo = Math.min.apply(null, vals), dataHi = Math.max.apply(null, vals);
     const ticks = (rg.min !== null || rg.max !== null) ? [rg.max, rg.min].filter(v => v !== null) : (dataLo === dataHi ? [dataHi] : [dataHi, dataLo]);
     ticks.filter((v, i, arr) => arr.indexOf(v) === i).forEach(v => {
@@ -1425,6 +1444,7 @@
       };
     });
     return '<div class="trend-wrap" data-name="' + esc(t["Name"]) + '" data-points="' + esc(JSON.stringify(data)) + '">' + svg +
+      (wcCount ? '<div class="wc-key"><span class="wc-key-line"></span>water change</div>' : "") +
       '<div class="trend-tip" role="tooltip" hidden></div></div>';
   }
 
@@ -1762,6 +1782,176 @@
     });
   }
 
+  // ------------------------------------------------------------------
+  // Maintenance (water changes for now; more types later)
+  // ------------------------------------------------------------------
+  const canCorrectBy = who => isAdmin() || (state.me && !!who && who === state.me.id);
+  const tankVolume = id => { const t = findRec("tanks", id); return t ? num(t["Volume (gal)"]) : null; };
+  function equipLabel(id) {
+    const r = findRec("equipment", id);
+    return id + (r ? " " + TYPES.equipment.title(r) : "");
+  }
+  // Active filter equipment assigned to a tank (Category starting "Filter").
+  function tankFilters(tankId) {
+    return tankAssignments(tankId, true)
+      .map(a => findRec("equipment", a["Item ID"]))
+      .filter(r => r && /^filter/i.test(String(r["Category"] || "")) && !isRetired(r))
+      .map(r => r["Equipment ID"]);
+  }
+  function waterChangesFor(tankId, withRetired) {
+    return state.waterChanges.filter(w => w["Tank ID"] === tankId && (withRetired || isLive(w)))
+      .sort((a, b) => (parseDT(b["Performed At"]) || 0) - (parseDT(a["Performed At"]) || 0));
+  }
+  function daysAgo(s) {
+    const d = parseDT(s);
+    if (!d) return "";
+    const a = new Date(d.getFullYear(), d.getMonth(), d.getDate()), n = new Date();
+    const b = new Date(n.getFullYear(), n.getMonth(), n.getDate());
+    const days = Math.round((b - a) / 864e5);
+    return days <= 0 ? "today" : days === 1 ? "yesterday" : days + " days ago";
+  }
+  function wcAmount(w) {
+    return [w["Percentage"] !== "" && w["Percentage"] !== undefined ? fmtNum(w["Percentage"]) + "%" : "",
+            w["Gallons"] !== "" && w["Gallons"] !== undefined ? fmtNum(w["Gallons"]) + " gal" : ""].filter(Boolean).join(" · ");
+  }
+  const wcFilters = w => String(w["Filters Cleaned"] || "").split(",").map(x => x.trim()).filter(Boolean);
+  function lastWaterChangeText(tankId) {
+    const w = waterChangesFor(tankId)[0];
+    return w ? "Last water change " + daysAgo(w["Performed At"]) : "No water changes logged";
+  }
+  function wcRow(w, showTank) {
+    const f = wcFilters(w);
+    return '<div class="list-item' + (isLive(w) ? "" : " dim") + '"' + (canCorrectBy(w["Performed By"]) ? ' data-act="edit-wc" data-id="' + esc(w["Water Change ID"]) + '"' : "") + '><div class="body">' +
+      '<div class="title">' + esc((showTank ? tankName(w["Tank ID"]) + " · " : "") + fmtDT(w["Performed At"])) + '</div>' +
+      '<div class="sub">' + esc([wcAmount(w) || "Amount not recorded", daysAgo(w["Performed At"]), personName(w["Performed By"])].filter(Boolean).join(" · ")) + '</div>' +
+      (f.length ? '<div class="sub">Filter cleaned: ' + esc(f.map(equipLabel).join(", ")) + '</div>' : "") +
+      (w["Notes"] ? '<div class="sub">' + esc(w["Notes"]) + '</div>' : "") + '</div>' +
+      (isLive(w) ? "" : '<span class="pill retired">Retired</span>') + '</div>';
+  }
+  function defaultMaintTank() {
+    if (state.maintTank && findRec("tanks", state.maintTank)) return state.maintTank;
+    return defaultWaterTank();
+  }
+
+  function viewMaintenance(tankId) {
+    tankId = tankId || defaultMaintTank();
+    if (!tankId) return { title: "Maintenance", html: '<div class="empty">' + (isAdmin() ? "No tanks yet." : "No tanks are assigned to you yet.") + '</div>' };
+    const tanks = state.data.tanks.slice().sort((x, y) => (isRetired(x) - isRetired(y)) || String(x["Tank Name"]).localeCompare(String(y["Tank Name"])));
+    const all = waterChangesFor(tankId, true);
+    const live = all.filter(isLive);
+    const shown = state.showRetiredMaint ? all : live;
+    const retiredCount = all.length - live.length;
+    const last = live[0];
+    return {
+      title: "Maintenance · " + tankName(tankId), keepScroll: true,
+      html: '<div class="water-controls"><select data-act="maint-tank" aria-label="Tank">' + tanks.map(t => '<option value="' + esc(t["Tank ID"]) + '"' + (t["Tank ID"] === tankId ? " selected" : "") + '>' +
+          esc(t["Tank Name"] + (isRetired(t) ? " (retired)" : "")) + '</option>').join("") + '</select></div>' +
+        '<div class="section"><div class="section-head"><h3>Water changes (' + live.length + ')</h3>' +
+          (canLogTank(tankId) ? '<button class="btn small primary" data-act="log-wc" data-tank="' + esc(tankId) + '">' + ICONS.plus + 'Log water change</button>' : "") + '</div>' +
+          '<div class="card pad wc-summary">' + (last
+            ? '<div class="wc-big">' + esc(daysAgo(last["Performed At"]).replace(/^./, c => c.toUpperCase())) + '</div><div class="sub">Last water change · ' + esc([fmtDT(last["Performed At"]), wcAmount(last)].filter(Boolean).join(" · ")) + '</div>'
+            : '<div class="sub">No water changes logged for this tank yet.</div>') + '</div>' +
+          (shown.length ? '<div class="card list" style="margin-top:10px">' + shown.map(w => wcRow(w)).join("") + '</div>' : "") +
+          (retiredCount ? '<label class="check" style="margin-top:8px"><input type="checkbox" data-act="toggle-retired-maint"' + (state.showRetiredMaint ? " checked" : "") + '> Show retired (' + retiredCount + ')</label>' : "") +
+        '</div>'
+    };
+  }
+
+  function maintSection(tankId) {
+    const list = waterChangesFor(tankId);
+    return '<div class="section"><div class="section-head"><h3>Maintenance</h3>' +
+      '<a class="btn small" href="#/maint/' + encodeURIComponent(tankId) + '">All</a></div>' +
+      '<div class="card pad"><div class="sub" style="margin-bottom:6px"><b>' + esc(lastWaterChangeText(tankId)) + '</b></div>' +
+      (list.length ? '<div class="card list">' + list.slice(0, 3).map(w => wcRow(w)).join("") + '</div>' : "") +
+      (canLogTank(tankId) ? '<div class="actions"><button class="btn primary" data-act="log-wc" data-tank="' + esc(tankId) + '">' + ICONS.plus + 'Log water change</button></div>' : "") +
+      '</div></div>';
+  }
+
+  // Log (no id) or correct (id) a water change.
+  function waterChangeForm(tankId, id) {
+    const rec = id ? state.waterChanges.find(w => w["Water Change ID"] === id) : null;
+    if (id && !rec) return;
+    const loggable = state.data.tanks.filter(t => !isRetired(t) && canLogTank(t["Tank ID"]));
+    if (!rec) {
+      if (!loggable.length) { toast("You don’t have any tanks assigned.", true); return; }
+      if (!canLogTank(tankId)) tankId = loggable[0]["Tank ID"];
+    } else tankId = rec["Tank ID"];
+    $$(".sheet-backdrop").forEach(b => b.remove()); document.body.style.overflow = "";
+    const had = rec ? wcFilters(rec) : [];
+    const filterHtml = tank => {
+      const ids = tankFilters(tank).concat(had.filter(x => tankFilters(tank).indexOf(x) === -1));
+      if (!ids.length) return '<div class="hint">No filters are assigned to this tank. Add one under Equipment on the tank page.</div>';
+      return ids.map(x => '<label class="check"><input type="checkbox" class="wc-filter" value="' + esc(x) + '"' + (had.indexOf(x) !== -1 ? " checked" : "") + '> ' + esc(equipLabel(x)) + '</label>').join("");
+    };
+    const volHint = tank => { const v = tankVolume(tank); return v ? "Tank volume " + fmtNum(v) + " gal — fill in either box and the other is worked out." : "This tank has no Volume (gal) set, so fill in both boxes."; };
+    const editable = !rec || canCorrectBy(rec["Performed By"]);
+    openSheet({
+      title: rec ? "Water change · " + tankName(tankId) : "Log water change",
+      submitLabel: rec ? "Save" : "Save water change",
+      body:
+        (rec ? '<p class="meta">' + esc([rec["Water Change ID"], "Logged by " + personName(rec["Performed By"])].join(" · ")) + '</p>'
+             : '<div class="field"><label for="f_wctank">Tank</label><select id="f_wctank">' + loggable.map(t => '<option value="' + esc(t["Tank ID"]) + '"' + (t["Tank ID"] === tankId ? " selected" : "") + '>' + esc(t["Tank Name"]) + '</option>').join("") + '</select></div>') +
+        '<div class="field"><label for="f_wctime">Date / time</label><input type="datetime-local" id="f_wctime" value="' + esc(rec ? String(rec["Performed At"]).replace(" ", "T") : localNow()) + '" max="' + localNow() + '"></div>' +
+        '<div class="wt-top">' +
+          '<div class="field"><label for="f_wcpct">Percentage</label><div class="suffix-wrap"><input type="text" inputmode="decimal" id="f_wcpct" autocomplete="off" value="' + esc(rec && rec["Percentage"] !== "" ? fmtNum(rec["Percentage"]) : "") + '"><span>%</span></div></div>' +
+          '<div class="field"><label for="f_wcgal">Gallons</label><div class="suffix-wrap"><input type="text" inputmode="decimal" id="f_wcgal" autocomplete="off" value="' + esc(rec && rec["Gallons"] !== "" ? fmtNum(rec["Gallons"]) : "") + '"><span>gal</span></div></div>' +
+        '</div>' +
+        '<div class="hint" id="wc-volhint" style="margin:-4px 0 12px">' + esc(volHint(tankId)) + '</div>' +
+        '<div class="field"><label>Filter cleaning</label><div id="wc-filters" class="check-list">' + filterHtml(tankId) + '</div></div>' +
+        '<div class="field"><label for="f_wcnotes">Notes</label><textarea id="f_wcnotes">' + esc(rec ? rec["Notes"] : "") + '</textarea></div>' +
+        (rec && editable ? '<div class="actions"><button type="button" class="btn ' + (isLive(rec) ? "danger" : "") + '" data-retire>' + (isLive(rec) ? "Retire this water change" : "Restore this water change") + '</button></div>' : ""),
+      onReady: form => {
+        const pct = $("#f_wcpct", form), gal = $("#f_wcgal", form), tankSel = $("#f_wctank", form);
+        const cur = () => tankSel ? tankSel.value : tankId;
+        let driver = null;   // which box the person typed in last
+        const fill = () => {
+          const v = tankVolume(cur());
+          if (!v || !driver) return;
+          if (driver === "pct") { const p = num(pct.value); gal.value = p === null ? "" : String(Math.round(v * p / 10) / 10); }
+          else { const g = num(gal.value); pct.value = g === null ? "" : String(Math.round(g / v * 1000) / 10); }
+        };
+        pct.addEventListener("input", () => { driver = "pct"; fill(); });
+        gal.addEventListener("input", () => { driver = "gal"; fill(); });
+        if (tankSel) tankSel.addEventListener("change", () => {
+          $("#wc-filters", form).innerHTML = filterHtml(tankSel.value);
+          $("#wc-volhint", form).textContent = volHint(tankSel.value);
+          fill();
+        });
+        const rb = $("[data-retire]", form);
+        if (rb) rb.addEventListener("click", async () => {
+          try {
+            await write("retireWaterChange", { id: id, restore: !isLive(rec) }, isLive(rec) ? "Water change retired" : "Water change restored");
+            $$(".sheet-backdrop").forEach(b => b.remove()); document.body.style.overflow = "";
+          } catch (err) { toast(err.message, true); }
+        });
+      },
+      onSubmit: async (vals, form) => {
+        const p = $("#f_wcpct", form).value.trim(), g = $("#f_wcgal", form).value.trim();
+        if (p && num(p) === null) throw new Error("Percentage must be a number.");
+        if (g && num(g) === null) throw new Error("Gallons must be a number.");
+        if (p && (num(p) <= 0 || num(p) > 100)) throw new Error("Percentage must be between 0 and 100.");
+        const filters = $$(".wc-filter", form).filter(c => c.checked).map(c => c.value);
+        const when = $("#f_wctime", form).value;
+        const notes = $("#f_wcnotes", form).value;
+        if (!rec) {
+          const tank = $("#f_wctank", form).value;
+          const ok = await write("logWaterChange", { tankId: tank, performedAt: when, percentage: p, gallons: g, filters: filters, notes: notes }, "Water change saved");
+          state.maintTank = tank; try { localStorage.setItem("aa_maint_tank", tank); } catch (e) { /* ignore */ }
+          return ok;
+        }
+        if (!editable) return true;
+        const changed = {};
+        if (when && when !== String(rec["Performed At"]).replace(" ", "T")) changed.performedAt = when;
+        if (num(p) !== num(rec["Percentage"])) changed.percentage = p;
+        if (num(g) !== num(rec["Gallons"])) changed.gallons = g;
+        if (filters.slice().sort().join(",") !== had.slice().sort().join(",")) changed.filters = filters;
+        if (String(notes).trim() !== String(rec["Notes"] || "").trim()) changed.notes = notes;
+        if (!Object.keys(changed).length) { toast("No changes"); return true; }
+        return write("updateWaterChange", { id: id, values: changed }, "Water change updated");
+      }
+    });
+  }
+
   // Pop-up with the details of one reading, placed over its point on the chart.
   // Mouse: shows while the pointer is over a point. Touch: tap the chart to show the nearest point.
   function trendPick(wrap, clientX, clientY, strict) {
@@ -1864,6 +2054,8 @@
       case "edit-param": paramForm(null, Number(d.row)); break;
       case "add-user": userForm(); break;
       case "log-water": logWaterForm(d.tank); break;
+      case "log-wc": e.stopPropagation(); waterChangeForm(d.tank); break;
+      case "edit-wc": waterChangeForm(null, d.id); break;
       case "water-session": sessionSheet(d.id); break;
       case "edit-reading": readingForm(d.id); break;
       case "add-testtype": testTypeForm(); break;
@@ -1913,6 +2105,11 @@
       if (n >= 1 && n <= 3650) { state.waterDays = n; try { localStorage.setItem("aa_water_days", String(n)); } catch (err) { /* ignore */ } }
       render();
     }
+    if (e.target.matches("[data-act='maint-tank']")) {
+      state.maintTank = e.target.value; try { localStorage.setItem("aa_maint_tank", state.maintTank); } catch (err) { /* ignore */ }
+      location.hash = "#/maint/" + encodeURIComponent(state.maintTank);
+    }
+    if (e.target.matches("[data-act='toggle-retired-maint']")) { state.showRetiredMaint = e.target.checked; render(); }
     if (e.target.matches("[data-act='toggle-retired-receipts']")) { state.showRetiredReceipts = e.target.checked; render(); }
     if (e.target.matches("[data-act='toggle-retired']")) { state.showRetired = e.target.checked; render(); }
   });
@@ -1924,7 +2121,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "15";
+  const APP_VERSION = "16";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

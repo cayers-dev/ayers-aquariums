@@ -103,6 +103,10 @@ function apiRoute_(req, user) {
       case "updateWaterSession":  return apiWrite_(() => apiUpdateWaterSession_(req, user));
       case "saveTestType":        return apiWrite_(() => apiSaveTestType_(req, user));
       case "retireTestType":      return apiWrite_(() => apiRetireTestType_(req, user));
+      // Maintenance (Maintenance.gs)
+      case "logWaterChange":      return apiWrite_(() => apiLogWaterChange_(req, user));
+      case "updateWaterChange":   return apiWrite_(() => apiUpdateWaterChange_(req, user));
+      case "retireWaterChange":   return apiWrite_(() => apiRetireWaterChange_(req, user));
       default: throw apiError_("BAD_REQUEST", "Unknown action.");
    }
 }
@@ -191,6 +195,7 @@ function apiBootstrap_(user) {
    }
    Object.assign(out, apiReceiptsBootstrap_(user, lists));
    Object.assign(out, apiWaterBootstrap_(user));
+   Object.assign(out, apiMaintBootstrap_(user));
    if (user.role !== "Admin") apiLimitToAssignedTanks_(out, user);
    return out;
 }
@@ -215,6 +220,7 @@ function apiLimitToAssignedTanks_(out, user) {
    out.data.waterParameters = out.data.waterParameters.filter(r => visible(r["Tank ID"]));
    if (out.waterSessions) out.waterSessions = out.waterSessions.filter(r => visible(r["Tank ID"]));
    if (out.waterTests) out.waterTests = out.waterTests.filter(r => visible(r["Tank ID"]));
+   if (out.waterChanges) out.waterChanges = out.waterChanges.filter(r => visible(r["Tank ID"]));
    if (out.receiptLinks) out.receiptLinks = out.receiptLinks.filter(l => !allTankIds[l["Item ID"]] || visible(l["Item ID"]));
 }
 
