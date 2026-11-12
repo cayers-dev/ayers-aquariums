@@ -363,7 +363,7 @@
       default: view = viewTanks();
     }
     const tab = route.name === "tank" ? "tanks" : route.name === "item" ? "browse" : route.name === "receipt" ? "receipts" : route.name === "testtypes" ? "water" : route.name;
-    const tabs = [["tanks", "Tanks"], ["water", "Water"], ["browse", "Browse"]]
+    const tabs = [["tanks", "Tanks"], ["water", "Test"], ["browse", "Browse"]]
       .concat(canReceipts() ? [["receipts", "Receipts"]] : [])
       .concat(isAdmin() ? [["users", "Users"]] : [])
       .concat([["account", "Account"]]);
@@ -580,7 +580,8 @@
         '<div class="k">Role</div><div>' + esc(me.role) + '</div>' +
         '<div class="k">Can see</div><div>' + esc(me.role === "Admin" ? "All tanks" : assigned) + '</div>' +
         '<div class="k">Can edit</div><div>' + esc(tankList) + '</div>' +
-        '<div class="k">Can log tests</div><div>' + esc(testList) + '</div></div>' +
+        '<div class="k">Can log tests</div><div>' + esc(testList) + '</div>' +
+        '<div class="k">App version</div><div>' + esc(APP_VERSION) + '</div></div>' +
         '<div class="actions"><button class="btn" data-act="refresh">Refresh data</button><button class="btn danger" data-act="sign-out">Sign out</button></div>' +
         '<p class="hint" style="margin-top:16px"><b>Add to your home screen:</b> on iPhone, tap Share → Add to Home Screen. On Android, tap the ⋮ menu → Add to Home screen (or Install app).</p>'
     };
@@ -1412,7 +1413,7 @@
 
   function viewWater(tankId) {
     tankId = tankId || defaultWaterTank();
-    if (!tankId) return { title: "Water", html: '<div class="empty">' + (isAdmin() ? "No tanks yet." : "No tanks are assigned to you yet.") + '</div>' };
+    if (!tankId) return { title: "Test", html: '<div class="empty">' + (isAdmin() ? "No tanks yet." : "No tanks are assigned to you yet.") + '</div>' };
     const types = activeTypes().concat(state.testTypes.filter(t => !isLive(t) && readings(tankId, t["Test Type ID"]).length));
     const tested = types.filter(t => readings(tankId, t["Test Type ID"]).length);
     const untested = types.filter(t => !readings(tankId, t["Test Type ID"]).length);
@@ -1432,7 +1433,7 @@
           (off ? '<span class="pill bad">' + off + ' out of range</span>' : rs.length ? '<span class="pill good">✓ All OK</span>' : "") + '</div>';
       }).join("") || '<div class="empty">No tests in the last ' + state.waterDays + ' days</div>') + '</div></div>';
     return {
-      title: "Water · " + tankName(tankId),
+      title: "Test · " + tankName(tankId),
       keepScroll: true,
       html: waterControls(tankId, "water") + actions + tested.map(t => waterCard(tankId, t)).join("") +
         (untested.length ? '<div class="card pad untested"><div class="sub">Not tested in the last ' + state.waterDays + ' days</div><div class="chips-row">' +
@@ -1571,7 +1572,7 @@
         const tank = $("#f_wtank", form).value;
         busy(true);
         try {
-          const res = await api("logWaterTest", { tankId: tank, testedAt: $("#f_wtime", form).value, defaultMethod: methodNow,
+          const res = await api("logWaterTest", { tankId: tank, testedAt: $("#f_wtime", form).value, method: methodNow,
                                                    notes: $("#f_wnotes", form).value, readings: readingsOut });
           applyBootstrap(await api("bootstrap"));
           state.waterTank = tank; try { localStorage.setItem("aa_water_tank", tank); } catch (e) { /* ignore */ }
@@ -1611,19 +1612,24 @@
     const rs = state.waterTests.filter(r => r["Session ID"] === id)
       .sort((a, b) => ((findType(a["Test Type ID"]) || {})["Order"] || 0) - ((findType(b["Test Type ID"]) || {})["Order"] || 0));
     const editable = canCorrect(s);
+    const live = rs.filter(isLive);
+    const okMethods = state.methods.filter(m => live.every(r => { const t = findType(r["Test Type ID"]); return !t || methodsOf(t).indexOf(m) !== -1; }));
     openSheet({
       title: tankName(s["Tank ID"]) + " · " + fmtDT(s["Tested At"]),
       submitLabel: editable ? "Save" : "Close",
       body: (editable
-          ? '<div class="field"><label for="f_stime">Tested at</label><input type="datetime-local" id="f_stime" name="testedAt" value="' + esc(String(s["Tested At"]).replace(" ", "T")) + '"></div>' +
+          ? '<div class="field"><label for="f_smethod">Method</label><select id="f_smethod" name="method">' +
+              (okMethods.indexOf(s["Method"]) === -1 && s["Method"] ? '<option selected>' + esc(s["Method"]) + '</option>' : "") +
+              okMethods.map(m => '<option' + (m === s["Method"] ? " selected" : "") + '>' + m + '</option>').join("") + '</select></div>' +
+            '<div class="field"><label for="f_stime">Tested at</label><input type="datetime-local" id="f_stime" name="testedAt" value="' + esc(String(s["Tested At"]).replace(" ", "T")) + '"></div>' +
             '<div class="field"><label for="f_snotes">Test notes</label><textarea id="f_snotes" name="notes">' + esc(s["Notes"]) + '</textarea></div>'
           : (s["Notes"] ? '<p>' + esc(s["Notes"]) + '</p>' : "")) +
-        '<p class="meta">' + esc([s["Session ID"], "Logged by " + personName(s["Tested By"])].join(" · ")) + '</p>' +
+        '<p class="meta">' + esc([s["Session ID"], editable ? "" : s["Method"], "Logged by " + personName(s["Tested By"])].filter(Boolean).join(" · ")) + '</p>' +
         '<div class="card list">' + rs.map(r => {
           const t = findType(r["Test Type ID"]) || { Name: r["Test Type"], Units: r["Units"] };
           return '<div class="list-item' + (isLive(r) ? "" : " dim") + '"' + (canCorrect(r) ? ' data-act="edit-reading" data-id="' + esc(r["Test ID"]) + '"' : "") + '><div class="body">' +
             '<div class="title">' + esc(t["Name"] + ": " + fmtNum(r["Value"]) + unitsOf(t)) + '</div>' +
-            '<div class="sub">' + esc([r["Method"], r["Notes"], isLive(r) ? "" : "Retired"].filter(Boolean).join(" · ")) + '</div></div>' +
+            '<div class="sub">' + esc([r["Notes"], isLive(r) ? "" : "Retired"].filter(Boolean).join(" · ")) + '</div></div>' +
             (isLive(r) ? resultPill(r["Result"]) : "") + '</div>';
         }).join("") + '</div>' +
         (editable ? '<p class="hint">Tap a reading to correct or retire it.</p>' : ""),
@@ -1632,6 +1638,7 @@
         const changed = {};
         if (vals.testedAt && vals.testedAt !== String(s["Tested At"]).replace(" ", "T")) changed.testedAt = vals.testedAt;
         if (String(vals.notes || "").trim() !== String(s["Notes"] || "").trim()) changed.notes = vals.notes;
+        if (vals.method && vals.method !== s["Method"]) changed.method = vals.method;
         if (!Object.keys(changed).length) return true;
         return write("updateWaterSession", { id: id, values: changed }, "Saved");
       }
@@ -1644,7 +1651,6 @@
     $$(".sheet-backdrop").forEach(b => b.remove());
     document.body.style.overflow = "";
     const t = findType(r["Test Type ID"]) || { Name: r["Test Type"], Units: r["Units"], "Allowed Methods": r["Method"] };
-    const ms = methodsOf(t).length ? methodsOf(t) : [r["Method"]];
     const rg = { min: num(r["Range Min"]), max: num(r["Range Max"]) };
     openSheet({
       title: "Edit " + t["Name"],
@@ -1652,7 +1658,7 @@
         '<div class="field"><label for="f_rv">Value' + (t["Units"] ? " (" + esc(t["Units"]) + ")" : "") + ' <span class="req">*</span></label>' +
           '<input type="text" inputmode="decimal" id="f_rv" name="value" required value="' + esc(fmtNum(r["Value"])) + '">' +
           '<div class="hint">Range at the time: ' + esc(rangeText(rg, t)) + '</div></div>' +
-        '<div class="field"><label for="f_rm">Method</label><select id="f_rm" name="method">' + ms.map(m => '<option' + (m === r["Method"] ? " selected" : "") + '>' + esc(m) + '</option>').join("") + '</select></div>' +
+        '<p class="hint">Method: ' + esc(r["Method"] || "—") + ' (change it on the test as a whole).</p>' +
         '<div class="field"><label for="f_rn">Note</label><input type="text" id="f_rn" name="notes" value="' + esc(r["Notes"]) + '"></div>' +
         '<div class="actions"><button type="button" class="btn ' + (isLive(r) ? "danger" : "") + '" data-retire>' + (isLive(r) ? "Retire this reading" : "Restore this reading") + '</button></div>',
       onReady: form => $("[data-retire]", form).addEventListener("click", async () => {
@@ -1665,7 +1671,6 @@
         if (num(vals.value) === null) throw new Error("Value must be a number.");
         const changed = {};
         if (num(vals.value) !== num(r["Value"])) changed.value = num(vals.value);
-        if (vals.method !== r["Method"]) changed.method = vals.method;
         if (String(vals.notes || "").trim() !== String(r["Notes"] || "").trim()) changed.notes = vals.notes;
         if (!Object.keys(changed).length) { toast("No changes"); return true; }
         return write("updateWaterReading", { id: id, values: changed }, "Reading updated");
@@ -1817,6 +1822,27 @@
   // Start
   // ------------------------------------------------------------------
   window.AA = { gisLoaded: gisLoaded };
+
+  // ---------- Updates: reload when a newer version is published ----------
+  const APP_VERSION = "12";
+  async function checkForUpdate() {
+    try {
+      const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
+      if (!res.ok) return;
+      const v = (await res.json()).version;
+      if (!v || v === APP_VERSION) return;
+      if ($(".sheet-backdrop")) { toast("A new version is ready. It will load next time you open the app."); return; }
+      // Reload once per new version; if the files haven't caught up yet, don't loop.
+      let tried = "";
+      try { tried = sessionStorage.getItem("aa_reloaded_for") || ""; } catch (e) { /* ignore */ }
+      if (tried === v) return;
+      try { sessionStorage.setItem("aa_reloaded_for", v); } catch (e) { /* ignore */ }
+      if (navigator.serviceWorker) { try { const reg = await navigator.serviceWorker.getRegistration(); if (reg) await reg.update(); } catch (e) { /* ignore */ } }
+      location.reload();
+    } catch (e) { /* offline: try again later */ }
+  }
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") checkForUpdate(); });
+  window.addEventListener("load", () => setTimeout(checkForUpdate, 1500));
 
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));

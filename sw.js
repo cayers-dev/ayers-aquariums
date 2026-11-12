@@ -1,7 +1,7 @@
 // Ayers Aquariums service worker: caches the app shell so it opens fast.
 // Data always comes live from the server and is never cached here.
-const CACHE = "aa-shell-v11";
-const SHELL = ["./", "index.html", "styles.css", "app.js", "config.js", "manifest.webmanifest",
+const CACHE = "aa-shell-v12";
+const SHELL = ["./", "index.html", "styles.css?v=12", "app.js?v=12", "config.js?v=12", "manifest.webmanifest",
                "icons/icon.svg", "icons/icon-192.png", "icons/apple-touch-icon.png"];
 
 self.addEventListener("install", e => {
@@ -19,10 +19,11 @@ self.addEventListener("fetch", e => {
   const url = new URL(req.url);
   // Only same-origin GETs (the app shell). API calls, Google sign-in and images pass straight through.
   if (req.method !== "GET" || url.origin !== self.location.origin) return;
+  if (url.pathname.endsWith("version.json")) return;   // always straight from the network
   e.respondWith(
-    fetch(req).then(res => {
+    fetch(req, { cache: "no-cache" }).then(res => {
       if (res.ok) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); }
       return res;
-    }).catch(() => caches.match(req).then(r => r || caches.match("index.html")))
+    }).catch(() => caches.match(req, { ignoreSearch: true }).then(r => r || caches.match("index.html")))
   );
 });
