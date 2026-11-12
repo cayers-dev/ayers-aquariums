@@ -21,6 +21,8 @@
 
 const AI_CONFIG = {
    defaultModel: "gemini-3.8-flash",
+   // Tried in order when the model above is busy (503) or out of free quota (429).
+   fallbackModels: ["gemini-3.7-flash", "gemini-3.5-flash", "gemini-flash-latest"],
    apiBase: "https://generativelanguage.googleapis.com/v1beta/models/",
    maxRefChars: 12000,
    userAgent: "AyersAquariums/1.0 (Google Apps Script; personal aquarium database)"
@@ -52,7 +54,7 @@ function aiTest() {
       Logger.log(res.getContentText().slice(0, 500));
    }
    const out = aiGenerateJson_([{ text: 'Reply with this JSON exactly: {"ok": true}' }]);
-   Logger.log("Model " + aiModel_() + " replied: " + JSON.stringify(out));
+   Logger.log("Model " + AI_LAST_MODEL + " replied: " + JSON.stringify(out));
 }
 
 
@@ -69,10 +71,28 @@ function aiModel_() {
    return (PropertiesService.getScriptProperties().getProperty("GEMINI_MODEL") || AI_CONFIG.defaultModel).trim();
 }
 
+let AI_LAST_MODEL = "";
+
 // Sends parts ([{text}|{inline_data}]) and returns the parsed JSON reply.
+// Falls back to other Flash models when one is busy or out of free quota.
 function aiGenerateJson_(parts) {
+   const models = [aiModel_()].concat(AI_CONFIG.fallbackModels.filter(m => m !== aiModel_()));
+   let lastErr = null;
+   for (let i = 0; i < models.length; i++) {
+      try {
+         const out = aiGenerateOnce_(parts, models[i]);
+         AI_LAST_MODEL = models[i];
+         return out;
+      } catch (e) {
+         lastErr = e;
+         if (!e.aiRetry) throw e;
+      }
+   }
+   throw lastErr;
+}
+
+function aiGenerateOnce_(parts, model) {
    const key = aiKey_();
-   const model = aiModel_();
    const body = {
       contents: [{ role: "user", parts: parts }],
       generationConfig: { temperature: 0.2, responseMimeType: "application/json" }
@@ -92,8 +112,10 @@ function aiGenerateJson_(parts) {
       let msg = "";
       try { msg = (JSON.parse(text).error || {}).message || ""; } catch (e) { /* not JSON */ }
       console.error("Gemini HTTP " + code + ": " + text.slice(0, 800));
-      if (code === 429) throw apiError_("AI_BUSY", "The free AI limit has been reached for now. Try again in a minute (if the daily limit is used up, tomorrow).");
-      if (code === 404) throw apiError_("AI_SETUP", "The AI model \"" + model + "\" isn't available. Set GEMINI_MODEL in the script's Project Settings.");
+      const retry = err => { err.aiRetry = true; return err; };
+      if (code === 429) throw retry(apiError_("AI_BUSY", "The free AI limit has been reached for now. Try again in a minute (if the daily limit is used up, tomorrow)."));
+      if (code === 503) throw retry(apiError_("AI_BUSY", "Google's AI is very busy right now. Try again in a few minutes."));
+      if (code === 404) throw retry(apiError_("AI_SETUP", "The AI model \"" + model + "\" isn't available. Set GEMINI_MODEL in the script's Project Settings."));
       if (code === 400 && /api key/i.test(msg)) throw apiError_("AI_SETUP", "The Gemini API key isn't valid. Check GEMINI_API_KEY in the script's Project Settings.");
       if (code === 403) throw apiError_("AI_SETUP", "The Gemini API key was refused (" + (msg || "permission denied") + ").");
       if (code >= 500) throw apiError_("AI_ERROR", "The AI service had a problem. Try again in a moment.");
@@ -281,7 +303,7 @@ function apiAiFill_(req, user) {
       confidence: /^(High|Medium|Low)$/i.test(String(ai.confidence)) ? String(ai.confidence).replace(/^./, c => c.toUpperCase()) : "",
       notes: String(ai.notes || "").slice(0, 500),
       sources: sources,
-      model: aiModel_()
+      model: AI_LAST_MODEL
    };
    // A free-licensed photo when the item has no thumbnail yet.
    if (req.findPhoto && isBlank(current["Thumbnail URL"]) && wiki) {
