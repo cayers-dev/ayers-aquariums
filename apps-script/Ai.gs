@@ -198,7 +198,7 @@ function aiWikipedia_(names, kind) {
       const pages = page && page.query && page.query.pages;
       const p = pages && pages[Object.keys(pages)[0]];
       if (!p || !p.extract) continue;
-      const imageFile = p.original && p.original.source ? decodeURIComponent(String(p.original.source).split("/").pop()) : "";
+      const imageFile = p.original && p.original.source ? decodeURIComponent(String(p.original.source).split("?")[0].split("/").pop()) : "";
       return { title: p.title, url: p.fullurl || ("https://en.wikipedia.org/wiki/" + encodeURIComponent(p.title.replace(/ /g, "_"))),
                text: String(p.extract).slice(0, AI_CONFIG.maxRefChars), imageFile: imageFile };
    }
