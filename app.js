@@ -215,6 +215,7 @@
     state.receiptLinks = r.receiptLinks || [];
     state.vendors = r.vendors || [];
     state.people = r.people || [];
+    state.otherAssignments = r.otherAssignments || [];
     state.testTypes = r.testTypes || [];
     state.waterSessions = r.waterSessions || [];
     state.waterTests = r.waterTests || [];
@@ -528,9 +529,14 @@
     let inTanks = "";
     if (ITEM_TYPES.indexOf(type) !== -1) {
       const rows = state.data.assignments.filter(a => a["Item ID"] === id && isActiveAssignment(a));
-      inTanks = '<div class="section"><div class="section-head"><h3>In tanks (' + rows.length + ')</h3></div><div class="card list">' +
+      const others = (state.otherAssignments || []).filter(a => a["Item ID"] === id);
+      const total = rows.length + others.length;
+      inTanks = '<div class="section"><div class="section-head"><h3>In tanks (' + total + ')</h3></div><div class="card list">' +
         (rows.map(a => '<a class="list-item" href="#/tank/' + encodeURIComponent(a["Tank ID"]) + '"><div class="body"><div class="title">' + esc(tankName(a["Tank ID"])) + '</div>' +
-          '<div class="sub">' + esc([a["Tank ID"], a["Date Added"] ? "Added " + fmtDate(a["Date Added"]) : ""].filter(Boolean).join(" · ")) + '</div></div></a>').join("") ||
+          '<div class="sub">' + esc([a["Tank ID"], a["Date Added"] ? "Added " + fmtDate(a["Date Added"]) : ""].filter(Boolean).join(" · ")) + '</div></div></a>').join("") +
+         others.slice().sort((x, y) => String(x["Tank Name"]).localeCompare(String(y["Tank Name"]))).map(a =>
+          '<div class="list-item"><div class="body"><div class="title">' + esc(a["Tank Name"]) + '</div>' +
+          '<div class="sub">' + esc([a["Tank ID"], a["Date Added"] ? "Added " + fmtDate(a["Date Added"]) : ""].filter(Boolean).join(" · ")) + '</div></div></div>').join("") ||
           '<div class="empty">Not in any tank</div>') + '</div></div>';
     }
     const hero = '<div class="card">' +
