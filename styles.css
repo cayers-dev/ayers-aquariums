@@ -362,3 +362,23 @@ a.btn { text-decoration: none; }
 .chips-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .chip-link { padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--text); text-decoration: none; font-size: 14px; }
 .card.pad > .sub { color: var(--muted); font-size: 13px; }
+/* Water test entry table */
+.wt-top { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.wt-top .field select { width: 100%; }
+.wt-table { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.wt-th, .wt-cells { display: grid; grid-template-columns: minmax(0, 1fr) 70px 30px 22px 38px 38px; gap: 6px; align-items: center; }
+.wt-th { padding: 6px 10px; background: var(--surface-2); font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.wt-th span:nth-child(n+3) { text-align: center; }
+.wt-th span:nth-child(n+5) { text-align: right; }
+.wt-tr { padding: 7px 10px; border-top: 1px solid var(--border); }
+.wt-field { font-weight: 600; font-size: 14px; line-height: 1.2; overflow-wrap: anywhere; }
+.wt-field .u { display: block; font-weight: 400; font-size: 12px; color: var(--muted); }
+.wt-cells .wt-val { padding: 8px 6px; }
+.wt-notebtn { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); font-size: 15px; cursor: pointer; padding: 0; }
+.wt-notebtn.has { background: var(--primary-soft); color: var(--primary); border-color: var(--primary); }
+.wt-flag { text-align: center; font-weight: 700; font-size: 14px; }
+.wt-tr.is-off .wt-flag, .wt-tr.is-bad .wt-flag { color: var(--danger); }
+.wt-tr.is-ok .wt-flag { color: var(--good); }
+.wt-lim { text-align: right; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.wt-tr.is-off .wt-val, .wt-tr.is-bad .wt-val { border-color: var(--danger); color: var(--danger); }
+.wt-tr.is-ok .wt-val { border-color: var(--good); }

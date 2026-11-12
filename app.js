@@ -1481,112 +1481,103 @@
     const loggable = state.data.tanks.filter(t => !isRetired(t) && canLogTank(t["Tank ID"]));
     if (!loggable.length) { toast("You don’t have any tanks assigned for testing.", true); return; }
     if (!canLogTank(tankId)) tankId = loggable[0]["Tank ID"];
-    const types = activeTypes();
-    const rowsHtml = () => types.map(t => {
-      const ms = methodsOf(t);
-      const rg = rangeFor(tankId, t);
-      return '<div class="wt-row" data-type="' + esc(t["Test Type ID"]) + '">' +
-        '<div class="wt-main">' +
-          '<label class="wt-name" for="wt_' + esc(t["Test Type ID"]) + '">' + esc(t["Name"]) + (t["Units"] ? ' <span class="u">' + esc(t["Units"]) + '</span>' : "") + '</label>' +
-          '<input type="text" inputmode="decimal" id="wt_' + esc(t["Test Type ID"]) + '" class="wt-val" autocomplete="off" placeholder="—">' +
-          '<div class="wt-range' + (rg.min === null && rg.max === null ? " none" : "") + '">' + esc(rangeText(rg, t)) + '</div>' +
-        '</div>' +
-        '<div class="wt-sub">' +
-          (ms.length > 1 ? '<select class="wt-method" aria-label="Method for ' + esc(t["Name"]) + '">' + ms.map(m => '<option>' + m + '</option>').join("") + '</select>'
-                         : '<span class="wt-fixed">' + esc(ms[0] || "") + '</span>') +
-          '<button type="button" class="link" data-note>+ Note</button>' +
-        '</div>' +
-        '<input type="text" class="wt-note" placeholder="Note for this reading" hidden>' +
-        '<div class="wt-alert" hidden></div>' +
-      '</div>';
-    }).join("");
+    let method = "Strip";
+    try { const m = localStorage.getItem("aa_water_method"); if (state.methods.indexOf(m) !== -1) method = m; } catch (e) { /* ignore */ }
+    const entered = {};   // typed values/notes survive switching method or tank
+    const fmtLim = v => v === null ? "—" : fmtNum(v);
+    const tableHtml = (tank, m) => {
+      const types = activeTypes().filter(t => methodsOf(t).indexOf(m) !== -1);
+      if (!types.length) return '<div class="empty">No active tests use ' + esc(m) + '. Add one under Test types.</div>';
+      return '<div class="wt-table"><div class="wt-th"><span>Field</span><span>Entry</span><span>Note</span><span>Alert</span><span>Min</span><span>Max</span></div>' +
+        types.map(t => {
+          const id = t["Test Type ID"], rg = rangeFor(tank, t), prev = entered[id] || {};
+          return '<div class="wt-tr" data-type="' + esc(id) + '">' +
+            '<div class="wt-cells">' +
+              '<label class="wt-field" for="wt_' + esc(id) + '">' + esc(t["Name"]) + (t["Units"] ? '<span class="u">' + esc(t["Units"]) + '</span>' : "") + '</label>' +
+              '<input type="text" inputmode="decimal" id="wt_' + esc(id) + '" class="wt-val" autocomplete="off" value="' + esc(prev.value || "") + '">' +
+              '<button type="button" class="wt-notebtn' + (prev.note ? " has" : "") + '" aria-label="Note for ' + esc(t["Name"]) + '">✎</button>' +
+              '<span class="wt-flag" aria-live="polite"></span>' +
+              '<span class="wt-lim">' + esc(fmtLim(rg.min)) + '</span>' +
+              '<span class="wt-lim">' + esc(fmtLim(rg.max)) + '</span>' +
+            '</div>' +
+            '<input type="text" class="wt-note" placeholder="Note for ' + esc(t["Name"]) + '" value="' + esc(prev.note || "") + '"' + (prev.note ? "" : " hidden") + '>' +
+            '<div class="wt-alert" hidden></div>' +
+          '</div>';
+        }).join("") + '</div>';
+    };
     openSheet({
       title: "Log water test",
       submitLabel: "Save readings",
       body:
-        '<div class="field"><label for="f_wtank">Tank</label><select id="f_wtank">' + loggable.map(t => '<option value="' + esc(t["Tank ID"]) + '"' + (t["Tank ID"] === tankId ? " selected" : "") + '>' + esc(t["Tank Name"]) + '</option>').join("") + '</select></div>' +
+        '<div class="wt-top">' +
+          '<div class="field"><label for="f_wtank">Tank</label><select id="f_wtank">' + loggable.map(t => '<option value="' + esc(t["Tank ID"]) + '"' + (t["Tank ID"] === tankId ? " selected" : "") + '>' + esc(t["Tank Name"]) + '</option>').join("") + '</select></div>' +
+          '<div class="field"><label for="f_wmethod">Method</label><select id="f_wmethod">' + state.methods.map(m => '<option' + (m === method ? " selected" : "") + '>' + m + '</option>').join("") + '</select></div>' +
+        '</div>' +
+        '<div class="field"><label for="f_wnotes">Notes</label><textarea id="f_wnotes" placeholder="About this test as a whole (e.g. before water change)"></textarea></div>' +
         '<div class="field"><label for="f_wtime">Tested at</label><input type="datetime-local" id="f_wtime" value="' + localNow() + '" max="' + localNow() + '"></div>' +
-        '<div class="field"><label>Default method</label><div class="segmented wt-default">' + state.methods.map(m => '<button type="button" class="' + (m === "Strip" ? "on" : "") + '" data-m="' + m + '">' + m + '</button>').join("") + '</div></div>' +
-        '<div class="field"><label for="f_wnotes">Test notes</label><textarea id="f_wnotes" placeholder="Anything about this test as a whole (e.g. before water change)"></textarea></div>' +
-        '<div class="wt-list"><div class="wt-headrow"><span>Test</span><span>Value</span><span>Acceptable</span></div><div class="wt-rows">' + rowsHtml() + '</div></div>' +
-        '<p class="hint">Fill in only the tests you did. Ranges come from the tank’s Target ranges.</p>',
+        '<div id="wt-table-wrap">' + tableHtml(tankId, method) + '</div>' +
+        '<p class="hint">Fill in only what you tested. Min/Max come from the tank’s Target ranges; ✎ adds a note to one reading.</p>',
       onReady: form => {
-        let defMethod = "Strip";
-        const touched = new Set();
+        const wrap = $("#wt-table-wrap", form);
+        const tankSel = $("#f_wtank", form), methodSel = $("#f_wmethod", form);
         const wire = () => {
-          $$(".wt-row", form).forEach(row => {
-            const t = findType(row.dataset.type);
-            const sel = $(".wt-method", row);
-            if (sel) {
-              if (methodsOf(t).indexOf(defMethod) !== -1) sel.value = defMethod;
-              sel.addEventListener("change", () => touched.add(row.dataset.type));
-            }
-            $("[data-note]", row).addEventListener("click", e => { const n = $(".wt-note", row); n.hidden = !n.hidden; if (!n.hidden) n.focus(); e.target.textContent = n.hidden ? "+ Note" : "– Note"; });
-            const input = $(".wt-val", row), alertBox = $(".wt-alert", row);
+          $$(".wt-tr", wrap).forEach(row => {
+            const id = row.dataset.type, t = findType(id);
+            const input = $(".wt-val", row), note = $(".wt-note", row), btn = $(".wt-notebtn", row);
+            const flag = $(".wt-flag", row), alertBox = $(".wt-alert", row);
             const check = () => {
               const raw = input.value.trim();
+              entered[id] = Object.assign(entered[id] || {}, { value: input.value });
               row.classList.remove("is-off", "is-ok", "is-bad");
-              alertBox.hidden = true;
+              alertBox.hidden = true; flag.textContent = ""; flag.title = "";
               if (!raw) return;
               const v = num(raw);
-              if (v === null) { row.classList.add("is-bad"); alertBox.textContent = "Enter a number"; alertBox.hidden = false; return; }
-              const res = checkValue(v, rangeFor($("#f_wtank", form).value, t));
+              if (v === null) { row.classList.add("is-bad"); flag.textContent = "!"; alertBox.textContent = "Enter a number"; alertBox.hidden = false; return; }
+              const res = checkValue(v, rangeFor(tankSel.value, t));
               if (res && (res.result === "High" || res.result === "Low")) {
                 row.classList.add("is-off");
+                flag.textContent = res.result === "High" ? "▲" : "▼";
                 alertBox.textContent = "⚠ " + t["Name"] + " " + fmtNum(v) + unitsOf(t) + " is " + fmtNum(Math.round(res.by * 1000) / 1000) + unitsOf(t) +
                   (res.result === "High" ? " above the max of " : " below the min of ") + fmtNum(res.limit) + unitsOf(t);
                 alertBox.hidden = false;
-              } else if (res) row.classList.add("is-ok");
+              } else if (res) { row.classList.add("is-ok"); flag.textContent = "✓"; }
             };
             input.addEventListener("input", check);
-            row._check = check;
+            note.addEventListener("input", () => { entered[id] = Object.assign(entered[id] || {}, { note: note.value }); btn.classList.toggle("has", !!note.value.trim()); });
+            btn.addEventListener("click", () => { note.hidden = !note.hidden; if (!note.hidden) note.focus(); });
+            check();
           });
         };
+        const redraw = () => { wrap.innerHTML = tableHtml(tankSel.value, methodSel.value); wire(); };
         wire();
-        $$(".wt-default button", form).forEach(b => b.addEventListener("click", () => {
-          defMethod = b.dataset.m;
-          $$(".wt-default button", form).forEach(x => x.classList.toggle("on", x === b));
-          $$(".wt-row", form).forEach(row => {
-            const sel = $(".wt-method", row);
-            if (sel && !touched.has(row.dataset.type) && methodsOf(findType(row.dataset.type)).indexOf(defMethod) !== -1) sel.value = defMethod;
-          });
-        }));
-        $("#f_wtank", form).addEventListener("change", e => {
-          const id = e.target.value;
-          $$(".wt-row", form).forEach(row => {
-            const t = findType(row.dataset.type), rg = rangeFor(id, t), el = $(".wt-range", row);
-            el.textContent = rangeText(rg, t);
-            el.classList.toggle("none", rg.min === null && rg.max === null);
-            row._check();
-          });
+        tankSel.addEventListener("change", redraw);
+        methodSel.addEventListener("change", () => {
+          try { localStorage.setItem("aa_water_method", methodSel.value); } catch (e) { /* ignore */ }
+          redraw();
         });
-        form._getDefault = () => defMethod;
       },
       onSubmit: async (vals, form) => {
-        const readingsOut = [];
-        const bad = [];
-        $$(".wt-row", form).forEach(row => {
+        const methodNow = $("#f_wmethod", form).value;
+        const readingsOut = [], bad = [];
+        $$(".wt-tr", form).forEach(row => {
           const raw = $(".wt-val", row).value.trim();
           if (!raw) return;
           const t = findType(row.dataset.type);
           if (num(raw) === null) { bad.push(t["Name"]); return; }
-          const sel = $(".wt-method", row);
-          readingsOut.push({ testTypeId: row.dataset.type, value: num(raw), method: sel ? sel.value : (methodsOf(t)[0] || ""),
-                             notes: $(".wt-note", row).value.trim() });
+          readingsOut.push({ testTypeId: row.dataset.type, value: num(raw), method: methodNow, notes: $(".wt-note", row).value.trim() });
         });
         if (bad.length) throw new Error("These need a number: " + bad.join(", ") + ".");
         if (!readingsOut.length) throw new Error("Enter at least one reading.");
         const tank = $("#f_wtank", form).value;
         busy(true);
         try {
-          const res = await api("logWaterTest", { tankId: tank, testedAt: $("#f_wtime", form).value, defaultMethod: form._getDefault(),
+          const res = await api("logWaterTest", { tankId: tank, testedAt: $("#f_wtime", form).value, defaultMethod: methodNow,
                                                    notes: $("#f_wnotes", form).value, readings: readingsOut });
           applyBootstrap(await api("bootstrap"));
           state.waterTank = tank; try { localStorage.setItem("aa_water_tank", tank); } catch (e) { /* ignore */ }
           render();
-          if (res.outOfRange && res.outOfRange.length) {
-            setTimeout(() => waterAlertSheet(tank, res.outOfRange, readingsOut.length), 50);
-          } else toast(readingsOut.length + " reading" + (readingsOut.length === 1 ? "" : "s") + " saved · all in range");
+          if (res.outOfRange && res.outOfRange.length) setTimeout(() => waterAlertSheet(tank, res.outOfRange, readingsOut.length), 50);
+          else toast(readingsOut.length + " reading" + (readingsOut.length === 1 ? "" : "s") + " saved · all in range");
           return true;
         } catch (err) {
           if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) { handleError(err); return true; }
