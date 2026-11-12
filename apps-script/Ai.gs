@@ -20,9 +20,11 @@
 // ============================================================
 
 const AI_CONFIG = {
-   defaultModel: "gemini-3.8-flash",
+   // gemini-3.5-flash answers reliably on the free tier; the newer Flash models
+   // are often "busy" there. Set GEMINI_MODEL to try another one.
+   defaultModel: "gemini-3.5-flash",
    // Tried in order when the model above is busy (503) or out of free quota (429).
-   fallbackModels: ["gemini-3.7-flash", "gemini-3.5-flash", "gemini-flash-latest"],
+   fallbackModels: ["gemini-flash-latest", "gemini-3.8-flash"],
    apiBase: "https://generativelanguage.googleapis.com/v1beta/models/",
    maxRefChars: 12000,
    userAgent: "AyersAquariums/1.0 (Google Apps Script; personal aquarium database)"
@@ -107,12 +109,13 @@ function aiGenerateJson_(parts) {
    throw lastErr;
 }
 
-function aiGenerateOnce_(parts, model) {
+function aiGenerateOnce_(parts, model, noThinking) {
    const key = aiKey_();
    const body = {
       contents: [{ role: "user", parts: parts }],
-      generationConfig: { temperature: 0.2, responseMimeType: "application/json" }
+      generationConfig: { temperature: 0.2, responseMimeType: "application/json", thinkingConfig: { thinkingLevel: "low" } }
    };
+   if (noThinking) delete body.generationConfig.thinkingConfig;
    let res;
    try {
       res = UrlFetchApp.fetch(AI_CONFIG.apiBase + encodeURIComponent(model) + ":generateContent", {
@@ -132,6 +135,7 @@ function aiGenerateOnce_(parts, model) {
       if (code === 429) throw retry(apiError_("AI_BUSY", "The free AI limit has been reached for now. Try again in a minute (if the daily limit is used up, tomorrow)."));
       if (code === 503) throw retry(apiError_("AI_BUSY", "Google's AI is very busy right now. Try again in a few minutes."));
       if (code === 404) throw retry(apiError_("AI_SETUP", "The AI model \"" + model + "\" isn't available. Set GEMINI_MODEL in the script's Project Settings."));
+      if (code === 400 && !noThinking && /thinking/i.test(msg)) return aiGenerateOnce_(parts, model, true);
       if (code === 400 && /api key/i.test(msg)) throw apiError_("AI_SETUP", "The Gemini API key isn't valid. Check GEMINI_API_KEY in the script's Project Settings.");
       if (code === 403) throw apiError_("AI_SETUP", "The Gemini API key was refused (" + (msg || "permission denied") + ").");
       if (code >= 500) throw apiError_("AI_ERROR", "The AI service had a problem. Try again in a moment.");
