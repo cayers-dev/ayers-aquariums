@@ -37,7 +37,13 @@
     waterDays: (function () { try { return Number(localStorage.getItem("aa_water_days")) || 60; } catch (e) { return 60; } })(),
     waterChanges: [],
     showRetiredMaint: false,
-    maintTank: (function () { try { return localStorage.getItem("aa_maint_tank") || ""; } catch (e) { return ""; } })()
+    maintTank: (function () { try { return localStorage.getItem("aa_maint_tank") || ""; } catch (e) { return ""; } })(),
+    wishes: [],
+    compat: [],
+    wishOptions: { priorities: ["High", "Medium", "Low"], statuses: ["Researching", "Want", "Purchased", "Not getting"] },
+    wishFilter: "open",
+    wishTank: "",
+    itemPhotos: {}
   };
 
   // ------------------------------------------------------------------
@@ -91,6 +97,44 @@
     return url;
   }
   function isUrl(v) { return /^https?:\/\//i.test(String(v || "")); }
+  // Item photos uploaded from the app live in Drive and are loaded through the server.
+  function driveId(url) { const m = /drive\.google\.com\/file\/d\/([A-Za-z0-9_-]+)/.exec(String(url || "")); return m ? m[1] : ""; }
+  function photoHtml(url, cls, width, fallback) {
+    if (!url) return fallback ? '<span class="' + cls + '">' + esc(fallback) + '</span>' : "";
+    const id = driveId(url);
+    if (id) {
+      const c = state.itemPhotos[id];
+      return '<img class="' + cls + ' drive-img" alt="" data-drive="' + esc(id) + '"' + (c && c.url ? ' src="' + c.url + '"' : "") + '>';
+    }
+    return '<img class="' + cls + '" loading="lazy" alt="" src="' + esc(thumbUrl(url, width)) + '">';
+  }
+  const photoQueue = [];
+  let photoLoading = 0;
+  function hydratePhotos(root) {
+    $$("img[data-drive]", root || document).forEach(img => {
+      const id = img.dataset.drive;
+      const c = state.itemPhotos[id];
+      if (c && c.url) { if (img.getAttribute("src") !== c.url) img.src = c.url; return; }
+      if (!c) { state.itemPhotos[id] = { loading: true }; photoQueue.push(id); }
+    });
+    pumpPhotos();
+  }
+  function pumpPhotos() {
+    while (photoLoading < 2 && photoQueue.length) {
+      const id = photoQueue.shift();
+      photoLoading++;
+      api("itemPhoto", { fileId: id }).then(res => {
+        const bin = atob(res.image.data);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        state.itemPhotos[id] = { url: URL.createObjectURL(new Blob([bytes], { type: res.image.mimeType || "image/jpeg" })) };
+        $$('img[data-drive="' + CSS.escape(id) + '"]').forEach(img => { img.src = state.itemPhotos[id].url; });
+      }).catch(() => {
+        state.itemPhotos[id] = { error: true };
+        $$('img[data-drive="' + CSS.escape(id) + '"]').forEach(img => img.classList.add("photo-error"));
+      }).finally(() => { photoLoading--; pumpPhotos(); });
+    }
+  }
 
   const ICONS = {
     back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
@@ -104,6 +148,8 @@
     receipts: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6M9 16h3"/></svg>',
     camera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
     maint: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.2L3.5 17.3a1.8 1.8 0 0 0 2.5 2.5l5.8-5.8a4 4 0 0 0 5.2-5.4l-2.6 2.6-2.3-.4-.4-2.3z"/></svg>',
+    wish: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/></svg>',
+    sparkle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>',
     plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>'
   };
 
@@ -154,8 +200,12 @@
     return null;
   }
   const isActiveAssignment = a => a["Active"] === true && !a["Date Removed"];
+  // Wishlist rows on Tank Assignments: never in the tank (no Date Added).
+  const isWishOnlyRow = a => !!a["Wish ID"] && !a["Date Added"] && a["Active"] !== true;
+  const isPendingWishRow = a => isWishOnlyRow(a) && !a["Date Removed"];
+  const isWishItem = r => String((r && r["Status"]) || "") === "Wishlist";
   const tankAssignments = (tankId, active) => state.data.assignments
-    .filter(a => a["Tank ID"] === tankId && (active ? isActiveAssignment(a) : !isActiveAssignment(a)));
+    .filter(a => a["Tank ID"] === tankId && (active ? isActiveAssignment(a) : (!isActiveAssignment(a) && !isWishOnlyRow(a))));
   const tankName = id => { const t = findRec("tanks", id); return t ? t["Tank Name"] : id; };
 
   // ------------------------------------------------------------------
@@ -225,6 +275,9 @@
     state.waterTests = r.waterTests || [];
     if (r.methods) state.methods = r.methods;
     state.waterChanges = r.waterChanges || [];
+    state.wishes = r.wishes || [];
+    state.compat = r.compat || [];
+    if (r.wishOptions) state.wishOptions = r.wishOptions;
   }
 
   async function refresh(silent) {
@@ -360,6 +413,7 @@
       case "browse": view = viewBrowse(); break;
       case "item": view = viewItem(route.args[0], route.args[1]); break;
       case "users": view = isAdmin() ? viewUsers() : viewTanks(); break;
+      case "wish": view = route.args[0] ? viewWish(route.args[0]) : viewWishlist(); break;
       case "account": view = viewAccount(); break;
       case "receipts": view = canReceipts() ? viewReceipts() : viewTanks(); break;
       case "water": view = route.args[1] ? viewWaterType(route.args[0], route.args[1]) : viewWater(route.args[0]); break;
@@ -368,10 +422,10 @@
       case "receipt": view = canReceipts() ? viewReceipt(route.args[0]) : viewTanks(); break;
       default: view = viewTanks();
     }
-    const tab = route.name === "tank" ? "tanks" : route.name === "item" ? "browse" : route.name === "receipt" ? "receipts" : route.name === "testtypes" ? "water" : route.name;
-    const tabs = [["tanks", "Tanks"], ["water", "Test"], ["maint", "Maint."], ["browse", "Browse"]]
+    const tab = route.name === "tank" ? "tanks" : route.name === "item" ? "browse" : route.name === "receipt" ? "receipts" :
+                route.name === "testtypes" ? "water" : route.name === "users" ? "account" : route.name;
+    const tabs = [["tanks", "Tanks"], ["water", "Test"], ["maint", "Maint."], ["browse", "Browse"], ["wish", "Wishlist"]]
       .concat(canReceipts() ? [["receipts", "Receipts"]] : [])
-      .concat(isAdmin() ? [["users", "Users"]] : [])
       .concat([["account", "Account"]]);
 
     $("#app").innerHTML =
@@ -386,6 +440,7 @@
       '</nav>';
 
     if (view.after) view.after();
+    hydratePhotos($("#app"));
     window.scrollTo(0, view.keepScroll ? window.scrollY : 0);
   }
 
@@ -429,7 +484,7 @@
       const T = TYPES[ty];
       const img = T.img(r);
       return '<div class="list-item" data-act="open-item" data-type="' + ty + '" data-id="' + esc(a["Item ID"]) + '">' +
-        (img ? '<img class="thumb" loading="lazy" alt="" src="' + esc(thumbUrl(img)) + '">' : '<span class="thumb">' + esc(a["Item ID"].split("-")[0]) + '</span>') +
+        photoHtml(img, "thumb", 160, a["Item ID"].split("-")[0]) +
         '<div class="body"><div class="title">' + esc(T.title(r)) + '</div>' +
         '<div class="sub">' + esc([a["Item ID"], T.sub(r), a["Date Added"] ? "Added " + fmtDate(a["Date Added"]) : ""].filter(Boolean).join(" · ")) + '</div>' +
         (a["Notes"] ? '<div class="sub">' + esc(a["Notes"]) + '</div>' : "") + '</div>' +
@@ -476,7 +531,7 @@
     return {
       title: t["Tank Name"], back: true,
       html: hero + group("species", "Livestock") + group("equipment", "Equipment") + group("plants", "Plants") +
-            waterSection(id) + maintSection(id) + paramsHtml + receiptsSection(id) + detailsSection("tanks", t, "Tank details") + removedHtml
+            wishSection(id) + waterSection(id) + maintSection(id) + paramsHtml + receiptsSection(id) + detailsSection("tanks", t, "Tank details") + removedHtml
     };
   }
 
@@ -503,6 +558,7 @@
     const T = TYPES[type];
     const q = state.query.trim().toLowerCase();
     const rows = state.data[type]
+      .filter(r => !isWishItem(r))
       .filter(r => state.showRetired || !isRetired(r))
       .filter(r => !q || Object.keys(r).some(k => k !== "_row" && String(r[k]).toLowerCase().indexOf(q) !== -1))
       .sort((a, b) => String(T.title(a)).localeCompare(String(T.title(b))));
@@ -511,7 +567,7 @@
     const list = rows.map(r => {
       const img = T.img(r);
       return '<div class="list-item ' + (isRetired(r) ? "dim" : "") + '" data-act="open-item" data-type="' + type + '" data-id="' + esc(r[T.id]) + '">' +
-        (type !== "medications" ? (img ? '<img class="thumb" loading="lazy" alt="" src="' + esc(thumbUrl(img)) + '">' : '<span class="thumb">' + esc(String(r[T.id]).split("-")[0]) + '</span>') : "") +
+        (type !== "medications" ? photoHtml(img, "thumb", 160, String(r[T.id]).split("-")[0]) : "") +
         '<div class="body"><div class="title">' + esc(T.title(r)) + '</div><div class="sub">' + esc([r[T.id], T.sub(r)].filter(Boolean).join(" · ")) + '</div></div>' +
         (isRetired(r) ? '<span class="pill retired">Retired</span>' : "") + '</div>';
     }).join("");
@@ -547,13 +603,16 @@
           '<div class="empty">Not in any tank</div>') + '</div></div>';
     }
     const hero = '<div class="card">' +
-      (img ? '<img class="big-img" alt="" src="' + esc(thumbUrl(img, 800)) + '">' : "") +
+      photoHtml(img, "big-img", 800, "") +
       '<div class="hero"><h2>' + esc(T.title(r)) + '</h2><div class="meta">' + esc([r[T.id], T.sub(r)].filter(Boolean).join(" · ")) + '</div>' +
-      (isRetired(r) ? '<div class="counts"><span class="pill retired">Retired</span></div>' : "") +
+      (isRetired(r) ? '<div class="counts"><span class="pill retired">Retired</span></div>' : isWishItem(r) ? '<div class="counts"><span class="pill wishpill">' + ICONS.wish + 'Wishlist</span></div>' : "") +
       (isAdmin() ? '<div class="actions"><button class="btn" data-act="edit-record" data-type="' + type + '" data-id="' + esc(id) + '">Edit</button>' +
-        (!isRetired(r) && "Status" in r ? '<button class="btn danger" data-act="retire" data-type="' + type + '" data-id="' + esc(id) + '">Retire</button>' : "") + '</div>' : "") +
+        (!isRetired(r) && "Status" in r ? '<button class="btn danger" data-act="retire" data-type="' + type + '" data-id="' + esc(id) + '">Retire</button>' : "") + '</div>'
+        : canEditItem(type, r) ? '<div class="actions"><button class="btn" data-act="edit-record" data-type="' + type + '" data-id="' + esc(id) + '">Edit details</button></div>' : "") +
       '</div></div>';
-    return { title: T.title(r), back: true, html: hero + inTanks + receiptsSection(id) + detailsSection(type, r, "Details") };
+    const wishes = state.wishes.filter(w => w["Item ID"] === id && wishIsOpen(w));
+    const wishNote = wishes.length ? '<div class="section"><div class="card list">' + wishes.map(wishRow).join("") + '</div></div>' : "";
+    return { title: T.title(r), back: true, html: hero + wishNote + inTanks + receiptsSection(id) + detailsSection(type, r, "Details") };
   }
 
   // ---------- Users (admin) ----------
@@ -566,7 +625,7 @@
       (u.role !== "Admin" ? '<div class="sub">Tanks: ' + esc(u.tanks.map(tankName).join(", ") || "none yet") + '</div>' : "") + '</div>' +
       '<span class="pill ' + (u.role === "Admin" ? "edit" : "") + '">' + esc(u.active ? u.role : "Inactive") + '</span></div>').join("");
     return {
-      title: "Users",
+      title: "Users", back: true,
       html: '<div class="actions" style="margin:0 0 12px"><button class="btn primary" data-act="add-user">' + ICONS.plus + 'Add user</button></div>' +
         '<div class="card list">' + (rows || '<div class="empty">No users.</div>') + '</div>' +
         '<p class="hint">Admins see and change everything. Editors see, edit and log water tests on their assigned tanks. Viewers see and log water tests on their assigned tanks. Everyone can browse species, equipment, plants and medications. Users sign in with the Google account email listed here.</p>'
@@ -589,6 +648,7 @@
         '<div class="k">Can edit</div><div>' + esc(tankList) + '</div>' +
         '<div class="k">Can log tests</div><div>' + esc(testList) + '</div>' +
         '<div class="k">App version</div><div>' + esc(APP_VERSION) + '</div></div>' +
+        (isAdmin() ? '<div class="actions"><a class="btn primary" href="#/users">' + ICONS.users + 'Manage users</a></div>' : "") +
         '<div class="actions"><button class="btn" data-act="refresh">Refresh data</button><button class="btn danger" data-act="sign-out">Sign out</button></div>' +
         '<p class="hint" style="margin-top:16px"><b>Add to your home screen:</b> on iPhone, tap Share → Add to Home Screen. On Android, tap the ⋮ menu → Add to Home screen (or Install app).</p>'
     };
@@ -663,6 +723,7 @@
       '</form>';
     document.body.appendChild(back);
     document.body.style.overflow = "hidden";
+    hydratePhotos(back);
     const form = $("form", back);
     const close = () => { back.remove(); document.body.style.overflow = ""; };
     $$("[data-close]", back).forEach(b => b.addEventListener("click", close));
@@ -694,15 +755,17 @@
     const T = TYPES[type];
     const editing = !!id;
     const rec = editing ? findRec(type, id) : {};
-    const fields = state.schema[type].filter(f => editing || !f.readOnly);
+    const fields = state.schema[type].filter(f => (editing || !f.readOnly) && (isAdmin() || f.name !== "Status"));
     const values = {};
     fields.forEach(f => {
       values[f.name] = editing ? rec[f.name] : (f.name === "Status" ? "Active" : "");
     });
+    const ai = AI_TYPES.indexOf(type) !== -1 && (isAdmin() || canEditItem(type, rec));
     openSheet({
       title: (editing ? "Edit " : "Add ") + T.one.toLowerCase(),
       submitLabel: editing ? "Save" : "Add",
-      body: fields.map(f => fieldHtml(f, values[f.name])).join(""),
+      body: (ai ? aiBarHtml() : "") + fields.map(f => fieldHtml(f, values[f.name])).join(""),
+      onReady: form => { if (ai) wireAiFill(form, type, () => { const l = $('[name="Vendor Link"], [name="Product Page"]', form); return l ? l.value.trim() : ""; }); },
       onSubmit: async vals => {
         if (editing) {
           const changed = {};
@@ -730,7 +793,7 @@
       let head = "";
       if (it.group && it.group !== lastGroup) { head = '<div class="combo-group">' + esc(it.group) + '</div>'; lastGroup = it.group; }
       const search = [it.label, it.value, it.sub, it.group].filter(Boolean).join(" ").toLowerCase();
-      const thumb = f.noThumbs ? "" : (it.img ? '<img class="thumb" loading="lazy" alt="" src="' + esc(thumbUrl(it.img)) + '">' : '<span class="thumb">' + esc(String(it.value).split("-")[0]) + '</span>');
+      const thumb = f.noThumbs ? "" : photoHtml(it.img, "thumb", 160, String(it.value).split("-")[0]);
       return head + '<button type="button" class="combo-opt' + (it.disabled ? " is-off" : "") + '" role="option"' + (it.disabled ? ' disabled aria-disabled="true"' : "") + ' data-value="' + esc(it.value) + '" data-label="' + esc(it.label) + '" data-search="' + esc(search) + '">' +
         thumb +
         '<span class="body"><span class="title">' + esc(it.label) + '</span>' + (f.noThumbs && !it.sub ? "" : '<span class="sub">' + esc([f.noThumbs ? "" : it.value, it.sub].filter(Boolean).join(" · ")) + '</span>') + '</span>' +
@@ -867,7 +930,7 @@
     ITEM_TYPES.forEach(ty => {
       const T = TYPES[ty];
       // Items already in this tank stay in the list, greyed out and labelled, so nobody thinks they're missing.
-      state.data[ty].filter(r => !isRetired(r) || inTank.has(r[T.id]))
+      state.data[ty].filter(r => !isWishItem(r) && (!isRetired(r) || inTank.has(r[T.id])))
         .sort((a, b) => String(T.title(a)).localeCompare(String(T.title(b))))
         .forEach(r => {
           const there = inTank.has(r[T.id]);
@@ -1335,6 +1398,516 @@
                     : '<p>Mark <b>' + esc(receiptTitle(r)) + '</b> as Retired? The photo stays in Drive and the record stays in the sheet; it just stops showing in the list.</p>',
       onSubmit: () => write("retireReceipt", { id: id, restore: !!restore }, restore ? "Restored" : "Retired")
     });
+  }
+
+  // ------------------------------------------------------------------
+  // Fill with AI (species, plants, equipment, medications)
+  // ------------------------------------------------------------------
+  const AI_TYPES = ["species", "plants", "equipment", "medications"];
+  const canUseAi = () => state.me && (state.me.role === "Admin" || state.me.role === "Editor");
+  // Editors can fix the details of a wishlist item they added.
+  function canEditItem(type, r) {
+    if (isAdmin()) return true;
+    if (!r || !state.me || state.me.role !== "Editor" || !isWishItem(r)) return false;
+    const id = r[TYPES[type].id];
+    return state.wishes.some(w => w["Item ID"] === id && w["New Item"] === true && w["Added By"] === state.me.id);
+  }
+
+  function aiBarHtml() {
+    return '<div class="ai-bar"><button type="button" class="btn small ai-btn" data-ai-fill>' + ICONS.sparkle + '<span>Fill with AI</span></button>' +
+      '<span class="hint">Fills blank fields only. Check them before saving.</span></div><div class="ai-result" hidden></div>';
+  }
+
+  // Wires the "Fill with AI" button in a form. getLink() returns a product/info link to read, if any.
+  // onPhoto(photo) receives a free Wikipedia/Commons photo when one is found (wishlist only).
+  function wireAiFill(form, type, getLink, opts) {
+    opts = opts || {};
+    const btn = $("[data-ai-fill]", form);
+    const box = $(".ai-result", form);
+    if (!btn) return;
+    btn.addEventListener("click", async () => {
+      const t = typeof type === "function" ? type() : type;
+      const scope = opts.scope ? opts.scope() : form;
+      const values = {};
+      $$("input[name], select[name], textarea[name]", scope).forEach(el => { if (el.type !== "checkbox" && el.type !== "file") values[el.name] = el.value; });
+      const label = $("span", btn);
+      btn.disabled = true; label.textContent = "Asking the AI…";
+      box.hidden = true;
+      try {
+        const res = await api("aiFill", { table: t, values: values, link: getLink ? getLink() : "", findPhoto: !!opts.onPhoto });
+        let n = 0;
+        Object.keys(res.suggestions || {}).forEach(name => {
+          const el = $$("[name]", scope).find(x => x.name === name);
+          if (!el || String(el.value).trim() !== "") return;
+          const v = String(res.suggestions[name]);
+          if (el.tagName === "SELECT" && !$$("option", el).some(o => o.value === v || o.textContent === v)) return;
+          el.value = v;
+          el.classList.add("ai-filled");
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          n++;
+        });
+        if (res.photo && opts.onPhoto) opts.onPhoto(res.photo);
+        const srcs = (res.sources || []).map(s => '<a href="' + esc(s.url) + '" target="_blank" rel="noopener">' + esc(s.title) + '</a>').join(" · ");
+        box.innerHTML =
+          '<div><b>' + (n ? "Filled " + n + " field" + (n === 1 ? "" : "s") : "Nothing new to fill") + '</b>' +
+            (res.identified ? ' for <b>' + esc(res.identified) + '</b>' : "") +
+            (res.confidence ? ' <span class="pill ' + (res.confidence === "High" ? "good" : res.confidence === "Low" ? "bad" : "warn") + '">' + esc(res.confidence) + ' confidence</span>' : "") + '</div>' +
+          (res.notes ? '<div class="meta">' + esc(res.notes) + '</div>' : "") +
+          '<div class="meta">Sources: ' + (srcs || "none: from the AI’s own knowledge, so double-check") + '</div>' +
+          (res.photo && opts.onPhoto ? '<div class="meta">Found a free photo on Wikimedia Commons (' + esc(res.photo.license) + '). It will be used as the thumbnail.</div>' : "") +
+          (n ? '<div class="meta">AI-filled fields are highlighted.</div>' : "");
+        box.hidden = false;
+      } catch (err) {
+        if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) { handleError(err); return; }
+        box.innerHTML = '<div class="form-error-inline">' + esc(err.message) + '</div>';
+        box.hidden = false;
+      } finally {
+        btn.disabled = false; label.textContent = "Fill with AI";
+      }
+    });
+    form.addEventListener("input", e => { if (e.isTrusted && e.target.classList) e.target.classList.remove("ai-filled"); });
+  }
+
+
+  // ------------------------------------------------------------------
+  // Wishlist
+  // ------------------------------------------------------------------
+  const WISH_TYPES = ["species", "plants", "equipment"];
+  const findWish = id => state.wishes.find(w => w["Wish ID"] === id);
+  const wishIsOpen = w => ["Purchased", "Not getting"].indexOf(String(w["Wish Status"])) === -1;
+  const wishPending = id => state.data.assignments.filter(a => a["Wish ID"] === id && isPendingWishRow(a));
+  const wishAdded = id => state.data.assignments.filter(a => a["Wish ID"] === id && !!a["Date Added"]);
+  const wishItem = w => findRec(w["Item Type"], w["Item ID"]);
+  const wishTitle = w => { const r = wishItem(w); return r ? TYPES[w["Item Type"]].title(r) : w["Item ID"]; };
+  const compatFor = (wishId, tankId) => state.compat.find(c => c["Wish ID"] === wishId && c["Tank ID"] === tankId);
+  const canAddWish = () => isAdmin() || (state.me && state.me.role === "Editor" && state.me.tanks.length > 0);
+  const wishTanksAllowed = () => state.data.tanks.filter(t => !isRetired(t) && canEditTank(t["Tank ID"]))
+    .sort((a, b) => String(a["Tank Name"]).localeCompare(String(b["Tank Name"])));
+  function canManageWish(w) {
+    if (isAdmin()) return true;
+    if (!state.me || state.me.role !== "Editor") return false;
+    return w["Added By"] === state.me.id || wishPending(w["Wish ID"]).some(a => canEditTank(a["Tank ID"]));
+  }
+  function canCloseWish(w) {
+    if (isAdmin() || (state.me && w["Added By"] === state.me.id && state.me.role === "Editor")) return true;
+    const pt = wishPending(w["Wish ID"]);
+    return !!state.me && state.me.role === "Editor" && pt.length > 0 && pt.every(a => canEditTank(a["Tank ID"]));
+  }
+  const PRIORITY_ORDER = { High: 0, Medium: 1, Low: 2 };
+
+  function verdictPill(v, short) {
+    if (!v) return '<span class="pill">Not checked</span>';
+    const cls = v === "Good" ? "good" : v === "Not recommended" ? "bad" : "warn";
+    return '<span class="pill ' + cls + '">' + esc(short && v === "Not recommended" ? "Not rec." : v) + '</span>';
+  }
+  function wishStatusPill(w) {
+    const s = String(w["Wish Status"] || "Want");
+    const cls = s === "Purchased" ? "good" : s === "Not getting" ? "retired" : s === "Researching" ? "" : "edit";
+    return '<span class="pill ' + cls + '">' + esc(s) + '</span>';
+  }
+
+  function wishRow(w, tankId) {
+    const r = wishItem(w);
+    const T = TYPES[w["Item Type"]] || TYPES.species;
+    const pend = wishPending(w["Wish ID"]);
+    const tanksLine = tankId
+      ? verdictPill((compatFor(w["Wish ID"], tankId) || {})["Verdict"], true)
+      : pend.map(a => '<span class="tank-chip">' + esc(tankName(a["Tank ID"])) + ' ' + verdictPill((compatFor(w["Wish ID"], a["Tank ID"]) || {})["Verdict"], true) + '</span>').join("");
+    return '<a class="list-item wish-row ' + (wishIsOpen(w) ? "" : "dim") + '" href="#/wish/' + encodeURIComponent(w["Wish ID"]) + '">' +
+      photoHtml(r ? T.img(r) : "", "thumb", 160, String(w["Item ID"]).split("-")[0]) +
+      '<div class="body"><div class="title">' + esc(wishTitle(w)) + '</div>' +
+      '<div class="sub">' + esc([w["Wish ID"], T.one, w["Priority"] ? w["Priority"] + " priority" : "", money(w["Estimated Price"])].filter(Boolean).join(" · ")) + '</div>' +
+      (tanksLine ? '<div class="tank-chips">' + tanksLine + '</div>' : "") + '</div>' +
+      (tankId ? "" : wishStatusPill(w)) + '</a>';
+  }
+
+  function wishSection(tankId) {
+    const list = state.wishes.filter(w => wishIsOpen(w) && wishPending(w["Wish ID"]).some(a => a["Tank ID"] === tankId))
+      .sort((a, b) => (PRIORITY_ORDER[a["Priority"]] ?? 1) - (PRIORITY_ORDER[b["Priority"]] ?? 1));
+    if (!list.length && !(canEditTank(tankId) && canAddWish())) return "";
+    return '<div class="section"><div class="section-head"><h3>Wishlist (' + list.length + ')</h3>' +
+      (canEditTank(tankId) && canAddWish() ? '<button class="btn small" data-act="add-wish" data-tank="' + esc(tankId) + '">' + ICONS.plus + 'Add</button>' : "") + '</div>' +
+      '<div class="card list">' + (list.map(w => wishRow(w, tankId)).join("") || '<div class="empty">None</div>') + '</div></div>';
+  }
+
+  function viewWishlist() {
+    const f = state.wishFilter;
+    const visibleTanks = state.data.tanks.filter(t => !isRetired(t)).sort((a, b) => String(a["Tank Name"]).localeCompare(String(b["Tank Name"])));
+    if (state.wishTank && !visibleTanks.some(t => t["Tank ID"] === state.wishTank)) state.wishTank = "";
+    const rows = state.wishes
+      .filter(w => f === "open" ? wishIsOpen(w) : String(w["Wish Status"]) === (f === "purchased" ? "Purchased" : "Not getting"))
+      .filter(w => !state.wishTank || state.data.assignments.some(a => a["Wish ID"] === w["Wish ID"] && a["Tank ID"] === state.wishTank &&
+                                                                         (f === "open" ? isPendingWishRow(a) : true)))
+      .sort((a, b) => ((PRIORITY_ORDER[a["Priority"]] ?? 1) - (PRIORITY_ORDER[b["Priority"]] ?? 1)) ||
+                      String(b["Added At"] || "").localeCompare(String(a["Added At"] || "")));
+    const count = k => state.wishes.filter(w => k === "open" ? wishIsOpen(w) : String(w["Wish Status"]) === (k === "purchased" ? "Purchased" : "Not getting")).length;
+    return {
+      title: "Wishlist",
+      keepScroll: true,
+      html:
+        (canAddWish() ? '<div class="actions" style="margin:0 0 12px"><button class="btn primary" data-act="add-wish">' + ICONS.plus + 'Add wish</button></div>' : "") +
+        '<div class="segmented">' +
+          [["open", "Open"], ["purchased", "Purchased"], ["closed", "Not getting"]].map(x =>
+            '<button class="' + (f === x[0] ? "on" : "") + '" data-act="wish-filter" data-f="' + x[0] + '">' + x[1] + ' (' + count(x[0]) + ')</button>').join("") +
+        '</div>' +
+        '<div class="field"><select data-act="wish-tank" aria-label="Tank"><option value="">All tanks</option>' +
+          visibleTanks.map(t => '<option value="' + esc(t["Tank ID"]) + '"' + (t["Tank ID"] === state.wishTank ? " selected" : "") + '>' + esc(t["Tank Name"]) + '</option>').join("") +
+        '</select></div>' +
+        '<div class="card list">' + (rows.map(w => wishRow(w)).join("") || '<div class="empty">' + (state.wishes.length ? "Nothing here." : "No wishes yet.") + '</div>') + '</div>' +
+        '<p class="hint">Compatibility is checked by AI (Google Gemini, free tier) against each tank’s target ranges and current stock. Treat it as a starting point, not the final word.</p>'
+    };
+  }
+
+  function viewWish(id) {
+    const w = findWish(id);
+    if (!w) return { title: "Wish", back: true, html: '<div class="empty">That wish wasn’t found.</div>' };
+    const type = w["Item Type"];
+    const T = TYPES[type] || TYPES.species;
+    const r = wishItem(w);
+    const open = wishIsOpen(w);
+    const pend = wishPending(id);
+    const added = wishAdded(id);
+    const manage = canManageWish(w);
+    const canBuy = open && canUseAi() && wishTanksAllowed().length > 0;
+    const img = r ? T.img(r) : "";
+    const checked = state.compat.filter(c => c["Wish ID"] === id);
+    const lastCheck = checked.map(c => c["Checked At"]).sort().pop();
+
+    const hero = '<div class="card">' + photoHtml(img, "big-img", 800, "") +
+      '<div class="hero"><h2>' + esc(wishTitle(w)) + '</h2>' +
+      '<div class="meta">' + esc([id, T.one, w["Item ID"], r ? T.sub(r) : ""].filter(Boolean).join(" · ")) + '</div>' +
+      '<div class="counts">' + wishStatusPill(w) + (w["Priority"] ? '<span class="pill">' + esc(w["Priority"]) + ' priority</span>' : "") + '</div>' +
+      '<div class="actions">' +
+        (canBuy ? '<button class="btn primary" data-act="purchase-wish" data-id="' + esc(id) + '">Mark purchased</button>' : "") +
+        (manage ? '<button class="btn" data-act="edit-wish" data-id="' + esc(id) + '">Edit wish</button>' : "") +
+        (r && canEditItem(type, r) && (isWishItem(r) || isAdmin()) ? '<button class="btn" data-act="edit-record" data-type="' + type + '" data-id="' + esc(w["Item ID"]) + '">Edit item</button>' : "") +
+        (open && canCloseWish(w) ? '<button class="btn danger" data-act="close-wish" data-id="' + esc(id) + '">Not getting</button>' : "") +
+      '</div></div></div>';
+
+    const tankBlock = (tankId, extra) => {
+      const c = compatFor(id, tankId);
+      return '<div class="list-item compat-row"><div class="body">' +
+        '<div class="title">' + esc(tankName(tankId)) + ' <span class="meta">' + esc(tankId) + '</span></div>' +
+        (c && c["Reasons"] ? '<ul class="reasons">' + String(c["Reasons"]).split(/;\s*/).filter(Boolean).map(x => '<li>' + esc(x) + '</li>').join("") + '</ul>' : "") +
+        (extra ? '<div class="sub">' + esc(extra) + '</div>' : "") + '</div>' +
+        verdictPill(c && c["Verdict"]) + '</div>';
+    };
+    const wished = '<div class="section"><div class="section-head"><h3>Wished for (' + pend.length + ')</h3>' +
+      (open && canUseAi() ? '<button class="btn small" data-act="check-wish" data-id="' + esc(id) + '">' + ICONS.sparkle + (checked.length ? "Recheck" : "Check") + '</button>' : "") + '</div>' +
+      '<div class="card list">' + (pend.map(a => tankBlock(a["Tank ID"])).join("") || '<div class="empty">' + (open ? "No tanks picked yet." : "None") + '</div>') + '</div>' +
+      (lastCheck ? '<p class="hint">Last checked ' + esc(fmtDTLong(lastCheck)) + '. Recheck after stocking or target ranges change.</p>' : "") + '</div>';
+    const suggestions = checked.filter(c => c["Wished Tank"] !== true && !pend.some(a => a["Tank ID"] === c["Tank ID"]));
+    const suggestHtml = open && suggestions.length ? '<div class="section"><div class="section-head"><h3>Other tanks that may suit it</h3></div>' +
+      '<div class="card list">' + suggestions.map(c => tankBlock(c["Tank ID"])).join("") + '</div></div>' : "";
+    const addedHtml = added.length ? '<div class="section"><div class="section-head"><h3>Added to tanks (' + added.length + ')</h3></div><div class="card list">' +
+      added.map(a => '<a class="list-item" href="#/tank/' + encodeURIComponent(a["Tank ID"]) + '"><div class="body"><div class="title">' + esc(tankName(a["Tank ID"])) + '</div>' +
+        '<div class="sub">' + esc([a["Item ID"], a["Date Added"] ? "Added " + fmtDate(a["Date Added"]) : "", a["Date Removed"] ? "Removed " + fmtDate(a["Date Removed"]) : ""].filter(Boolean).join(" · ")) + '</div></div></a>').join("") +
+      '</div></div>' : "";
+    const kv = [["Wish status", esc(w["Wish Status"])], ["Priority", esc(w["Priority"])], ["Estimated price", esc(money(w["Estimated Price"]))],
+      ["Where to buy", esc(w["Vendor"])], ["Link", isUrl(w["Link"]) ? '<a href="' + esc(w["Link"]) + '" target="_blank" rel="noopener">Open link</a>' : esc(w["Link"])],
+      ["Notes", esc(w["Notes"])], ["Purchase date", esc(fmtDate(w["Purchase Date"]))], ["Price paid", esc(money(w["Price Paid"]))],
+      ["Receipt", esc(w["Receipt ID"])], ["Added by", esc(personName(w["Added By"]))],
+      ["Added", esc(w["Added At"] ? fmtDTLong(w["Added At"]) : "")], ["Closed", esc(w["Closed At"] ? fmtDTLong(w["Closed At"]) : "")]]
+      .filter(p => p[1] !== "");
+    const details = '<div class="section"><div class="section-head"><h3>Wish details</h3></div><div class="card kv">' +
+      kv.map(p => '<div class="k">' + p[0] + '</div><div>' + p[1] + '</div>').join("") + '</div></div>';
+    const itemLink = r ? '<div class="section"><div class="card list"><a class="list-item" href="#/item/' + type + '/' + encodeURIComponent(w["Item ID"]) + '"><div class="body"><div class="title">' +
+      esc(T.one) + ' details</div><div class="sub">' + esc(w["Item ID"]) + (isWishItem(r) ? " · on the wishlist until purchased" : "") + '</div></div></a></div></div>' : "";
+    return { title: wishTitle(w), back: true, html: hero + wished + suggestHtml + addedHtml + details + itemLink };
+  }
+
+  // Fields of a species / plant / equipment record that the wish form asks for.
+  function wishItemFields(type) {
+    return (state.schema[type] || []).filter(f => !f.readOnly && f.type !== "url" && f.type !== "date" &&
+      ["Status", "Vendor", "Serial Number"].indexOf(f.name) === -1);
+  }
+
+  function addWishForm(prefTank) {
+    const tanks = wishTanksAllowed();
+    if (!tanks.length && !isAdmin()) { toast("You don’t manage any tanks yet.", true); return; }
+    let image = null, commons = null, reuseId = "", type = "species";
+    const pri = state.wishOptions.priorities, sts = ["Researching", "Want"];
+    openSheet({
+      title: "Add to wishlist",
+      submitLabel: "Add wish",
+      body:
+        '<div class="segmented wish-type">' + WISH_TYPES.map(t => '<button type="button" class="' + (t === type ? "on" : "") + '" data-wtype="' + t + '">' + TYPES[t].label + '</button>').join("") + '</div>' +
+        '<div class="field"><label>Photo <span class="opt">optional</span></label>' +
+          '<input type="file" accept="image/*" id="f_wphoto" hidden>' +
+          '<div class="photo-pick"><img class="photo-preview" alt="" hidden>' +
+          '<button type="button" class="btn block" data-pick-photo>' + ICONS.camera + '<span>Take or choose photo</span></button></div>' +
+          '<div class="hint">The AI will try to identify it. The photo becomes the item’s picture.</div>' +
+          '<div class="id-result" hidden></div></div>' +
+        '<div class="reuse" hidden></div>' +
+        '<div class="form-section"><h3>Item</h3>' + aiBarHtml() + '<div class="wish-details"></div><div class="matches" hidden></div></div>' +
+        '<div class="form-section"><h3>Which tanks?</h3>' +
+          (tanks.map(t => '<label class="check"><input type="checkbox" name="tank:' + esc(t["Tank ID"]) + '"' + (t["Tank ID"] === prefTank ? " checked" : "") + '> ' +
+            esc(t["Tank Name"]) + ' <span class="meta">' + esc(t["Tank ID"]) + '</span></label>').join("") || '<p class="hint">No tanks.</p>') +
+          (isAdmin() ? '<p class="hint">Leave all unchecked to just research it; the compatibility check will suggest tanks.</p>' : "") + '</div>' +
+        '<div class="form-section"><h3>Wish details</h3>' +
+          fieldHtml({ name: "w_priority", label: "Priority", type: "select", html: pri.map(p => '<option' + (p === "Medium" ? " selected" : "") + '>' + esc(p) + '</option>').join("") }) +
+          fieldHtml({ name: "w_status", label: "Wish status", type: "select", html: sts.map(p => '<option' + (p === "Want" ? " selected" : "") + '>' + esc(p) + '</option>').join("") }) +
+          '<div class="field"><label for="f_w_price">Estimated price</label><input type="text" inputmode="decimal" id="f_w_price" name="w_price" placeholder="0.00" autocomplete="off"></div>' +
+          comboHtml({ name: "w_vendor", label: "Where to buy", mode: "free", noThumbs: true, newLabel: "will be added to the vendor list",
+                      placeholder: "Choose or type a store" }, vendorItems()) +
+          fieldHtml({ name: "w_link", label: "Link", type: "url", hint: "Product or store page. Fill with AI also reads it." }) +
+          fieldHtml({ name: "w_notes", label: "Notes", type: "longtext" }) +
+        '</div>',
+      onReady: form => {
+        $$("[data-combo]", form).forEach(wireCombo);
+        const details = $(".wish-details", form), matches = $(".matches", form), reuse = $(".reuse", form);
+        const renderDetails = () => {
+          details.innerHTML = wishItemFields(type).map(f => fieldHtml(f, "")).join("");
+          matches.hidden = true; matches.dataset.key = ""; commons = null;
+          $(".ai-result", form).hidden = true;
+        };
+        const setReuse = id => {
+          reuseId = id;
+          const r = id ? findRec(type, id) : null;
+          reuse.hidden = !r;
+          reuse.innerHTML = r ? '<div class="notice">Using <b>' + esc(id + " " + TYPES[type].title(r)) + '</b>, already in your ' + esc(TYPES[type].label) + ' list. <button type="button" class="link-btn" data-unreuse>Add a new one instead</button></div>' : "";
+          $(".form-section", form).hidden = !!r;
+        };
+        reuse.addEventListener("click", e => { if (e.target.closest("[data-unreuse]")) setReuse(""); });
+        {
+          const check = () => {
+            if (type === "equipment") { matches.hidden = true; return; }
+            const q = [$('[name="Common Name"]', details), $('[name="Scientific Name"]', details)].map(el => el ? el.value.trim().toLowerCase() : "").filter(v => v.length >= 3);
+            const hits = !q.length ? [] : state.data[type].filter(r => !isWishItem(r) && q.some(v =>
+              String(r["Common Name"] || "").toLowerCase().indexOf(v) !== -1 || String(r["Scientific Name"] || "").toLowerCase().indexOf(v) !== -1)).slice(0, 4);
+            matches.hidden = !hits.length;
+            const html = hits.length ? '<div class="hint">Already in your list:</div>' + hits.map(r =>
+              '<button type="button" class="match" data-reuse="' + esc(r[TYPES[type].id]) + '">' + esc(r[TYPES[type].id] + " " + TYPES[type].title(r)) + ' <span>Use it</span></button>').join("") : "";
+            const key = hits.map(r => r[TYPES[type].id]).join(",");
+            if (matches.dataset.key !== key) { matches.dataset.key = key; matches.innerHTML = html; }   // re-rendering mid-tap would swallow the tap
+          };
+          details.addEventListener("input", check);
+          details.addEventListener("change", check);
+        }
+        matches.addEventListener("click", e => { const b = e.target.closest("[data-reuse]"); if (b) setReuse(b.dataset.reuse); });
+        $$("[data-wtype]", form).forEach(b => b.addEventListener("click", () => {
+          if (b.dataset.wtype === type) return;
+          type = b.dataset.wtype;
+          $$("[data-wtype]", form).forEach(x => x.classList.toggle("on", x === b));
+          setReuse(""); renderDetails();
+        }));
+        renderDetails();
+        wireAiFill(form, () => type, () => ($('[name="w_link"]', form).value || "").trim(),
+                   { scope: () => details, onPhoto: p => { if (!image) commons = p; } });
+
+        // Photo + identify
+        const file = $("#f_wphoto", form), btn = $("[data-pick-photo]", form), prev = $(".photo-preview", form), idBox = $(".id-result", form);
+        const choose = () => file.click();
+        btn.addEventListener("click", choose);
+        prev.addEventListener("click", choose);
+        const applyGuess = (g, alt) => {
+          const t = WISH_TYPES.indexOf(g.type) !== -1 ? g.type : type;
+          if (t !== type) { type = t; $$("[data-wtype]", form).forEach(x => x.classList.toggle("on", x.dataset.wtype === t)); setReuse(""); renderDetails(); }
+          const set = (n, v) => { const el = $('[name="' + n + '"]', details); if (el && v) { el.value = v; el.dispatchEvent(new Event("input", { bubbles: true })); } };
+          if (type === "equipment") { set("Manufacturer", g.manufacturer); set("Filter Model", g.model || g.name); }
+          else { set("Common Name", alt ? alt.name : g.name); set("Scientific Name", alt ? alt.scientificName : g.scientificName); }
+        };
+        file.addEventListener("change", async () => {
+          const f = file.files && file.files[0];
+          if (!f) return;
+          $("span", btn).textContent = "Preparing photo…";
+          try {
+            image = await prepareImage(f, 1280, 0.85);
+            commons = null;
+            prev.src = image.preview; prev.hidden = false;
+          } catch (err) { image = null; prev.hidden = true; file.value = ""; $("span", btn).textContent = "Take or choose photo"; toast(err.message, true); return; }
+          $("span", btn).textContent = "Identifying…";
+          idBox.hidden = true;
+          try {
+            const g = await api("aiIdentify", { image: { data: image.data, mimeType: image.mimeType }, typeHint: type });
+            const name = g.type === "equipment" ? [g.manufacturer, g.model || g.name].filter(Boolean).join(" ") : [g.name, g.scientificName ? "(" + g.scientificName + ")" : ""].filter(Boolean).join(" ");
+            idBox.innerHTML = '<div><b>Looks like:</b> ' + esc(name || "not sure") + ' <span class="pill ' + (g.confidence === "High" ? "good" : g.confidence === "Low" ? "bad" : "warn") + '">' + esc(g.confidence) + ' confidence</span></div>' +
+              (g.notes ? '<div class="meta">' + esc(g.notes) + '</div>' : "") +
+              '<div class="actions">' + (name ? '<button type="button" class="btn small primary" data-guess="main">Use this</button>' : "") +
+              (g.alternatives || []).map((a, i) => '<button type="button" class="btn small" data-guess="' + i + '">' + esc(a.name) + '</button>').join("") + '</div>';
+            idBox.hidden = false;
+            idBox.onclick = e => {
+              const b = e.target.closest("[data-guess]");
+              if (!b) return;
+              applyGuess(g, b.dataset.guess === "main" ? null : g.alternatives[Number(b.dataset.guess)]);
+              idBox.innerHTML = '<div class="meta">Name filled in. Tap “Fill with AI” for the rest.</div>';
+            };
+          } catch (err) {
+            if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) { handleError(err); return; }
+            idBox.innerHTML = '<div class="form-error-inline">' + esc(err.message) + '</div>'; idBox.hidden = false;
+          } finally { $("span", btn).textContent = "Retake / choose another"; }
+        });
+      },
+      onSubmit: async (vals, form) => {
+        const picked = $$("input[name^='tank:']", form).filter(el => el.checked).map(el => el.name.slice(5));
+        if (!isAdmin() && !picked.length) throw new Error("Check at least one of your tanks.");
+        const price = String(vals.w_price || "").replace(/[$,\s]/g, "");
+        if (price && isNaN(Number(price))) throw new Error("Estimated price must be an amount like 24.99.");
+        const values = {};
+        if (!reuseId) {
+          $$("input[name], select[name], textarea[name]", $(".wish-details", form)).forEach(el => { values[el.name] = el.value; });
+          const req = wishItemFields(type).filter(f => f.required && !String(values[f.name] || "").trim()).map(f => f.name);
+          if (req.length) throw new Error("Please fill in: " + req.join(", ") + ".");
+        }
+        const payload = {
+          itemType: type, itemId: reuseId || undefined, values: values, tanks: picked,
+          wish: { priority: vals.w_priority, status: vals.w_status, estimatedPrice: price, vendor: vals.w_vendor, link: vals.w_link, notes: vals.w_notes },
+          photo: image ? { data: image.data, mimeType: image.mimeType } : undefined,
+          thumbnail: !image && commons ? commons : undefined
+        };
+        busy(true);
+        let res;
+        try {
+          res = await api("addWish", payload);
+        } catch (err) {
+          busy(false);
+          if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) { handleError(err); return true; }
+          throw err;
+        }
+        let note = "Added to the wishlist";
+        try { await api("checkWish", { wishId: res.wishId }); }
+        catch (err) { note = "Added. The compatibility check didn’t run: " + err.message; }
+        try { applyBootstrap(await api("bootstrap")); } catch (err) { /* shown on next refresh */ }
+        busy(false);
+        location.hash = "#/wish/" + encodeURIComponent(res.wishId);
+        render();
+        toast(note, note !== "Added to the wishlist");
+        return true;
+      }
+    });
+  }
+
+  function editWishForm(id) {
+    const w = findWish(id);
+    if (!w) return;
+    const open = wishIsOpen(w);
+    const pend = wishPending(id).map(a => a["Tank ID"]);
+    const tanks = state.data.tanks.filter(t => !isRetired(t) && (canEditTank(t["Tank ID"]) || pend.indexOf(t["Tank ID"]) !== -1))
+      .sort((a, b) => String(a["Tank Name"]).localeCompare(String(b["Tank Name"])));
+    const cur = { priority: w["Priority"] || "", status: w["Wish Status"] || "", estimatedPrice: w["Estimated Price"] === "" ? "" : String(w["Estimated Price"]).replace(/[$,]/g, ""),
+                  vendor: w["Vendor"] || "", link: w["Link"] || "", notes: w["Notes"] || "" };
+    openSheet({
+      title: "Edit wish",
+      body: '<p class="meta">' + esc(id + " · " + wishTitle(w)) + '</p>' +
+        fieldHtml({ name: "priority", label: "Priority", type: "select", html: state.wishOptions.priorities.map(p => '<option' + (p === cur.priority ? " selected" : "") + '>' + esc(p) + '</option>').join("") }) +
+        (open ? fieldHtml({ name: "status", label: "Wish status", type: "select", html: ["Researching", "Want"].map(p => '<option' + (p === cur.status ? " selected" : "") + '>' + esc(p) + '</option>').join("") }) : "") +
+        '<div class="field"><label for="f_price">Estimated price</label><input type="text" inputmode="decimal" id="f_price" name="estimatedPrice" value="' + esc(cur.estimatedPrice) + '" autocomplete="off"></div>' +
+        comboHtml({ name: "vendor", label: "Where to buy", mode: "free", noThumbs: true, newLabel: "will be added to the vendor list", value: cur.vendor,
+                    placeholder: "Choose or type a store" }, vendorItems()) +
+        fieldHtml({ name: "link", label: "Link", type: "url" }, cur.link) +
+        fieldHtml({ name: "notes", label: "Notes", type: "longtext" }, cur.notes) +
+        (open ? '<div class="form-section"><h3>Which tanks?</h3>' + tanks.map(t => {
+          const can = canEditTank(t["Tank ID"]);
+          return '<label class="check"><input type="checkbox" name="tank:' + esc(t["Tank ID"]) + '"' + (pend.indexOf(t["Tank ID"]) !== -1 ? " checked" : "") + (can ? "" : " disabled") + '> ' +
+            esc(t["Tank Name"]) + ' <span class="meta">' + esc(t["Tank ID"]) + (can ? "" : " · not yours to change") + '</span></label>';
+        }).join("") + '<p class="hint">After changing tanks, tap Recheck on the wish.</p></div>' : ""),
+      onReady: form => $$("[data-combo]", form).forEach(wireCombo),
+      onSubmit: (vals, form) => {
+        const price = String(vals.estimatedPrice || "").replace(/[$,\s]/g, "");
+        if (price && isNaN(Number(price))) throw new Error("Estimated price must be an amount like 24.99.");
+        vals.estimatedPrice = price;
+        const changed = {};
+        ["priority", "status", "estimatedPrice", "vendor", "link", "notes"].forEach(k => {
+          if (!(k in vals)) return;
+          const a = k === "estimatedPrice" ? (cur[k] === "" ? "" : Number(cur[k]).toFixed(2)) : String(cur[k]).trim();
+          const b = k === "estimatedPrice" ? (vals[k] === "" ? "" : Number(vals[k]).toFixed(2)) : String(vals[k] || "").trim();
+          if (a !== b) changed[k] = vals[k];
+        });
+        const payload = { wishId: id, wish: changed };
+        if (open) {
+          const picked = $$("input[name^='tank:']", form).filter(el => el.checked).map(el => el.name.slice(5));
+          if (!isAdmin() && !picked.length) throw new Error("Keep at least one tank checked, or use “Not getting”.");
+          const same = picked.length === pend.length && picked.every(t => pend.indexOf(t) !== -1);
+          if (!same) payload.tanks = picked;
+        }
+        if (!Object.keys(changed).length && !payload.tanks) { toast("No changes"); return true; }
+        return write("updateWish", payload, "Wish saved");
+      }
+    });
+  }
+
+  function closeWishForm(id) {
+    const w = findWish(id);
+    if (!w) return;
+    const r = wishItem(w);
+    openSheet({
+      title: "Not getting it?",
+      submitLabel: "Close wish",
+      danger: true,
+      body: '<p>Close <b>' + esc(id + " " + wishTitle(w)) + '</b> as “Not getting”? Its tank rows are closed' +
+        (w["New Item"] === true && r && isWishItem(r) ? ', and ' + esc(w["Item ID"]) + ' (added just for this wish) is marked Retired' : "") +
+        '. Nothing is deleted.</p>',
+      onSubmit: () => write("closeWish", { wishId: id }, "Wish closed")
+    });
+  }
+
+  function purchaseWishForm(id) {
+    const w = findWish(id);
+    if (!w) return;
+    const type = w["Item Type"];
+    const r = wishItem(w);
+    const pend = wishPending(id).map(a => a["Tank ID"]);
+    const inTank = new Set(type === "equipment" ? [] : state.data.assignments.filter(a => a["Item ID"] === w["Item ID"] && isActiveAssignment(a)).map(a => a["Tank ID"]));
+    const tanks = wishTanksAllowed();
+    const receipts = canReceipts() ? state.receipts.filter(x => !isRetired(x)).sort((x, y) => receiptSortKey(y).localeCompare(receiptSortKey(x))) : [];
+    openSheet({
+      title: "Mark purchased",
+      submitLabel: "Add to tanks",
+      body: '<p class="meta">' + esc(id + " · " + wishTitle(w) + " (" + w["Item ID"] + ")") + '</p>' +
+        fieldHtml({ name: "purchaseDate", label: "Purchase date", type: "date", required: true }, today()) +
+        comboHtml({ name: "vendor", label: "Vendor", mode: "free", noThumbs: true, newLabel: "will be added to the vendor list", value: w["Vendor"] || "",
+                    placeholder: "Choose or type a store" }, vendorItems()) +
+        '<div class="field"><label for="f_paid">Price paid</label><input type="text" inputmode="decimal" id="f_paid" name="pricePaid" placeholder="' + esc(w["Estimated Price"] ? "Estimated " + money(w["Estimated Price"]) : "0.00") + '" autocomplete="off"></div>' +
+        (canReceipts() ? fieldHtml({ name: "receiptId", label: "Receipt", type: "select", hint: "Optional. Upload it first under Receipts if it isn’t there.",
+          html: '<option value="">None</option>' + receipts.map(x => '<option value="' + esc(x["Receipt ID"]) + '">' + esc([x["Receipt ID"], receiptTitle(x), money(x["Total"])].filter(Boolean).join(" · ")) + '</option>').join("") }) : "") +
+        '<div class="form-section"><h3>Add to which tanks?</h3>' +
+          (type === "equipment" ? '<p class="hint">Each tank gets its own piece of equipment. The first uses ' + esc(w["Item ID"]) + (r && !isWishItem(r) ? " only if it isn’t already in use; otherwise new Equipment IDs are created" : "; any others get new Equipment IDs with the same details") + '.</p>' : "") +
+          tanks.map(t => {
+            const tid = t["Tank ID"];
+            const there = inTank.has(tid);
+            return '<div class="tank-pick"><label class="check"><input type="checkbox" name="tank:' + esc(tid) + '"' + (pend.indexOf(tid) !== -1 && !there ? " checked" : "") + (there ? " disabled" : "") + '> ' +
+              esc(t["Tank Name"]) + ' <span class="meta">' + esc(tid) + (there ? " · already in this tank" : pend.indexOf(tid) !== -1 ? " · wished" : "") + '</span></label>' +
+              '<div class="tank-extra" hidden>' +
+                fieldHtml({ name: "date:" + tid, label: "Date added", type: "date" }, today()) +
+                fieldHtml({ name: "notes:" + tid, label: "Notes", type: "longtext" }, "") + '</div></div>';
+          }).join("") + '</div>',
+      onReady: form => {
+        $$("[data-combo]", form).forEach(wireCombo);
+        const sync = () => $$(".tank-pick", form).forEach(b => { $(".tank-extra", b).hidden = !$("input[type=checkbox]", b).checked; });
+        form.addEventListener("change", sync);
+        // Each tank's Date added follows the purchase date until it's changed by hand.
+        $$("input[name^='date:']", form).forEach(el => el.addEventListener("input", () => { el.dataset.touched = "1"; }));
+        $("[name=purchaseDate]", form).addEventListener("change", e => {
+          $$("input[name^='date:']", form).forEach(el => { if (!el.dataset.touched) el.value = e.target.value; });
+        });
+        sync();
+      },
+      onSubmit: (vals, form) => {
+        const picked = $$("input[name^='tank:']", form).filter(el => el.checked && !el.disabled).map(el => el.name.slice(5));
+        if (!picked.length) throw new Error("Choose at least one tank to add it to.");
+        const paid = String(vals.pricePaid || "").replace(/[$,\s]/g, "");
+        if (paid && isNaN(Number(paid))) throw new Error("Price paid must be an amount like 24.99.");
+        return write("purchaseWish", {
+          wishId: id, purchaseDate: vals.purchaseDate, vendor: vals.vendor, pricePaid: paid, receiptId: vals.receiptId || "",
+          tanks: picked.map(t => ({ tankId: t, dateAdded: vals["date:" + t] || vals.purchaseDate, notes: vals["notes:" + t] || "" }))
+        }, "Added to " + picked.map(tankName).join(", "));
+      }
+    });
+  }
+
+  async function checkWishNow(id) {
+    busy(true);
+    try {
+      const res = await api("checkWish", { wishId: id });
+      applyBootstrap(await api("bootstrap"));
+      render();
+      toast(res.summary ? "Checked: " + res.summary : "Compatibility checked");
+    } catch (err) {
+      if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) handleError(err); else toast(err.message, true);
+    } finally {
+      busy(false);
+    }
   }
 
   // ------------------------------------------------------------------
@@ -2107,6 +2680,12 @@
         location.hash = d.href;
         break;
       case "edit-user": userForm(d.id); break;
+      case "add-wish": addWishForm(d.tank); break;
+      case "wish-filter": state.wishFilter = d.f; render(); break;
+      case "edit-wish": editWishForm(d.id); break;
+      case "close-wish": closeWishForm(d.id); break;
+      case "purchase-wish": purchaseWishForm(d.id); break;
+      case "check-wish": checkWishNow(d.id); break;
     }
   });
 
@@ -2146,6 +2725,7 @@
     if (e.target.matches("[data-act='toggle-retired-maint']")) { state.showRetiredMaint = e.target.checked; render(); }
     if (e.target.matches("[data-act='toggle-retired-receipts']")) { state.showRetiredReceipts = e.target.checked; render(); }
     if (e.target.matches("[data-act='toggle-retired']")) { state.showRetired = e.target.checked; render(); }
+    if (e.target.matches("[data-act='wish-tank']")) { state.wishTank = e.target.value; render(); }
   });
   window.addEventListener("hashchange", () => { if (state.me) render(); });
 
@@ -2155,7 +2735,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "17";
+  const APP_VERSION = "18";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

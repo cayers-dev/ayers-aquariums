@@ -107,6 +107,16 @@ function apiRoute_(req, user) {
       case "logWaterChange":      return apiWrite_(() => apiLogWaterChange_(req, user));
       case "updateWaterChange":   return apiWrite_(() => apiUpdateWaterChange_(req, user));
       case "retireWaterChange":   return apiWrite_(() => apiRetireWaterChange_(req, user));
+      // AI helper (Ai.gs)
+      case "aiFill":              return apiAiFill_(req, user);
+      case "aiIdentify":          return apiAiIdentify_(req, user);
+      // Wishlist (Wishlist.gs)
+      case "addWish":             return apiAddWish_(req, user);
+      case "updateWish":          return apiWrite_(() => apiUpdateWish_(req, user));
+      case "closeWish":           return apiWrite_(() => apiCloseWish_(req, user));
+      case "purchaseWish":        return apiWrite_(() => apiPurchaseWish_(req, user));
+      case "checkWish":           return apiCheckWish_(req, user);
+      case "itemPhoto":           return apiItemPhoto_(req, user);
       default: throw apiError_("BAD_REQUEST", "Unknown action.");
    }
 }
@@ -196,6 +206,7 @@ function apiBootstrap_(user) {
    Object.assign(out, apiReceiptsBootstrap_(user, lists));
    Object.assign(out, apiWaterBootstrap_(user));
    Object.assign(out, apiMaintBootstrap_(user));
+   Object.assign(out, apiWishBootstrap_(user, out.data.assignments));
    if (user.role !== "Admin") apiLimitToAssignedTanks_(out, user);
    return out;
 }
@@ -283,7 +294,11 @@ function apiSchema_(table, lists) {
       .map(h => {
          const f = { name: h, type: "text" };
          if (h === def.id || h === "Test Type ID") f.readOnly = true;
-         if (listDefs[h]) { f.type = "list"; f.options = lists[listDefs[h][0]] || []; f.strict = listDefs[h][1]; }
+         if (listDefs[h]) {
+            f.type = "list"; f.options = lists[listDefs[h][0]] || []; f.strict = listDefs[h][1];
+            // "Wishlist" is only for species, plants and equipment.
+            if (h === "Status" && ["species", "plants", "equipment"].indexOf(table) === -1) f.options = f.options.filter(o => o !== "Wishlist");
+         }
          else if (API_NUMBER_FIELDS.indexOf(h) !== -1) f.type = "number";
          else if (API_DATE_PATTERN.test(h)) f.type = "date";
          else if (API_URL_PATTERN.test(h)) f.type = "url";
@@ -322,8 +337,10 @@ function apiAdd_(req, user) {
       if (!tankId || !itemId) throw apiError_("INVALID", "Choose a tank and an item.");
       if (!apiCanEditTank_(user, tankId)) throw apiError_("FORBIDDEN", "You can't change that tank.");
       if (!apiFindById_("tanks", tankId)) throw apiError_("INVALID", "Tank " + tankId + " doesn't exist.");
-      if (!["species", "equipment", "plants"].some(t => apiFindById_(t, itemId))) {
-         throw apiError_("INVALID", "Item " + itemId + " doesn't exist.");
+      const itemRec = ["species", "equipment", "plants"].map(t => apiFindById_(t, itemId)).find(Boolean);
+      if (!itemRec) throw apiError_("INVALID", "Item " + itemId + " doesn't exist.");
+      if (String(itemRec["Status"]) === "Wishlist") {
+         throw apiError_("INVALID", itemId + " is on the wishlist. Use Mark purchased on its wish to add it to a tank.");
       }
       const active = apiReadTable_("assignments").rows.find(r =>
          r["Tank ID"] === tankId && r["Item ID"] === itemId && r["Active"] === true && !r["Date Removed"]);
@@ -377,8 +394,10 @@ function apiUpdate_(req, user) {
       if (!record) throw apiError_("NOT_FOUND", "That record no longer exists.");
       if (table === "tanks") {
          if (!apiCanEditTank_(user, record[def.id])) throw apiError_("FORBIDDEN", "You can't change that tank.");
-      } else {
+      } else if (!apiCanEditWishItem_(user, table, record)) {
          apiRequireAdmin_(user);
+      } else if (user.role !== "Admin") {
+         delete values["Status"];   // editors fix a wishlist item's details, not its status
       }
       delete values[def.id];
       recordLabel = record[def.id];
