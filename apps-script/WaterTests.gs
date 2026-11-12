@@ -5,7 +5,9 @@
 //   Test Types           master list of tests (Order sets app order;
 //                         Status Retired hides a test from new entries)
 //   Water Test Sessions  one row each time someone tests a tank
-//   Water Tests          one row per reading (value) in a session
+//                         (tank, time, method, notes, who)
+//   Water Tests          one row per reading (value) in a session,
+//                         linked to its session by Session ID
 //   Water Parameters     (existing) each tank's target + acceptable
 //                         min/max per test, linked by Test Type ID
 //
@@ -22,9 +24,11 @@ const WATER_CONFIG = {
 };
 
 const TEST_TYPE_HEADERS = ["Test Type ID", "Name", "Units", "Allowed Methods", "Order", "Status", "Notes"];
-const WATER_SESSION_HEADERS = ["Session ID", "Tank ID", "Tested At", "Default Method", "Notes", "Tested By", "Logged At", "Status"];
-const WATER_TEST_HEADERS = ["Test ID", "Session ID", "Tank ID", "Tested At", "Test Type ID", "Test Type", "Method", "Value", "Units",
-                            "Range Min", "Range Max", "Result", "Notes", "Tested By", "Logged At", "Status"];
+// A session is one test of one tank (one time, one method, one person).
+const WATER_SESSION_HEADERS = ["Session ID", "Tank ID", "Tested At", "Method", "Notes", "Tested By", "Logged At", "Status"];
+// A reading is one value in a session; tank/time/method/person live on the session.
+const WATER_TEST_HEADERS = ["Test ID", "Session ID", "Test Type ID", "Test Type", "Value", "Units",
+                            "Range Min", "Range Max", "Result", "Notes", "Status"];
 
 // Starting list (Order in steps of 10 so new tests can slot in between).
 const TEST_TYPE_SEED = [
@@ -128,6 +132,10 @@ function waterSetup() {
       notes.push("Water Parameters: renamed " + renamed + " parameter(s), linked Test Type IDs");
    }
 
+   // 3b. Sessions/readings layout (no repeated columns); only while empty.
+   if (apiResetEmptyTab_(tabs.sessions, WATER_SESSION_HEADERS, apiFormatSessionsTab_)) notes.push("Water Test Sessions: new layout");
+   if (apiResetEmptyTab_(tabs.tests, WATER_TEST_HEADERS, apiFormatTestsTab_)) notes.push("Water Tests: new layout (reading fields only)");
+
    // 4. App Users: "Editable Tanks" -> "Assigned Tanks".
    const users = apiEnsureSupportTabs_().users;
    const uh = users.getRange(1, 1, 1, users.getLastColumn()).getValues()[0].map(h => String(h).trim());
@@ -169,19 +177,37 @@ function apiEnsureWaterTabs_() {
       sh.getRange("F2:F").setDataValidation(statusRule(["Active", "Retired"]));
       sh.setColumnWidth(2, 180); sh.setColumnWidth(4, 160); sh.setColumnWidth(7, 260);
    });
-   const sessions = make(WATER_CONFIG.sessionsSheetName, WATER_SESSION_HEADERS, sh => {
-      sh.getRange("C2:C").setNumberFormat("m/d/yyyy h:mm am/pm");
-      sh.getRange("G2:G").setNumberFormat("m/d/yyyy h:mm am/pm");
-      sh.getRange("H2:H").setDataValidation(statusRule(["Active", "Retired"]));
-      sh.setColumnWidth(5, 280);
-   });
-   const tests = make(WATER_CONFIG.testsSheetName, WATER_TEST_HEADERS, sh => {
-      sh.getRange("D2:D").setNumberFormat("m/d/yyyy h:mm am/pm");
-      sh.getRange("O2:O").setNumberFormat("m/d/yyyy h:mm am/pm");
-      sh.getRange("P2:P").setDataValidation(statusRule(["Active", "Retired"]));
-      sh.setColumnWidth(6, 170); sh.setColumnWidth(13, 240);
-   });
+   const sessions = make(WATER_CONFIG.sessionsSheetName, WATER_SESSION_HEADERS, apiFormatSessionsTab_);
+   const tests = make(WATER_CONFIG.testsSheetName, WATER_TEST_HEADERS, apiFormatTestsTab_);
    return { types: types, sessions: sessions, tests: tests };
+}
+
+function apiFormatSessionsTab_(sh) {
+   const rule = SpreadsheetApp.newDataValidation().requireValueInList(["Active", "Retired"], true).setAllowInvalid(false).build();
+   sh.getRange("C2:C").setNumberFormat("m/d/yyyy h:mm am/pm");
+   sh.getRange("G2:G").setNumberFormat("m/d/yyyy h:mm am/pm");
+   sh.getRange("D2:D").setDataValidation(SpreadsheetApp.newDataValidation()
+      .requireValueInList(WATER_CONFIG.methods, true).setAllowInvalid(false).build());
+   sh.getRange("H2:H").setDataValidation(rule);
+   sh.setColumnWidth(5, 280);
+}
+
+function apiFormatTestsTab_(sh) {
+   const rule = SpreadsheetApp.newDataValidation().requireValueInList(["Active", "Retired"], true).setAllowInvalid(false).build();
+   sh.getRange("K2:K").setDataValidation(rule);
+   sh.setColumnWidth(4, 170); sh.setColumnWidth(10, 240);
+}
+
+// Rebuilds a tab's header row when its layout changed and it holds no data yet.
+function apiResetEmptyTab_(sh, headers, formatFn) {
+   const cur = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), 1)).getValues()[0].map(h => String(h).trim()).filter(Boolean);
+   if (cur.join("|") === headers.join("|")) return false;
+   if (apiLastDataRow_(sh) > 1) throw apiError_("SETUP", sh.getName() + " has data in the old layout; it needs a manual migration.");
+   sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).clearDataValidations().clearFormat().clearContent();
+   sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight("bold").setBackground("#d9d9d9");
+   sh.setFrozenRows(1);
+   formatFn(sh);
+   return true;
 }
 
 function apiReadTestTypes_() {
@@ -213,16 +239,30 @@ function apiBackfillParamTypeIds_(types) {
    });
 }
 
+// Readings with their session's tank, time, method and tester added
+// (a retired session makes its readings count as retired).
+function apiReadWaterJoined_(tabs) {
+   tabs = tabs || apiEnsureWaterTabs_();
+   const sessions = apiReadSheetRows_(tabs.sessions, "Session ID");
+   const byId = {};
+   sessions.forEach(s => byId[s["Session ID"]] = s);
+   const tests = apiReadSheetRows_(tabs.tests, "Test ID").map(r => {
+      const s = byId[r["Session ID"]] || {};
+      return Object.assign({}, r, {
+         "Tank ID": s["Tank ID"] || "", "Tested At": s["Tested At"] || "", "Method": s["Method"] || "",
+         "Tested By": s["Tested By"] || "",
+         "Status": String(s["Status"]) === "Retired" ? "Retired" : (r["Status"] || "Active")
+      });
+   });
+   return { sessions: sessions, tests: tests };
+}
+
 function apiWaterBootstrap_(user) {
    const tabs = apiEnsureWaterTabs_();
    const types = apiReadTestTypes_();
    apiBackfillParamTypeIds_(types);
-   return {
-      testTypes: types,
-      waterSessions: apiReadSheetRows_(tabs.sessions, "Session ID"),
-      waterTests: apiReadSheetRows_(tabs.tests, "Test ID"),
-      methods: WATER_CONFIG.methods
-   };
+   const j = apiReadWaterJoined_(tabs);
+   return { testTypes: types, waterSessions: j.sessions, waterTests: j.tests, methods: WATER_CONFIG.methods };
 }
 
 function apiCanLogTank_(user, tankId) {
@@ -279,16 +319,18 @@ function apiNextSeqId_(rows, field, prefix) {
 // req: { tankId, testedAt, defaultMethod, notes,
 //        readings: [{ testTypeId, method, value, notes }] }
 // ------------------------------------------------------------
+// req: { tankId, testedAt, method, notes, readings: [{ testTypeId, value, notes }] }
 function apiLogWaterTest_(req, user) {
    const tankId = String(req.tankId || "");
    if (!apiFindById_("tanks", tankId)) throw apiError_("INVALID", "Choose a tank.");
    if (!apiCanLogTank_(user, tankId)) throw apiError_("FORBIDDEN", "You can't log tests for that tank.");
+   const method = String(req.method || req.defaultMethod || "");
+   if (WATER_CONFIG.methods.indexOf(method) === -1) throw apiError_("INVALID", "Choose a method: " + WATER_CONFIG.methods.join(", ") + ".");
    const readings = (req.readings || []).filter(r => String(r.value === undefined || r.value === null ? "" : r.value).trim() !== "");
    if (!readings.length) throw apiError_("INVALID", "Enter at least one reading.");
 
    const types = apiReadTestTypes_();
    const testedAt = apiParseDateTime_(req.testedAt);
-   const defaultMethod = WATER_CONFIG.methods.indexOf(req.defaultMethod) !== -1 ? req.defaultMethod : "";
    const seen = {};
    const rows = readings.map(r => {
       const t = types.find(x => x["Test Type ID"] === r.testTypeId);
@@ -296,35 +338,25 @@ function apiLogWaterTest_(req, user) {
       if (String(t["Status"]) === "Retired") throw apiError_("INVALID", t["Name"] + " has been retired.");
       if (seen[t["Test Type ID"]]) throw apiError_("INVALID", t["Name"] + " was entered twice.");
       seen[t["Test Type ID"]] = true;
-      const allowed = apiMethodsOf_(t);
-      const method = r.method || (allowed.indexOf(defaultMethod) !== -1 ? defaultMethod : allowed[0]);
-      if (allowed.length && allowed.indexOf(method) === -1) {
-         throw apiError_("INVALID", t["Name"] + " can only be tested by " + allowed.join(" or ") + ".");
-      }
+      if (apiMethodsOf_(t).indexOf(method) === -1) throw apiError_("INVALID", t["Name"] + " isn't tested by " + method + ".");
       const value = apiNumber_(r.value, t["Name"]);
       const range = apiRangeFor_(tankId, t);
-      return { type: t, method: method, value: value, range: range,
-               result: apiResultFor_(value, range.min, range.max), notes: String(r.notes || "").trim() };
+      return { type: t, value: value, range: range, result: apiResultFor_(value, range.min, range.max), notes: String(r.notes || "").trim() };
    });
 
    const tabs = apiEnsureWaterTabs_();
    const sessionId = apiNextSeqId_(apiReadSheetRows_(tabs.sessions, "Session ID"), "Session ID", "WS-");
-   const now = new Date();
-   const who = apiWho_(user);
-   apiAppendRow_(tabs.sessions, { "Session ID": sessionId, "Tank ID": tankId, "Tested At": testedAt,
-      "Default Method": defaultMethod, "Notes": String(req.notes || "").trim(), "Tested By": who,
-      "Logged At": now, "Status": "Active" });
+   apiAppendRow_(tabs.sessions, { "Session ID": sessionId, "Tank ID": tankId, "Tested At": testedAt, "Method": method,
+      "Notes": String(req.notes || "").trim(), "Tested By": apiWho_(user), "Logged At": new Date(), "Status": "Active" });
 
    // Readings are written as one block.
-   const existing = apiReadSheetRows_(tabs.tests, "Test ID");
-   let next = Number(apiNextSeqId_(existing, "Test ID", "WT-").slice(3));
+   let next = Number(apiNextSeqId_(apiReadSheetRows_(tabs.tests, "Test ID"), "Test ID", "WT-").slice(3));
    const hm = apiHeaderMap_(tabs.tests);
    const start = apiLastDataRow_(tabs.tests) + 1;
    const block = rows.map(x => {
-      const rec = { "Test ID": "WT-" + (next++), "Session ID": sessionId, "Tank ID": tankId, "Tested At": testedAt,
-         "Test Type ID": x.type["Test Type ID"], "Test Type": x.type["Name"], "Method": x.method, "Value": x.value,
-         "Units": x.type["Units"], "Range Min": x.range.min, "Range Max": x.range.max, "Result": x.result,
-         "Notes": x.notes, "Tested By": who, "Logged At": now, "Status": "Active" };
+      const rec = { "Test ID": "WT-" + (next++), "Session ID": sessionId, "Test Type ID": x.type["Test Type ID"], "Test Type": x.type["Name"],
+         "Value": x.value, "Units": x.type["Units"], "Range Min": x.range.min, "Range Max": x.range.max, "Result": x.result,
+         "Notes": x.notes, "Status": "Active" };
       const line = new Array(hm.lastCol).fill("");
       Object.keys(rec).forEach(k => { const c = hm.map[k.toLowerCase()]; if (c) line[c - 1] = rec[k]; });
       return line;
@@ -335,7 +367,7 @@ function apiLogWaterTest_(req, user) {
 
    const off = rows.filter(x => x.result === "Low" || x.result === "High");
    apiLog_(user, "Log water test", "Water Tests", sessionId + " / " + tankId,
-      rows.map(x => x.type["Name"] + " " + x.value + (x.type["Units"] ? " " + x.type["Units"] : "") + " (" + x.method + ", " + x.result + ")").join("; "));
+      method + ": " + rows.map(x => x.type["Name"] + " " + x.value + (x.type["Units"] ? " " + x.type["Units"] : "") + " (" + x.result + ")").join("; "));
    return {
       sessionId: sessionId,
       outOfRange: off.map(x => ({ name: x.type["Name"], value: x.value, units: x.type["Units"], result: x.result,
@@ -347,58 +379,63 @@ function apiLogWaterTest_(req, user) {
 // ------------------------------------------------------------
 // Corrections (admins or whoever logged it)
 // ------------------------------------------------------------
+function apiFindReading_(tabs, id) {
+   const row = apiReadWaterJoined_(tabs).tests.find(r => r["Test ID"] === id);
+   if (!row) throw apiError_("NOT_FOUND", "That reading no longer exists.");
+   return row;
+}
+
+// Value and note of one reading (method belongs to the session).
 function apiUpdateWaterReading_(req, user) {
    const tabs = apiEnsureWaterTabs_();
-   const row = apiReadSheetRows_(tabs.tests, "Test ID").find(r => r["Test ID"] === req.id);
-   if (!row) throw apiError_("NOT_FOUND", "That reading no longer exists.");
+   const row = apiFindReading_(tabs, req.id);
    if (!apiCanCorrect_(user, row)) throw apiError_("FORBIDDEN", "Only an admin or the person who logged it can change this reading.");
    const v = req.values || {};
    const values = {};
-   const t = apiReadTestTypes_().find(x => x["Test Type ID"] === row["Test Type ID"]);
-   if ("value" in v) values["Value"] = apiNumber_(v.value, row["Test Type"]);
-   if ("method" in v) {
-      const allowed = t ? apiMethodsOf_(t) : WATER_CONFIG.methods;
-      if (allowed.indexOf(v.method) === -1) throw apiError_("INVALID", row["Test Type"] + " can only be tested by " + allowed.join(" or ") + ".");
-      values["Method"] = v.method;
-   }
-   if ("notes" in v) values["Notes"] = String(v.notes || "").trim();
-   if ("Value" in values) {
+   if ("value" in v) {
+      values["Value"] = apiNumber_(v.value, row["Test Type"]);
       const num = x => (x === "" || x === null || isNaN(Number(x))) ? "" : Number(x);
       values["Result"] = apiResultFor_(values["Value"], num(row["Range Min"]), num(row["Range Max"]));
    }
-   const changes = apiWriteChanges_(tabs.tests, row._row, row, values);
+   if ("notes" in v) values["Notes"] = String(v.notes || "").trim();
+   const raw = apiReadSheetRows_(tabs.tests, "Test ID").find(r => r["Test ID"] === req.id);
+   const changes = apiWriteChanges_(tabs.tests, raw._row, raw, values);
    if (changes.length) apiLog_(user, "Edit", "Water Tests", row["Test ID"], changes.join("; "));
    return { updated: changes.length };
 }
 
 function apiRetireWaterReading_(req, user) {
    const tabs = apiEnsureWaterTabs_();
-   const row = apiReadSheetRows_(tabs.tests, "Test ID").find(r => r["Test ID"] === req.id);
-   if (!row) throw apiError_("NOT_FOUND", "That reading no longer exists.");
+   const row = apiFindReading_(tabs, req.id);
    if (!apiCanCorrect_(user, row)) throw apiError_("FORBIDDEN", "Only an admin or the person who logged it can change this reading.");
+   const raw = apiReadSheetRows_(tabs.tests, "Test ID").find(r => r["Test ID"] === req.id);
    const status = req.restore ? "Active" : "Retired";
-   const changes = apiWriteChanges_(tabs.tests, row._row, row, { "Status": status });
+   const changes = apiWriteChanges_(tabs.tests, raw._row, raw, { "Status": status });
    if (changes.length) apiLog_(user, req.restore ? "Restore" : "Retire", "Water Tests", row["Test ID"], changes.join("; "));
    return { updated: changes.length };
 }
 
-// Session: change time or notes (time change is copied to its readings).
+// A test (session): time, method or notes.
 function apiUpdateWaterSession_(req, user) {
    const tabs = apiEnsureWaterTabs_();
-   const s = apiReadSheetRows_(tabs.sessions, "Session ID").find(r => r["Session ID"] === req.id);
-   if (!s) throw apiError_("NOT_FOUND", "That test session no longer exists.");
+   const j = apiReadWaterJoined_(tabs);
+   const s = j.sessions.find(r => r["Session ID"] === req.id);
+   if (!s) throw apiError_("NOT_FOUND", "That test no longer exists.");
    if (!apiCanCorrect_(user, s)) throw apiError_("FORBIDDEN", "Only an admin or the person who logged it can change this test.");
    const v = req.values || {};
    const values = {};
    if ("testedAt" in v) values["Tested At"] = apiParseDateTime_(v.testedAt);
    if ("notes" in v) values["Notes"] = String(v.notes || "").trim();
-   const before = Object.assign({}, s);
-   const changes = apiWriteChanges_(tabs.sessions, s._row, before, values);
-   if (values["Tested At"]) {
-      apiReadSheetRows_(tabs.tests, "Test ID").filter(r => r["Session ID"] === s["Session ID"]).forEach(r => {
-         apiWriteChanges_(tabs.tests, r._row, r, { "Tested At": values["Tested At"] });
+   if ("method" in v) {
+      if (WATER_CONFIG.methods.indexOf(v.method) === -1) throw apiError_("INVALID", "Choose a method.");
+      const types = apiReadTestTypes_();
+      j.tests.filter(r => r["Session ID"] === s["Session ID"] && r["Status"] !== "Retired").forEach(r => {
+         const t = types.find(x => x["Test Type ID"] === r["Test Type ID"]);
+         if (t && apiMethodsOf_(t).indexOf(v.method) === -1) throw apiError_("INVALID", t["Name"] + " isn't tested by " + v.method + ".");
       });
+      values["Method"] = v.method;
    }
+   const changes = apiWriteChanges_(tabs.sessions, s._row, s, values);
    if (changes.length) apiLog_(user, "Edit", "Water Test Sessions", s["Session ID"], changes.join("; "));
    return { updated: changes.length };
 }
