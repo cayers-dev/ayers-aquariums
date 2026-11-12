@@ -11,6 +11,7 @@
 // ended (Active unchecked + Date Unlinked).
 // ============================================================
 
+// Drive folder for receipt photos, tab names, ID prefix and photo size limit.
 const RECEIPTS_CONFIG = {
    folderId: "13QTEGFAn5Nf-28d0K7Yl4QjwAso3vGpB",
    receiptsSheetName: "Receipts",
@@ -19,29 +20,22 @@ const RECEIPTS_CONFIG = {
    maxImageBytes: 12 * 1024 * 1024
 };
 
+// Columns of the Receipts tab, in order.
 const RECEIPT_HEADERS = ["Receipt ID", "File Name", "Vendor", "Purchase Date", "Total", "Notes",
                          "Photo Link", "Drive File ID", "Uploaded By", "Uploaded At", "Status"];
+// Columns of the Receipt Links tab (one row per receipt + record pair).
 const RECEIPT_LINK_HEADERS = ["Receipt ID", "Item ID", "Linked By", "Date Linked", "Date Unlinked", "Active"];
 
 // Record types a receipt can be linked to.
 const RECEIPT_LINK_TABLES = ["tanks", "species", "equipment", "plants", "medications"];
 
 
-// ------------------------------------------------------------
-// Run once from the editor: creates the two tabs and asks for
-// the Google Drive permission.
-// ------------------------------------------------------------
-function receiptsSetup() {
-   apiEnsureReceiptTabs_();
-   const folder = DriveApp.getFolderById(RECEIPTS_CONFIG.folderId);
-   Logger.log("Receipts setup complete. Uploads go to: " + folder.getName());
-}
-
-
+// Admins and editors can upload and view receipts.
 function apiCanUseReceipts_(user) {
    return user.role === "Admin" || user.role === "Editor";
 }
 
+// Throws unless the person can use receipts.
 function apiRequireReceipts_(user) {
    if (!apiCanUseReceipts_(user)) throw apiError_("FORBIDDEN", "Only admins and editors can use receipts.");
 }
@@ -52,6 +46,7 @@ function apiRequireReceipts_(user) {
 // ------------------------------------------------------------
 function apiEnsureReceiptTabs_() {
    const ss = apiSs_();
+   // Receipts: one row per uploaded photo.
    let receipts = ss.getSheetByName(RECEIPTS_CONFIG.receiptsSheetName);
    if (!receipts) {
       receipts = ss.insertSheet(RECEIPTS_CONFIG.receiptsSheetName);
@@ -68,6 +63,7 @@ function apiEnsureReceiptTabs_() {
       receipts.setColumnWidth(7, 220);
       receipts.setColumnWidth(9, 200);
    }
+   // Receipt Links: which records each receipt belongs to.
    let links = ss.getSheetByName(RECEIPTS_CONFIG.linksSheetName);
    if (!links) {
       links = ss.insertSheet(RECEIPTS_CONFIG.linksSheetName);
@@ -106,10 +102,12 @@ function apiReadSheetRows_(sheet, keyField) {
    return rows;
 }
 
+// All rows of the Receipts tab.
 function apiReadReceipts_() {
    return apiReadSheetRows_(apiEnsureReceiptTabs_().receipts, "Receipt ID");
 }
 
+// All rows of the Receipt Links tab.
 function apiReadReceiptLinks_() {
    return apiReadSheetRows_(apiEnsureReceiptTabs_().links, "Receipt ID")
       .filter(r => r["Item ID"] !== "");
@@ -136,6 +134,7 @@ function apiUploadReceipt_(req, user) {
    const r = apiCleanReceipt_(req.receipt || {}, true);
    const img = req.image || {};
    if (!img.data) throw apiError_("INVALID", "Add a photo of the receipt.");
+   // Check the photo type and size.
    const mimeType = /^image\/(jpeg|png|webp|gif|heic|heif)$/.test(String(img.mimeType)) ? img.mimeType : "image/jpeg";
    const bytes = Utilities.base64Decode(String(img.data).replace(/^data:[^,]*,/, ""));
    if (bytes.length > RECEIPTS_CONFIG.maxImageBytes) throw apiError_("INVALID", "That photo is too large.");
@@ -151,6 +150,7 @@ function apiUploadReceipt_(req, user) {
                  "image/heic": ".heic", "image/heif": ".heif" }[mimeType];
    const fileName = apiFileNameWithExt_(r.fileName, ext);
 
+   // Save the photo to the Receipts folder, then record it on the Receipts tab.
    const tabs = apiEnsureReceiptTabs_();
    const id = apiNextReceiptId_();
    const folder = DriveApp.getFolderById(RECEIPTS_CONFIG.folderId);
@@ -200,6 +200,7 @@ function apiUpdateReceipt_(req, user) {
    const rec = apiReadReceipts_().find(r => r["Receipt ID"] === req.id);
    if (!rec) throw apiError_("NOT_FOUND", "That receipt no longer exists.");
    const raw = req.receipt || {};
+   // Only the fields that were sent are updated.
    const r = apiCleanReceipt_(Object.assign({ fileName: rec["File Name"] }, raw), false);
    const values = {};
 
@@ -229,6 +230,7 @@ function apiUpdateReceipt_(req, user) {
    return { updated: changes.length };
 }
 
+// Retires (or, with req.restore, restores) a receipt (admins).
 function apiRetireReceipt_(req, user) {
    apiRequireAdmin_(user);
    const tabs = apiEnsureReceiptTabs_();
@@ -279,6 +281,7 @@ function apiAddReceiptLinks_(tabs, receiptId, itemIds, user) {
    return added;
 }
 
+// Ends one receipt-to-record link (admins): unchecks Active and sets Date Unlinked.
 function apiUnlinkReceipt_(req, user) {
    apiRequireAdmin_(user);
    const tabs = apiEnsureReceiptTabs_();
@@ -311,16 +314,19 @@ function apiCleanReceipt_(raw, isNew) {
    return out;
 }
 
+// The file name with the photo's extension (any old image extension replaced).
 function apiFileNameWithExt_(name, ext) {
    const base = String(name).replace(/\.(jpe?g|png|webp|gif|heic|heif)$/i, "").trim();
    return base + ext;
 }
 
+// A value as text for comparing old and new (dates as yyyy-MM-dd).
 function apiShowValue_(v) {
    const tz = apiSs_().getSpreadsheetTimeZone();
    return v instanceof Date ? Utilities.formatDate(v, tz, "yyyy-MM-dd") : (v === undefined || v === null ? "" : String(v));
 }
 
+// Next receipt ID, e.g. RC-12.
 function apiNextReceiptId_() {
    const max = apiReadReceipts_().reduce((m, r) => {
       const n = Number(String(r["Receipt ID"]).replace(/^\D+/, ""));

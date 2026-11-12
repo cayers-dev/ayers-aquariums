@@ -14,6 +14,7 @@
 // removed from tanks (Date Removed).
 // ============================================================
 
+// Sign-in client, tab names and app name used throughout the API.
 const API_CONFIG = {
    // OAuth "Web application" client ID from Google Cloud Console.
    clientId: "53317218551-r9sk421q1ndrvb0hmivv20n4jt376to5.apps.googleusercontent.com",
@@ -22,6 +23,7 @@ const API_CONFIG = {
    appName: "Ayers Aquariums"
 };
 
+// Roles a person can have on the App Users tab.
 const API_ROLES = ["Admin", "Editor", "Viewer"];
 
 // Tables the app can read. "shared" tables are admin-only to change.
@@ -53,6 +55,7 @@ const API_FIELD_LISTS = {
    waterParameters: { "Parameter": ["Water Parameter", true] }
 };
 
+// Field types the app's forms use, worked out from the column name.
 const API_NUMBER_FIELDS = ["Volume (gal)", "Temp Min °F", "Temp Max °F", "Max Size (in)"];
 const API_DATE_PATTERN = /(^| )Date($| )|Expires/;
 const API_LONG_TEXT_PATTERN = /Notes|Options|Purpose|Issues|Keywords|Warnings|Requirements|Ingredients|Effect|Dose|Frequency|Stores|Recommended Group|Measurement/;
@@ -63,10 +66,13 @@ const API_URL_PATTERN = /URL$|Link$|Page$/;
 // ENTRY POINTS
 // ============================================================
 
+// GET request (e.g. opening the web app URL in a browser): just confirms the API is up.
 function doGet() {
    return apiJson_({ ok: true, app: API_CONFIG.appName });
 }
 
+// Every app request arrives here: verify the sign-in, run the action, return JSON.
+// Errors raised with apiError_ go back to the app as { ok: false, code, message }.
 function doPost(e) {
    try {
       const req = JSON.parse((e && e.postData && e.postData.contents) || "{}");
@@ -81,6 +87,7 @@ function doPost(e) {
    }
 }
 
+// Sends each request to the function for its action. Writes run inside apiWrite_ (one at a time).
 function apiRoute_(req, user) {
    switch (req.action) {
       case "bootstrap":         return apiBootstrap_(user);
@@ -123,33 +130,22 @@ function apiRoute_(req, user) {
 
 
 // ============================================================
-// ONE-TIME SETUP (run from the editor)
-// Creates the App Users and Change Log tabs and asks for the
-// permissions the web app needs.
-// ============================================================
-
-function apiSetup() {
-   apiEnsureSupportTabs_();
-   // Touch UrlFetchApp so the editor asks for the "external request"
-   // permission used to verify Google sign-ins.
-   UrlFetchApp.fetch("https://oauth2.googleapis.com/tokeninfo?id_token=x", { muteHttpExceptions: true });
-   Logger.log("Setup complete. Users tab: " + API_CONFIG.usersSheetName);
-}
-
-
-// ============================================================
 // AUTH
 // ============================================================
 
+// Checks the Google sign-in token (cached for up to 10 minutes) and returns the
+// matching active person from App Users, or throws AUTH / NOT_ALLOWED.
 function apiVerifyUser_(idToken) {
    if (!idToken) throw apiError_("AUTH", "Please sign in.");
    if (API_CONFIG.clientId.indexOf("PASTE_") === 0) throw apiError_("SETUP", "The app's sign-in client ID hasn't been set yet.");
 
+   // Tokens already checked recently are cached (by a hash, never the token itself).
    const cache = CacheService.getScriptCache();
    const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, idToken);
    const key = "tok_" + Utilities.base64EncodeWebSafe(digest).slice(0, 43);
    let email = cache.get(key);
 
+   // Not cached: ask Google whether the token is genuine, for this app, and unexpired.
    if (!email) {
       const res = UrlFetchApp.fetch("https://oauth2.googleapis.com/tokeninfo?id_token=" + encodeURIComponent(idToken),
                                     { muteHttpExceptions: true });
@@ -163,6 +159,7 @@ function apiVerifyUser_(idToken) {
       cache.put(key, email, Math.max(30, Math.min(600, secondsLeft - 30)));
    }
 
+   // The email must be an active person on App Users.
    const user = apiGetUsers_().find(u => u.email === email);
    if (!user || !user.active) {
       throw apiError_("NOT_ALLOWED", email + " isn't on the " + API_CONFIG.appName + " user list.", { email: email });
@@ -170,10 +167,12 @@ function apiVerifyUser_(idToken) {
    return user;
 }
 
+// Admins can change every tank; editors only the tanks assigned to them.
 function apiCanEditTank_(user, tankId) {
    return user.role === "Admin" || (user.role === "Editor" && user.tanks.indexOf(tankId) !== -1);
 }
 
+// Throws unless the person is an admin.
 function apiRequireAdmin_(user) {
    if (user.role !== "Admin") throw apiError_("FORBIDDEN", "Only admins can do that.");
 }
@@ -183,6 +182,8 @@ function apiRequireAdmin_(user) {
 // READ
 // ============================================================
 
+// Everything the app needs on load: the person, form layouts (schema), all tables,
+// plus receipts, water tests, maintenance and wishlist data.
 function apiBootstrap_(user) {
    const ss = apiSs_();
    const data = {};
@@ -235,6 +236,8 @@ function apiLimitToAssignedTanks_(out, user) {
    if (out.receiptLinks) out.receiptLinks = out.receiptLinks.filter(l => !allTankIds[l["Item ID"]] || visible(l["Item ID"]));
 }
 
+// Reads a whole data tab into row objects ({ header: value, _row: sheet row }).
+// Dates become yyyy-MM-dd; numbers keep their sheet formatting.
 function apiReadTable_(table) {
    const def = API_TABLES[table];
    const sheet = apiSheet_(def.sheetKey);
@@ -242,6 +245,7 @@ function apiReadTable_(table) {
    const lastCol = sheet.getLastColumn();
    if (lastRow < 1 || lastCol < 1) return { headers: [], rows: [] };
 
+   // Raw values plus displayed text (so numbers keep formatting like $ or decimals).
    const range = sheet.getRange(1, 1, lastRow, lastCol);
    const values = range.getValues();
    const shown = range.getDisplayValues();
@@ -257,6 +261,7 @@ function apiReadTable_(table) {
          obj[h] = v instanceof Date ? Utilities.formatDate(v, tz, "yyyy-MM-dd")
                 : (typeof v === "number" ? shown[r][c] : v);
       });
+      // Skip blank rows (no ID; for assignments no tank or item).
       const keep = def.id ? obj[def.id] !== "" :
                    table === "assignments" ? (obj["Tank ID"] !== "" && obj["Item ID"] !== "") :
                    obj["Tank ID"] !== "";
@@ -265,6 +270,7 @@ function apiReadTable_(table) {
    return { headers: headers.filter(Boolean), rows: rows };
 }
 
+// Reads every dropdown list on DropDownOptions: { column header: [values] }.
 function apiReadLists_(ss) {
    const sheet = ss.getSheetByName("DropDownOptions");
    const lists = {};
@@ -288,6 +294,7 @@ function apiSchema_(table, lists) {
    const listDefs = API_FIELD_LISTS[table] || {};
    const required = def.required || [];
 
+   // One entry per column: its type (list, number, date, url, long text, checkbox), options and rules.
    return headers
       .filter((h, i) => headers.indexOf(h) === i)
       .filter(h => API_FORMULA_COLUMNS.indexOf(h) === -1)
@@ -314,6 +321,8 @@ function apiSchema_(table, lists) {
 // WRITE
 // ============================================================
 
+// Runs a change while holding the script lock, so two people saving at once can't
+// collide (e.g. both getting the same new ID).
 function apiWrite_(fn) {
    const lock = LockService.getScriptLock();
    lock.waitLock(20000);
@@ -326,6 +335,8 @@ function apiWrite_(fn) {
    }
 }
 
+// Adds a record: a tank assignment, a water parameter, or (admins) a new tank,
+// species, equipment, plant or medication with the next ID.
 function apiAdd_(req, user) {
    const table = req.table;
    const def = API_TABLES[table];
@@ -382,6 +393,7 @@ function apiAdd_(req, user) {
    return { added: { table: table, id: id } };
 }
 
+// Edits a record. Only the fields that changed are written, and each change is logged.
 function apiUpdate_(req, user) {
    const table = req.table;
    const def = API_TABLES[table];
@@ -389,6 +401,7 @@ function apiUpdate_(req, user) {
    const values = apiCleanValues_(table, req.values || {});
    let record, recordLabel;
 
+   // Records with an ID: tanks need tank rights; other lists are admin-only (or a wishlist item's creator).
    if (def.id) {
       record = apiFindById_(table, req.id);
       if (!record) throw apiError_("NOT_FOUND", "That record no longer exists.");
@@ -411,6 +424,7 @@ function apiUpdate_(req, user) {
       recordLabel = record["Tank ID"] + " / " + (record["Item ID"] || record["Parameter"]);
    }
 
+   // Re-activating an equipment assignment is refused while it's active in another tank.
    const merged = Object.assign({}, record, values);
    apiCheckRequired_(def, merged);
    if (table === "assignments" && merged["Active"] === true && !merged["Date Removed"] &&
@@ -424,6 +438,7 @@ function apiUpdate_(req, user) {
    return { updated: changes.length };
 }
 
+// Marks a tank, species, equipment, plant or medication as Retired (admins). Nothing is deleted.
 function apiRetire_(req, user) {
    const table = req.table;
    const def = API_TABLES[table];
@@ -436,11 +451,13 @@ function apiRetire_(req, user) {
    return { updated: changes.length };
 }
 
+// A tank's name from its ID (blank if not found).
 function apiTankName_(tankId) {
    const t = apiFindById_("tanks", tankId);
    return t ? t["Tank Name"] : "";
 }
 
+// Active Tank Assignments rows for this item in tanks other than tankId.
 function apiActiveEquipmentElsewhere_(itemId, tankId) {
    return apiReadTable_("assignments").rows.filter(r =>
       r["Item ID"] === itemId && r["Tank ID"] !== tankId && r["Active"] === true && !r["Date Removed"]);
@@ -469,6 +486,7 @@ function apiMoveEquipmentIfNeeded_(req, user, tankId, itemId, dateAdded) {
    });
 }
 
+// Takes an item out of a tank: sets Date Removed and unchecks Active.
 function apiRemoveAssignment_(req, user) {
    const record = apiFindRow_("assignments", req.key);
    if (!apiCanEditTank_(user, record["Tank ID"])) throw apiError_("FORBIDDEN", "You can't change that tank.");
@@ -485,12 +503,13 @@ function apiRemoveAssignment_(req, user) {
 // USERS
 // ============================================================
 
+// Reads the App Users tab into { id, email, name, role, tanks, active }.
 function apiGetUsers_() {
    const sheet = apiEnsureSupportTabs_().users;
    const values = sheet.getDataRange().getValues();
    const h = values[0].map(x => String(x).trim());
    const col = name => h.indexOf(name);
-   const tanksCol = col("Assigned Tanks") !== -1 ? col("Assigned Tanks") : col("Editable Tanks");
+   const tanksCol = col("Assigned Tanks");
    // Row numbers are worked out before skipping blank rows, so an empty
    // row in the middle of the tab can't shift edits onto the wrong person.
    const users = values.map((r, i) => ({ r: r, row: i + 1 })).slice(1)
@@ -516,6 +535,7 @@ function apiGetUsers_() {
    return users;
 }
 
+// Highest number used in a User ID (USR-n), for numbering new people.
 function apiMaxUserNumber_(users) {
    return users.reduce((m, u) => {
       const n = Number(String(u.id).replace(/^\D+/, ""));
@@ -528,6 +548,8 @@ function apiWho_(user) {
    return user.id || user.email;
 }
 
+// Adds or edits a person on App Users (admins). Guards against duplicate emails and
+// against an admin removing their own admin access.
 function apiSaveUser_(req, user) {
    apiRequireAdmin_(user);
    const u = req.user || {};
@@ -548,11 +570,12 @@ function apiSaveUser_(req, user) {
       if (email !== existing.email) throw apiError_("INVALID", "You can't change your own email here. Edit it in the App Users tab if you need to.");
    }
 
+   // Keep only real tank IDs, then write the row (new people get the next User ID).
    const tankIds = apiReadTable_("tanks").rows.map(t => t["Tank ID"]);
    const tanks = (u.tanks || []).filter(t => tankIds.indexOf(t) !== -1);
    const sheet = apiEnsureSupportTabs_().users;
    // Admins see and change every tank, so they have no assigned tanks.
-   const tanksHeader = apiHasHeader_(sheet, "Assigned Tanks") ? "Assigned Tanks" : "Editable Tanks";
+   const tanksHeader = "Assigned Tanks";
    const record = { "Email": email, "Name": String(u.name || "").trim(), "Role": role, "Active": active };
    record[tanksHeader] = role === "Admin" ? "" : tanks.join(", ");
 
@@ -575,16 +598,19 @@ function apiSaveUser_(req, user) {
 // SHEET HELPERS
 // ============================================================
 
+// The spreadsheet this script is bound to.
 function apiSs_() {
    return SpreadsheetApp.getActiveSpreadsheet();
 }
 
+// A data tab by its key in SHEET_IDS (Entry Forms.gs), found by tab ID so renaming is safe.
 function apiSheet_(sheetKey) {
    const sheet = apiSs_().getSheetById(SHEET_IDS[sheetKey]);
    if (!sheet) throw apiError_("SETUP", "A data tab is missing (" + sheetKey + ").");
    return sheet;
 }
 
+// Header name (lower case) -> column number for a tab.
 function apiHeaderMap_(sheet) {
    const lastCol = sheet.getLastColumn();
    const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
@@ -596,6 +622,7 @@ function apiHeaderMap_(sheet) {
    return { map: map, lastCol: lastCol };
 }
 
+// True if the tab has a column with this header.
 function apiHasHeader_(sheet, name) {
    return name.toLowerCase() in apiHeaderMap_(sheet).map;
 }
@@ -613,6 +640,8 @@ function apiLastDataRow_(sheet) {
    return 1;
 }
 
+// Adds a row below the last real data row, copying row 2's formatting, and writes the
+// given values under their headers (formula columns are never written).
 function apiAppendRow_(sheet, values) {
    const hm = apiHeaderMap_(sheet);
    const row = apiLastDataRow_(sheet) + 1;
@@ -647,6 +676,7 @@ function apiWriteChanges_(sheet, row, before, values) {
    return changes;
 }
 
+// The record with this ID in a table, or null.
 function apiFindById_(table, id) {
    const def = API_TABLES[table];
    return apiReadTable_(table).rows.find(r => r[def.id] === id) || null;
@@ -662,6 +692,7 @@ function apiFindRow_(table, key) {
    return record;
 }
 
+// Next ID for a table, e.g. FS-37 after FS-36.
 function apiNextId_(table) {
    const def = API_TABLES[table];
    const max = apiReadTable_(table).rows.reduce((m, r) => {
@@ -671,6 +702,8 @@ function apiNextId_(table) {
    return def.prefix + (max + 1);
 }
 
+// Validates and converts values sent by the app using the table's schema
+// (numbers, dates, checkboxes, strict dropdown lists). Unknown fields are dropped.
 function apiCleanValues_(table, raw) {
    const schema = apiSchema_(table, apiReadLists_(apiSs_()));
    const byName = {};
@@ -696,11 +729,13 @@ function apiCleanValues_(table, raw) {
    return out;
 }
 
+// Throws if any of the table's required fields are blank.
 function apiCheckRequired_(def, values) {
    const missing = (def.required || []).filter(f => values[f] === "" || values[f] === undefined || values[f] === null);
    if (missing.length) throw apiError_("INVALID", "Please fill in: " + missing.join(", ") + ".");
 }
 
+// Converts yyyy-MM-dd from the app to a Date.
 function apiParseDate_(v) {
    if (v instanceof Date) return v;
    const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -708,6 +743,7 @@ function apiParseDate_(v) {
    return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
 }
 
+// Field: value list for the Change Log.
 function apiDescribe_(values) {
    const tz = apiSs_().getSpreadsheetTimeZone();
    return Object.keys(values)
@@ -721,8 +757,10 @@ function apiDescribe_(values) {
 // SUPPORT TABS + CHANGE LOG
 // ============================================================
 
+// Returns the App Users and Change Log tabs, creating them if they're missing.
 function apiEnsureSupportTabs_() {
    const ss = apiSs_();
+   // App Users: who can sign in, their role and assigned tanks (first row is the owner).
    let users = ss.getSheetByName(API_CONFIG.usersSheetName);
    if (!users) {
       users = ss.insertSheet(API_CONFIG.usersSheetName);
@@ -739,6 +777,7 @@ function apiEnsureSupportTabs_() {
       users.setColumnWidths(5, 1, 200);
       users.setColumnWidths(8, 1, 320);
    }
+   // Change Log: one row per change made through the app.
    let log = ss.getSheetByName(API_CONFIG.logSheetName);
    if (!log) {
       log = ss.insertSheet(API_CONFIG.logSheetName);
@@ -753,6 +792,7 @@ function apiEnsureSupportTabs_() {
    return { users: users, log: log };
 }
 
+// Adds a row to the Change Log: when, who, what action, which tab and record, what changed.
 function apiLog_(user, action, table, record, changes) {
    const log = apiEnsureSupportTabs_().log;
    const row = apiLastDataRow_(log) + 1;
@@ -765,10 +805,12 @@ function apiLog_(user, action, table, record, changes) {
 // UTIL
 // ============================================================
 
+// Wraps a result as a JSON response.
 function apiJson_(obj) {
    return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
 
+// An error the app shows as-is: code (e.g. INVALID, FORBIDDEN) plus a plain-language message.
 function apiError_(code, message, extra) {
    const e = new Error(message);
    e.apiCode = code;

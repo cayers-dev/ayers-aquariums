@@ -19,6 +19,7 @@
 // tank rows get a Date Removed.
 // ============================================================
 
+// Tab names, ID prefix, photo folder name and the allowed list values for wishes.
 const WISH_CONFIG = {
    sheetName: "Wishlist",
    compatSheetName: "Compatibility Checks",
@@ -30,21 +31,11 @@ const WISH_CONFIG = {
    verdicts: ["Good", "Caution", "Not recommended"]
 };
 
+// Columns of the Wishlist tab, in order.
 const WISH_HEADERS = ["Wish ID", "Item ID", "Item Type", "New Item", "Priority", "Estimated Price", "Vendor", "Link",
                       "Wish Status", "Notes", "Purchase Date", "Price Paid", "Receipt ID", "Added By", "Added At", "Closed At"];
+// Columns of the Compatibility Checks tab (one row per wish + tank per check).
 const COMPAT_HEADERS = ["Wish ID", "Item ID", "Tank ID", "Wished Tank", "Verdict", "Reasons", "Checked At", "Checked By", "Current"];
-
-
-// Run once from the editor (safe to run again).
-function wishlistSetup() {
-   const tabs = apiEnsureWishTabs_();
-   const col = apiEnsureWishColumn_();
-   const added = apiEnsureWishlistStatus_();
-   const folder = apiItemPhotosFolder_();
-   Logger.log("Wishlist tabs: " + tabs.wishes.getName() + ", " + tabs.compat.getName() +
-              ". Tank Assignments column " + col + " = Wish ID. Status option 'Wishlist' " + (added ? "added" : "already there") +
-              ". Photos folder: " + folder.getName() + " (" + folder.getId() + ").");
-}
 
 
 // ------------------------------------------------------------
@@ -52,6 +43,7 @@ function wishlistSetup() {
 // ------------------------------------------------------------
 function apiEnsureWishTabs_() {
    const ss = apiSs_();
+   // Wishlist: one row per wish.
    let wishes = ss.getSheetByName(WISH_CONFIG.sheetName);
    if (!wishes) {
       wishes = ss.insertSheet(WISH_CONFIG.sheetName);
@@ -66,6 +58,7 @@ function apiEnsureWishTabs_() {
       wishes.getRange("O2:P").setNumberFormat("m/d/yyyy h:mm am/pm");
       wishes.setColumnWidth(8, 220); wishes.setColumnWidth(10, 260);
    }
+   // Compatibility Checks: AI verdicts, one row per wish + tank per check.
    let compat = ss.getSheetByName(WISH_CONFIG.compatSheetName);
    if (!compat) {
       compat = ss.insertSheet(WISH_CONFIG.compatSheetName);
@@ -94,37 +87,7 @@ function apiEnsureWishColumn_() {
    return col;
 }
 
-// Adds "Wishlist" to the Status list: a row on the Lookups tab (which
-// feeds DropDownOptions), and to the Status dropdown rules on the
-// Species, Plants and Equipment tabs.
-function apiEnsureWishlistStatus_() {
-   let added = false;
-   const lookups = apiSs_().getSheetByName("Lookups");
-   if (lookups) {
-      const rows = lookups.getDataRange().getValues();
-      if (!rows.some(r => String(r[0]).trim() === "Status" && String(r[1]).trim().toLowerCase() === "wishlist")) {
-         apiAppendRow_(lookups, { "Lookup Type": "Status", "Value": "Wishlist",
-                                  "Description": "On the wishlist; not owned yet.", "Inactive": false });
-         added = true;
-      }
-   }
-   WISH_CONFIG.types.forEach(t => {
-      const sheet = apiSheet_(API_TABLES[t].sheetKey);
-      const col = apiHeaderMap_(sheet).map["status"];
-      if (!col || sheet.getMaxRows() < 2) return;
-      const range = sheet.getRange(2, col, sheet.getMaxRows() - 1, 1);
-      const rule = range.getCell(1, 1).getDataValidation();
-      if (!rule || rule.getCriteriaType() !== SpreadsheetApp.DataValidationCriteria.VALUE_IN_LIST) return;
-      const args = rule.getCriteriaValues();
-      const list = (args[0] || []).slice();
-      if (list.some(v => String(v).toLowerCase() === "wishlist")) return;
-      list.push("Wishlist");
-      range.setDataValidation(rule.copy().requireValueInList(list, args[1] !== false).build());
-      added = true;
-   });
-   return added;
-}
-
+// The Item Photos Drive folder (created next to the Receipts folder the first time).
 function apiItemPhotosFolder_() {
    const props = PropertiesService.getScriptProperties();
    const id = props.getProperty("ITEM_PHOTOS_FOLDER_ID");
@@ -148,23 +111,28 @@ function apiReadWishes_() {
    return apiReadSheetRows_(apiEnsureWishTabs_().wishes, "Wish ID");
 }
 
+// Compatibility Checks rows; currentOnly keeps just the latest check per wish.
 function apiReadCompat_(currentOnly) {
    return apiReadSheetRows_(apiEnsureWishTabs_().compat, "Wish ID")
       .filter(r => !currentOnly || r["Current"] === true);
 }
 
+// A wish by ID, or NOT_FOUND.
 function apiFindWish_(id) {
    const w = apiReadWishes_().find(r => r["Wish ID"] === id);
    if (!w) throw apiError_("NOT_FOUND", "That wish no longer exists.");
    return w;
 }
 
+// A Tank Assignments row that is still only a wish (never added to the tank).
 const apiIsPendingWishRow_ = a => !!a["Wish ID"] && a["Active"] !== true && !a["Date Added"] && !a["Date Removed"];
 
+// The still-wished tank rows of one wish.
 function apiPendingWishRows_(wishId, assignments) {
    return (assignments || apiReadTable_("assignments").rows).filter(a => a["Wish ID"] === wishId && apiIsPendingWishRow_(a));
 }
 
+// Open = not yet Purchased or Not getting.
 const apiWishIsOpen_ = w => ["Purchased", "Not getting"].indexOf(String(w["Wish Status"])) === -1;
 
 // Added to the bootstrap. Non-admins see wishes they added or that are
@@ -211,6 +179,7 @@ function apiCanEditWishItem_(user, table, record) {
    return apiReadWishes_().some(w => w["Item ID"] === id && w["New Item"] === true && w["Added By"] === apiWho_(user));
 }
 
+// De-duplicates and checks the tanks picked for a wish (must exist; person must manage them).
 function apiCleanWishTanks_(list, user) {
    const tanks = apiReadTable_("tanks").rows;
    const out = [];
@@ -228,12 +197,14 @@ function apiCleanWish_(raw, isNew) {
    raw = raw || {};
    const out = {};
    const has = k => isNew || Object.prototype.hasOwnProperty.call(raw, k);
+   // Amounts like $24.99 -> 24.99 (blank allowed).
    const money = (v, label) => {
       const t = String(v === undefined || v === null ? "" : v).replace(/[$,\s]/g, "");
       if (t === "") return "";
       if (isNaN(Number(t)) || Number(t) < 0) throw apiError_("INVALID", label + " must be an amount like 24.99.");
       return Math.round(Number(t) * 100) / 100;
    };
+   // Each field is checked against its allowed values or format.
    if (has("priority")) {
       const p = String(raw.priority || "").trim();
       if (p && WISH_CONFIG.priorities.indexOf(p) === -1) throw apiError_("INVALID", "Priority must be High, Medium or Low.");
@@ -255,6 +226,7 @@ function apiCleanWish_(raw, isNew) {
    return out;
 }
 
+// Display name of an item: brand + model for equipment, common name otherwise.
 function apiItemTitle_(type, r) {
    if (type === "equipment") return [r["Manufacturer"], r["Filter Model"]].filter(Boolean).join(" ") || r["Category"] || r["Equipment ID"];
    return r["Common Name"] || r[API_TABLES[type].id];
@@ -268,6 +240,7 @@ function apiDrivePhotoUrl_(fileId) {
    return "https://drive.google.com/file/d/" + fileId + "/view";
 }
 
+// Saves an uploaded photo to the Item Photos folder and returns the Drive file ID.
 function apiSaveItemPhoto_(photo, itemId, title, user) {
    const mimeType = /^image\/(jpeg|png|webp)$/.test(String(photo.mimeType)) ? photo.mimeType : "image/jpeg";
    const bytes = Utilities.base64Decode(String(photo.data || "").replace(/^data:[^,]*,/, ""));
@@ -281,6 +254,7 @@ function apiSaveItemPhoto_(photo, itemId, title, user) {
    return file.getId();
 }
 
+// Records the source, author and license of a Wikimedia photo on Image Credits.
 function apiAddImageCredit_(itemId, name, photo) {
    const sheet = apiSs_().getSheetByName("Image Credits");
    if (!sheet) return;
@@ -345,6 +319,7 @@ function apiAddWish_(req, user) {
    return apiWrite_(() => apiAddWishLocked_(req, user, type, commons));
 }
 
+// The part of adding a wish that writes to the sheet (runs inside the write lock).
 function apiAddWishLocked_(req, user, type, commons) {
    apiEnsureWishColumn_();
    const tabs = apiEnsureWishTabs_();
@@ -356,6 +331,7 @@ function apiAddWishLocked_(req, user, type, commons) {
    const assignments = apiReadTable_("assignments").rows;
    let itemId, rec, newItem = false;
 
+   // Reuse an existing species/plant, or create a new item with Status Wishlist.
    if (req.itemId) {
       if (type === "equipment") throw apiError_("INVALID", "An equipment wish always adds a new piece of equipment.");
       rec = apiFindById_(type, req.itemId);
@@ -384,6 +360,7 @@ function apiAddWishLocked_(req, user, type, commons) {
       newItem = true;
    }
 
+   // An item can't be wished for a tank it's already in.
    tanks.forEach(t => {
       if (assignments.some(a => a["Tank ID"] === t && a["Item ID"] === itemId && a["Active"] === true && !a["Date Removed"])) {
          throw apiError_("INVALID", itemId + " is already in " + t + " " + apiTankName_(t) + ".");
@@ -402,6 +379,7 @@ function apiAddWishLocked_(req, user, type, commons) {
       apiAddImageCredit_(itemId, title, commons);
    }
 
+   // The wish row, then one not-yet-active Tank Assignments row per tank.
    if (wishVals["Vendor"]) wishVals["Vendor"] = apiEnsureVendor_(wishVals["Vendor"], user);
    const wishId = apiNextSeqId_(apiReadWishes_(), "Wish ID", WISH_CONFIG.prefix);
    apiAppendRow_(tabs.wishes, Object.assign({
@@ -428,11 +406,13 @@ function apiUpdateWish_(req, user) {
    const pending = apiPendingWishRows_(wish["Wish ID"]);
    const pendingTanks = pending.map(a => a["Tank ID"]);
    if (!apiCanManageWish_(user, wish, pendingTanks)) throw apiError_("FORBIDDEN", "You can't change this wish.");
+   // Update the wish's details (status only while it's open).
    const vals = apiCleanWish_(req.wish, false);
    if ("Wish Status" in vals && !apiWishIsOpen_(wish)) delete vals["Wish Status"];
    if (vals["Vendor"]) vals["Vendor"] = apiEnsureVendor_(vals["Vendor"], user);
    const changes = apiWriteChanges_(tabs.wishes, wish._row, wish, vals);
 
+   // Tanks: add rows for newly checked tanks, close rows for unchecked ones.
    if (Array.isArray(req.tanks)) {
       if (!apiWishIsOpen_(wish)) throw apiError_("INVALID", "This wish is closed, so its tanks can't change.");
       const want = [];
@@ -511,6 +491,7 @@ function apiPurchaseWish_(req, user) {
    let rec = apiFindById_(type, wish["Item ID"]);
    if (!rec) throw apiError_("NOT_FOUND", wish["Item ID"] + " no longer exists.");
 
+   // The tanks it was bought for, each with its own Date Added and notes.
    const tankRows = apiReadTable_("tanks").rows;
    const picks = [];
    (Array.isArray(req.tanks) ? req.tanks : []).forEach(p => {
@@ -522,6 +503,7 @@ function apiPurchaseWish_(req, user) {
    });
    if (!picks.length) throw apiError_("INVALID", "Choose at least one tank to add it to.");
 
+   // Purchase details: date, price paid, receipt and vendor.
    const purchaseDate = req.purchaseDate ? apiParseDate_(req.purchaseDate) : new Date();
    picks.forEach(p => { if (!p.dateAdded) p.dateAdded = purchaseDate; });
    const priceTxt = String(req.pricePaid === undefined || req.pricePaid === null ? "" : req.pricePaid).replace(/[$,\s]/g, "");
@@ -534,6 +516,7 @@ function apiPurchaseWish_(req, user) {
    }
    const vendor = String(req.vendor || "").replace(/\s+/g, " ").trim() ? apiEnsureVendor_(String(req.vendor).replace(/\s+/g, " ").trim(), user) : "";
 
+   // A species or plant can't be added to a tank it's already in.
    const assignments = apiReadTable_("assignments").rows;
    const pending = apiPendingWishRows_(wish["Wish ID"], assignments);
    if (type !== "equipment") {
@@ -544,6 +527,8 @@ function apiPurchaseWish_(req, user) {
       });
    }
 
+   // Add it to each tank. Equipment: the first tank uses the wished item, each further
+   // tank gets a new piece (copy). The wish's tank row becomes the real assignment.
    const aSheet = apiSheet_("tankAssignments");
    const itemIds = [];
    const notes = [];
@@ -580,6 +565,7 @@ function apiPurchaseWish_(req, user) {
          useOriginal = false;
       }
       itemIds.push(itemId);
+      // Turn the wish row for this tank into an active assignment, or add a new row.
       const row = pending.find(a => a["Tank ID"] === p.tankId);
       const values = { "Item ID": itemId, "Active": true, "Date Added": p.dateAdded, "Notes": p.notes };
       if (row) {
@@ -590,8 +576,10 @@ function apiPurchaseWish_(req, user) {
       }
    });
 
+   // Link the receipt to every item added.
    if (receiptId) apiAddReceiptLinks_(apiEnsureReceiptTabs_(), receiptId, itemIds.filter((v, i, a) => a.indexOf(v) === i), user);
 
+   // Update the wish; it's Purchased once no wished tanks are left.
    const wUpd = { "Purchase Date": purchaseDate };
    if (price !== "") {
       const before = Number(String(wish["Price Paid"] || "").replace(/[$,]/g, "")) || 0;
@@ -625,12 +613,14 @@ function apiCheckWish_(req, user) {
    const rec = def ? apiFindById_(type, wish["Item ID"]) : null;
    if (!rec) throw apiError_("NOT_FOUND", wish["Item ID"] + " no longer exists.");
 
+   // Tanks to check: the wished ones plus every other active tank this person can see.
    const assignments = apiReadTable_("assignments").rows;
    const wished = apiPendingWishRows_(wish["Wish ID"], assignments).map(a => a["Tank ID"]);
    const tanks = apiReadTable_("tanks").rows.filter(t => String(t["Status"]) !== "Retired" &&
       (user.role === "Admin" || user.tanks.indexOf(t["Tank ID"]) !== -1 || wished.indexOf(t["Tank ID"]) !== -1));
    if (!tanks.length) throw apiError_("INVALID", "There are no tanks to check against.");
 
+   // Describe each tank for the AI: size, target ranges, current livestock, plants, equipment.
    const species = apiReadTable_("species").rows, plants = apiReadTable_("plants").rows, equipment = apiReadTable_("equipment").rows;
    const params = apiReadTable_("waterParameters").rows;
    const byId = (rows, field, id) => rows.find(r => r[field] === id);
@@ -659,12 +649,14 @@ function apiCheckWish_(req, user) {
       };
    });
 
+   // The wished item's details (no links, IDs or purchase info).
    const item = {};
    apiSchema_(type, apiReadLists_(apiSs_())).forEach(f => {
       if (f.type === "url" || f.readOnly || ["Status", "Serial Number", "Purchase Date", "Vendor"].indexOf(f.name) !== -1) return;
       if (rec[f.name] !== "" && rec[f.name] !== undefined) item[f.name] = rec[f.name];
    });
 
+   // What to weigh depends on the item type.
    const factors = type === "equipment"
       ? "- Fit for the tank: filter flow/rated tank size or heater wattage vs the tank's gallons, physical size vs the tank, and duplicates of equipment the tank already has.\n"
       : "- Water ranges: compare the item's needs with the tank's target ranges (temperature, pH, GH, KH and others listed).\n" +
@@ -680,6 +672,7 @@ function apiCheckWish_(req, user) {
       "Then list up to 3 best-fit tanks among those NOT wished (only tanks with verdict Good, best first).\n" +
       "Reply with JSON only: {\"tanks\": [{\"tankId\": \"TK-1\", \"verdict\": \"Good\", \"reasons\": [\"...\"]}], \"bestFit\": [\"TK-2\"], \"summary\": \"one sentence\"}";
 
+   // Ask, then normalise verdicts and keep up to 3 best-fit suggestions.
    const ai = aiGenerateJson_([{ text: prompt }]);
    const verdictOf = v => /not/i.test(String(v)) ? "Not recommended" : /good/i.test(String(v)) ? "Good" : "Caution";
    const results = {};
@@ -694,6 +687,7 @@ function apiCheckWish_(req, user) {
    const keep = wished.concat(bestFit).filter(id => results[id]);
    const missing = wished.filter(id => !results[id]);
 
+   // Save: earlier results stop being Current; new rows for wished tanks and suggestions.
    return apiWrite_(() => {
       const tabs = apiEnsureWishTabs_();
       const old = apiReadCompat_(true).filter(c => c["Wish ID"] === wish["Wish ID"]);

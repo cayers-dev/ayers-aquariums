@@ -15,20 +15,17 @@
 // Nothing is deleted: entries are retired.
 // ============================================================
 
+// Tab name for each maintenance type.
 const MAINT_CONFIG = {
    waterChangesSheetName: "Water Changes"
 };
 
+// Columns of the Water Changes tab, in order.
 const WATER_CHANGE_HEADERS = ["Water Change ID", "Tank ID", "Performed At", "Percentage", "Gallons",
                               "Filters Cleaned", "Notes", "Performed By", "Logged At", "Status"];
 
 
-// Run from the editor (safe to run again): creates the maintenance tabs.
-function maintenanceSetup() {
-   const tabs = apiEnsureMaintTabs_();
-   Logger.log("Maintenance tabs ready: " + Object.keys(tabs).map(k => tabs[k].getName()).join(", "));
-}
-
+// Returns the maintenance tabs, creating any that are missing.
 function apiEnsureMaintTabs_() {
    const ss = apiSs_();
    let wc = ss.getSheetByName(MAINT_CONFIG.waterChangesSheetName);
@@ -42,6 +39,7 @@ function apiEnsureMaintTabs_() {
    return { waterChanges: wc };
 }
 
+// Date formats, Status dropdown and column widths for a new Water Changes tab.
 function apiFormatWaterChangesTab_(sh) {
    sh.getRange("C2:C").setNumberFormat("m/d/yyyy h:mm am/pm");
    sh.getRange("I2:I").setNumberFormat("m/d/yyyy h:mm am/pm");
@@ -50,6 +48,7 @@ function apiFormatWaterChangesTab_(sh) {
    sh.setColumnWidth(3, 150); sh.setColumnWidth(6, 140); sh.setColumnWidth(7, 280);
 }
 
+// Maintenance data for the app's startup load.
 function apiMaintBootstrap_(user) {
    const tabs = apiEnsureMaintTabs_();
    return { waterChanges: apiReadSheetRows_(tabs.waterChanges, "Water Change ID") };
@@ -67,6 +66,7 @@ function apiTankFilters_(tankId) {
       .map(a => a["Item ID"]);
 }
 
+// Admins, or the person who logged the entry, can correct or retire it.
 function apiCanCorrectBy_(user, who) {
    return user.role === "Admin" || (!!who && who === apiWho_(user));
 }
@@ -87,6 +87,8 @@ function apiWaterChangeAmounts_(tank, pctIn, galIn) {
    return { pct: pct, gal: gal };
 }
 
+// Checks that each filter ID is a filter assigned to the tank (keep: IDs already on the
+// entry, allowed even if since moved) and returns them comma-separated.
 function apiCleanFilters_(tankId, list, keep) {
    const allowed = apiTankFilters_(tankId).concat(keep || []);
    const out = [];
@@ -121,6 +123,7 @@ function apiLogWaterChange_(req, user) {
    return { id: id };
 }
 
+// A Water Changes row by ID, or NOT_FOUND.
 function apiFindWaterChange_(tabs, id) {
    const row = apiReadSheetRows_(tabs.waterChanges, "Water Change ID").find(r => r["Water Change ID"] === id);
    if (!row) throw apiError_("NOT_FOUND", "That water change no longer exists.");
@@ -150,6 +153,7 @@ function apiUpdateWaterChange_(req, user) {
    return { updated: changes.length };
 }
 
+// Retires (or, with req.restore, restores) a water change entry.
 function apiRetireWaterChange_(req, user) {
    const tabs = apiEnsureMaintTabs_();
    const row = apiFindWaterChange_(tabs, req.id);

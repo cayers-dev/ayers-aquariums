@@ -8,6 +8,7 @@
 // Script Properties and add:
 //   GEMINI_API_KEY   the key from aistudio.google.com
 //   GEMINI_MODEL     (optional) model to use; default below
+// To check the key later, run aiTest() from the editor.
 //
 // Free tier notes: Google Search isn't available to these models on
 // the free tier, so answers come from the model's own knowledge plus
@@ -19,6 +20,7 @@
 // and you review them before saving.
 // ============================================================
 
+// Model choice and limits for the Gemini calls.
 const AI_CONFIG = {
    // gemini-3.5-flash answers reliably on the free tier; the newer Flash models
    // are often "busy" there. Set GEMINI_MODEL to try another one.
@@ -60,17 +62,6 @@ function aiTest() {
 }
 
 
-// Run from the editor: tries Fill with AI on a sample species and a
-// sample piece of equipment, and logs what came back.
-function aiTestFill() {
-   const admin = apiGetUsers_().find(u => u.role === "Admin" && u.active);
-   const sp = apiAiFill_({ table: "species", values: { "Common Name": "Cherry Shrimp" }, findPhoto: true }, admin);
-   Logger.log("Species (" + sp.model + "): " + JSON.stringify(sp));
-   const eq = apiAiFill_({ table: "equipment", values: { "Manufacturer": "Fluval", "Filter Model": "407" } }, admin);
-   Logger.log("Equipment (" + eq.model + "): " + JSON.stringify(eq));
-}
-
-
 // ------------------------------------------------------------
 // Gemini
 // ------------------------------------------------------------
@@ -80,10 +71,12 @@ function aiKey_() {
    return key.trim();
 }
 
+// The model to use: GEMINI_MODEL from Script Properties, else the default above.
 function aiModel_() {
    return (PropertiesService.getScriptProperties().getProperty("GEMINI_MODEL") || AI_CONFIG.defaultModel).trim();
 }
 
+// The model that answered the most recent request (shown in the app's AI notes).
 let AI_LAST_MODEL = "";
 
 // Sends parts ([{text}|{inline_data}]) and returns the parsed JSON reply.
@@ -109,8 +102,11 @@ function aiGenerateJson_(parts) {
    throw lastErr;
 }
 
+// One request to one model. Busy/out-of-quota errors are marked so the caller can try the next model.
+// noThinking: resend without the thinking setting if a model doesn't support it.
 function aiGenerateOnce_(parts, model, noThinking) {
    const key = aiKey_();
+   // Ask for JSON back; low thinking keeps answers quick.
    const body = {
       contents: [{ role: "user", parts: parts }],
       generationConfig: { temperature: 0.2, responseMimeType: "application/json", thinkingConfig: { thinkingLevel: "low" } }
@@ -125,6 +121,7 @@ function aiGenerateOnce_(parts, model, noThinking) {
    } catch (e) {
       throw apiError_("AI_ERROR", "Couldn't reach the AI service. Try again.");
    }
+   // Turn Google's error codes into messages the app can show.
    const code = res.getResponseCode();
    const text = res.getContentText();
    if (code !== 200) {
@@ -141,6 +138,7 @@ function aiGenerateOnce_(parts, model, noThinking) {
       if (code >= 500) throw apiError_("AI_ERROR", "The AI service had a problem. Try again in a moment.");
       throw apiError_("AI_ERROR", "The AI couldn't answer: " + (msg || "HTTP " + code));
    }
+   // The answer text is in the first candidate (thinking parts are skipped).
    const json = JSON.parse(text);
    const cand = (json.candidates || [])[0];
    if (!cand || !cand.content) {
@@ -151,6 +149,7 @@ function aiGenerateOnce_(parts, model, noThinking) {
    return aiParseJson_(out);
 }
 
+// Reads the model's reply as JSON (tolerates ``` fences or text around the object).
 function aiParseJson_(s) {
    s = String(s || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
    try { return JSON.parse(s); } catch (e) { /* try the outermost object */ }
@@ -161,6 +160,7 @@ function aiParseJson_(s) {
    throw apiError_("AI_ERROR", "The AI's answer couldn't be read. Try again.");
 }
 
+// Only admins and editors may use the AI (viewers can't add or edit records).
 function aiRequireUser_(user) {
    if (user.role !== "Admin" && user.role !== "Editor") throw apiError_("FORBIDDEN", "Only admins and editors can use the AI.");
 }
@@ -273,6 +273,7 @@ function apiAiFill_(req, user) {
    const current = req.values || {};
    const isBlank = v => v === undefined || v === null || String(v).trim() === "";
 
+   // Fields the AI may fill: not IDs, links, dates, checkboxes or purchase details.
    const fillable = schema.filter(f => !f.readOnly && f.type !== "url" && f.type !== "date" && f.type !== "boolean" &&
                                        AI_SKIP_FIELDS.indexOf(f.name) === -1 && !/URL$|Link$|Page$/.test(f.name));
    const blanks = fillable.filter(f => isBlank(current[f.name]));
@@ -296,6 +297,7 @@ function apiAiFill_(req, user) {
       if (wiki) { refs += "\n\nREFERENCE (Wikipedia: " + wiki.title + "):\n" + wiki.text; sources.push({ title: "Wikipedia: " + wiki.title, url: wiki.url }); }
    }
 
+   // Existing rows show the AI the expected style; list fields get their allowed values.
    const examples = aiExampleRows_(table, fillable.map(f => f.name));
    const fieldLines = blanks.map(f => {
       let line = "- \"" + f.name + "\"";
@@ -306,6 +308,7 @@ function apiAiFill_(req, user) {
       return line;
    }).join("\n");
 
+   // The instructions sent to the AI, followed by any reference text.
    const prompt =
       "You fill in records for a home aquarium database. Item type: " + cfg.kind + ".\n" +
       "What the user has entered so far:\n" + JSON.stringify(known, null, 1) + "\n\n" +
@@ -320,6 +323,7 @@ function apiAiFill_(req, user) {
       "\"confidence\": \"High\" | \"Medium\" | \"Low\", \"fields\": {\"<field name>\": value or null}, \"notes\": \"one or two short caveats, or empty\"}" +
       refs;
 
+   // Ask, then keep only valid suggestions for fields that were blank.
    const ai = aiGenerateJson_([{ text: prompt }]);
    const suggestions = aiCleanSuggestions_(blanks, ai.fields || {});
    const out = {
@@ -350,6 +354,8 @@ function aiExampleRows_(table, fields) {
    });
 }
 
+// Keeps only usable suggestions: numbers for number fields, exact list values for
+// strict dropdowns, matching spelling for other lists, trimmed text.
 function aiCleanSuggestions_(fields, raw) {
    const out = {};
    fields.forEach(f => {
@@ -386,10 +392,12 @@ function apiAiIdentify_(req, user) {
    aiRequireUser_(user);
    const img = req.image || {};
    if (!img.data) throw apiError_("INVALID", "Add a photo first.");
+   // Accept only JPEG/PNG/WebP photos under ~6 MB.
    const mimeType = /^image\/(jpeg|png|webp)$/.test(String(img.mimeType)) ? img.mimeType : "image/jpeg";
    const data = String(img.data).replace(/^data:[^,]*,/, "");
    if (data.length > 8 * 1024 * 1024) throw apiError_("INVALID", "That photo is too large.");
    const hint = AI_TABLES[req.typeHint] ? "The user expects it to be: " + AI_TABLES[req.typeHint].kind + ".\n" : "";
+   // Ask the AI what the photo shows, as JSON.
    const prompt =
       "Identify the aquarium item in this photo for a home aquarium database.\n" + hint +
       "It may be a live animal, a plant, equipment (often a box, label or store tag), or a medication bottle.\n" +
@@ -400,6 +408,7 @@ function apiAiIdentify_(req, user) {
       "\"confidence\": \"High\" | \"Medium\" | \"Low\", \"alternatives\": [{\"name\": \"\", \"scientificName\": \"\"}] (up to 3, only if unsure), " +
       "\"notes\": \"short: what you saw / why unsure\"}";
    const ai = aiGenerateJson_([{ text: prompt }, { inline_data: { mime_type: mimeType, data: data } }]);
+   // Clean up the answer before sending it to the app.
    const s = v => String(v || "").trim().slice(0, 200);
    return {
       type: AI_TABLES[ai.type] ? ai.type : "",
