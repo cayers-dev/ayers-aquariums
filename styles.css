@@ -383,3 +383,4 @@ a.btn { text-decoration: none; }
 .wt-lim { text-align: right; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .wt-tr.is-off .wt-val, .wt-tr.is-bad .wt-val { border-color: var(--danger); color: var(--danger); }
 .wt-tr.is-ok .wt-val { border-color: var(--good); }
+.pill-stack { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex: none; }

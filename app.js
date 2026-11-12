@@ -1331,6 +1331,23 @@
     if (rg.max !== null && v > rg.max) return { result: "High", by: v - rg.max, limit: rg.max };
     return { result: "In range" };
   }
+  // Counts readings by result: out of range, in range, and no range set.
+  function resultCounts(rows) {
+    const c = { off: 0, ok: 0, none: 0 };
+    rows.forEach(r => {
+      if (r["Result"] === "High" || r["Result"] === "Low") c.off++;
+      else if (r["Result"] === "In range") c.ok++;
+      else c.none++;
+    });
+    return c;
+  }
+  function countPills(c) {
+    const p = [];
+    if (c.off) p.push('<span class="pill bad">' + c.off + ' out of range</span>');
+    if (c.ok) p.push('<span class="pill good">✓ ' + (c.off || c.none ? c.ok + " in range" : "All in range") + '</span>');
+    if (c.none) p.push('<span class="pill">' + c.none + ' no range</span>');
+    return p.length ? '<div class="pill-stack">' + p.join("") + '</div>' : "";
+  }
   function resultPill(result) {
     if (result === "High") return '<span class="pill bad">▲ High</span>';
     if (result === "Low") return '<span class="pill bad">▼ Low</span>';
@@ -1434,11 +1451,11 @@
     const sessHtml = '<div class="section"><div class="section-head"><h3>Recent tests (' + sessions.length + ')</h3></div><div class="card list">' +
       (sessions.map(s => {
         const rs = state.waterTests.filter(r => r["Session ID"] === s["Session ID"] && isLive(r));
-        const off = rs.filter(r => r["Result"] === "High" || r["Result"] === "Low").length;
+        const c = resultCounts(rs);
         return '<div class="list-item" data-act="water-session" data-id="' + esc(s["Session ID"]) + '"><div class="body">' +
           '<div class="title">' + esc(fmtDT(s["Tested At"])) + '</div>' +
           '<div class="sub">' + esc([rs.length + " reading" + (rs.length === 1 ? "" : "s"), personName(s["Tested By"]), s["Notes"]].filter(Boolean).join(" · ")) + '</div></div>' +
-          (off ? '<span class="pill bad">' + off + ' out of range</span>' : rs.length ? '<span class="pill good">✓ All OK</span>' : "") + '</div>';
+          countPills(c) + '</div>';
       }).join("") || '<div class="empty">No tests in the last ' + state.waterDays + ' days</div>') + '</div></div>';
     return {
       title: "Test · " + tankName(tankId),
@@ -1586,7 +1603,12 @@
           state.waterTank = tank; try { localStorage.setItem("aa_water_tank", tank); } catch (e) { /* ignore */ }
           render();
           if (res.outOfRange && res.outOfRange.length) setTimeout(() => waterAlertSheet(tank, res.outOfRange, readingsOut.length), 50);
-          else toast(readingsOut.length + " reading" + (readingsOut.length === 1 ? "" : "s") + " saved · all in range");
+          else {
+            const none = readingsOut.filter(r => { const t = findType(r.testTypeId); const rg = rangeFor(tank, t); return rg.min === null && rg.max === null; }).length;
+            const ok = readingsOut.length - none;
+            toast(readingsOut.length + " reading" + (readingsOut.length === 1 ? "" : "s") + " saved · " +
+                  [ok ? ok + " in range" : "", none ? none + " no range set" : ""].filter(Boolean).join(", "));
+          }
           return true;
         } catch (err) {
           if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) { handleError(err); return true; }
@@ -1832,7 +1854,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "13";
+  const APP_VERSION = "14";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
