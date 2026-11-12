@@ -166,7 +166,13 @@ function aiRequireUser_(user) {
 // Reference text (fetched by this script, so the AI has a source)
 // ------------------------------------------------------------
 function aiFetchJson_(url) {
-   const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, headers: { "Api-User-Agent": AI_CONFIG.userAgent } });
+   let res;
+   try {
+      res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, headers: { "Api-User-Agent": AI_CONFIG.userAgent } });
+   } catch (e) {
+      console.error("Fetch failed: " + url + " " + e);
+      return null;
+   }
    if (res.getResponseCode() !== 200) return null;
    try { return JSON.parse(res.getContentText()); } catch (e) { return null; }
 }
@@ -183,7 +189,7 @@ function aiWikipedia_(names, kind) {
                                   encodeURIComponent(q + hint));
       const hit = search && search.query && search.query.search && search.query.search[0];
       if (!hit) continue;
-      const page = aiFetchJson_("https://en.wikipedia.org/w/api.php?action=query&format=json&redirects=1&prop=extracts|pageimages|info" +
+      const page = aiFetchJson_("https://en.wikipedia.org/w/api.php?action=query&format=json&redirects=1&prop=extracts%7Cpageimages%7Cinfo" +
                                 "&explaintext=1&piprop=original&inprop=url&titles=" + encodeURIComponent(hit.title));
       const pages = page && page.query && page.query.pages;
       const p = pages && pages[Object.keys(pages)[0]];
@@ -199,7 +205,7 @@ function aiWikipedia_(names, kind) {
 // file isn't on Wikimedia Commons or its license is unknown).
 function aiCommonsImage_(fileName) {
    if (!fileName) return null;
-   const info = aiFetchJson_("https://commons.wikimedia.org/w/api.php?action=query&format=json&prop=imageinfo&iiprop=extmetadata|url&titles=" +
+   const info = aiFetchJson_("https://commons.wikimedia.org/w/api.php?action=query&format=json&prop=imageinfo&iiprop=extmetadata%7Curl&titles=" +
                              encodeURIComponent("File:" + fileName));
    const pages = info && info.query && info.query.pages;
    const p = pages && pages[Object.keys(pages)[0]];
