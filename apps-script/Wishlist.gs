@@ -94,21 +94,35 @@ function apiEnsureWishColumn_() {
    return col;
 }
 
-// Adds "Wishlist" to the Status list on DropDownOptions.
+// Adds "Wishlist" to the Status list: a row on the Lookups tab (which
+// feeds DropDownOptions), and to the Status dropdown rules on the
+// Species, Plants and Equipment tabs.
 function apiEnsureWishlistStatus_() {
-   const sheet = apiSs_().getSheetByName("DropDownOptions");
-   if (!sheet) return false;
-   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => String(h).trim());
-   const col = headers.indexOf("Status") + 1;
-   if (!col) return false;
-   const values = sheet.getRange(1, col, Math.max(sheet.getLastRow(), 1), 1).getValues().map(r => String(r[0]).trim());
-   if (values.slice(1).some(v => v.toLowerCase() === "wishlist")) return false;
-   let last = 0;
-   values.forEach((v, i) => { if (i > 0 && v !== "") last = i; });
-   const target = last + 2;
-   if (target > sheet.getMaxRows()) sheet.insertRowAfter(sheet.getMaxRows());
-   sheet.getRange(target, col).setValue("Wishlist");
-   return true;
+   let added = false;
+   const lookups = apiSs_().getSheetByName("Lookups");
+   if (lookups) {
+      const rows = lookups.getDataRange().getValues();
+      if (!rows.some(r => String(r[0]).trim() === "Status" && String(r[1]).trim().toLowerCase() === "wishlist")) {
+         apiAppendRow_(lookups, { "Lookup Type": "Status", "Value": "Wishlist",
+                                  "Description": "On the wishlist; not owned yet.", "Inactive": false });
+         added = true;
+      }
+   }
+   WISH_CONFIG.types.forEach(t => {
+      const sheet = apiSheet_(API_TABLES[t].sheetKey);
+      const col = apiHeaderMap_(sheet).map["status"];
+      if (!col || sheet.getMaxRows() < 2) return;
+      const range = sheet.getRange(2, col, sheet.getMaxRows() - 1, 1);
+      const rule = range.getCell(1, 1).getDataValidation();
+      if (!rule || rule.getCriteriaType() !== SpreadsheetApp.DataValidationCriteria.VALUE_IN_LIST) return;
+      const args = rule.getCriteriaValues();
+      const list = (args[0] || []).slice();
+      if (list.some(v => String(v).toLowerCase() === "wishlist")) return;
+      list.push("Wishlist");
+      range.setDataValidation(rule.copy().requireValueInList(list, args[1] !== false).build());
+      added = true;
+   });
+   return added;
 }
 
 function apiItemPhotosFolder_() {
