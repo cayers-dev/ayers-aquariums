@@ -58,6 +58,17 @@ function aiTest() {
 }
 
 
+// Run from the editor: tries Fill with AI on a sample species and a
+// sample piece of equipment, and logs what came back.
+function aiTestFill() {
+   const admin = apiGetUsers_().find(u => u.role === "Admin" && u.active);
+   const sp = apiAiFill_({ table: "species", values: { "Common Name": "Cherry Shrimp" }, findPhoto: true }, admin);
+   Logger.log("Species (" + sp.model + "): " + JSON.stringify(sp));
+   const eq = apiAiFill_({ table: "equipment", values: { "Manufacturer": "Fluval", "Filter Model": "407" } }, admin);
+   Logger.log("Equipment (" + eq.model + "): " + JSON.stringify(eq));
+}
+
+
 // ------------------------------------------------------------
 // Gemini
 // ------------------------------------------------------------
@@ -76,7 +87,11 @@ let AI_LAST_MODEL = "";
 // Sends parts ([{text}|{inline_data}]) and returns the parsed JSON reply.
 // Falls back to other Flash models when one is busy or out of free quota.
 function aiGenerateJson_(parts) {
-   const models = [aiModel_()].concat(AI_CONFIG.fallbackModels.filter(m => m !== aiModel_()));
+   const cache = CacheService.getScriptCache();
+   const all = [aiModel_()].concat(AI_CONFIG.fallbackModels.filter(m => m !== aiModel_()));
+   // A model that was just busy is skipped for a while (busy calls can take ~40 seconds to fail).
+   const ready = all.filter(m => !cache.get("ai_busy_" + m));
+   const models = ready.length ? ready : all;
    let lastErr = null;
    for (let i = 0; i < models.length; i++) {
       try {
@@ -86,6 +101,7 @@ function aiGenerateJson_(parts) {
       } catch (e) {
          lastErr = e;
          if (!e.aiRetry) throw e;
+         cache.put("ai_busy_" + models[i], "1", 900);
       }
    }
    throw lastErr;
