@@ -331,6 +331,9 @@ function apiAdd_(req, user) {
       values["Active"] = true;
       if (!values["Date Added"]) values["Date Added"] = new Date();
       delete values["Date Removed"];
+      // Equipment can only be in one tank at a time: moving it ends the
+      // other assignment (after the person confirms in the app).
+      apiMoveEquipmentIfNeeded_(req, user, tankId, itemId, values["Date Added"]);
       const row = apiAppendRow_(apiSheet_(def.sheetKey), values);
       apiLog_(user, "Add", def.label, tankId + " / " + itemId, apiDescribe_(values));
       return { added: { table: table, row: row } };
@@ -391,6 +394,12 @@ function apiUpdate_(req, user) {
 
    const merged = Object.assign({}, record, values);
    apiCheckRequired_(def, merged);
+   if (table === "assignments" && merged["Active"] === true && !merged["Date Removed"] &&
+       !(record["Active"] === true && !record["Date Removed"]) && apiFindById_("equipment", record["Item ID"])) {
+      const other = apiActiveEquipmentElsewhere_(record["Item ID"], record["Tank ID"])[0];
+      if (other) throw apiError_("INVALID", record["Item ID"] + " is already in " + other["Tank ID"] + " " + apiTankName_(other["Tank ID"]) +
+                                 ". Remove it from there first.");
+   }
    const changes = apiWriteChanges_(apiSheet_(def.sheetKey), record._row, record, values);
    if (changes.length) apiLog_(user, "Edit", def.label, recordLabel, changes.join("; "));
    return { updated: changes.length };
@@ -406,6 +415,39 @@ function apiRetire_(req, user) {
    const changes = apiWriteChanges_(apiSheet_(def.sheetKey), record._row, record, { "Status": "Retired" });
    if (changes.length) apiLog_(user, "Retire", def.label, record[def.id], changes.join("; "));
    return { updated: changes.length };
+}
+
+function apiTankName_(tankId) {
+   const t = apiFindById_("tanks", tankId);
+   return t ? t["Tank Name"] : "";
+}
+
+function apiActiveEquipmentElsewhere_(itemId, tankId) {
+   return apiReadTable_("assignments").rows.filter(r =>
+      r["Item ID"] === itemId && r["Tank ID"] !== tankId && r["Active"] === true && !r["Date Removed"]);
+}
+
+// req.confirmMove must be true to take equipment out of another tank.
+function apiMoveEquipmentIfNeeded_(req, user, tankId, itemId, dateAdded) {
+   if (!apiFindById_("equipment", itemId)) return;
+   const others = apiActiveEquipmentElsewhere_(itemId, tankId);
+   if (!others.length) return;
+   const where = others.map(r => r["Tank ID"] + " " + apiTankName_(r["Tank ID"])).join(", ");
+   others.forEach(r => {
+      if (!apiCanEditTank_(user, r["Tank ID"])) {
+         throw apiError_("FORBIDDEN", itemId + " is in " + where + ", which you don't manage. Ask an admin to move it.");
+      }
+   });
+   if (req.confirmMove !== true) {
+      throw apiError_("IN_OTHER_TANK", itemId + " is currently in " + where + ". Remove it from there first.");
+   }
+   const sheet = apiSheet_("tankAssignments");
+   const date = dateAdded instanceof Date ? dateAdded : (dateAdded ? apiParseDate_(dateAdded) : new Date());
+   others.forEach(r => {
+      const changes = apiWriteChanges_(sheet, r._row, r, { "Date Removed": date, "Active": false });
+      apiLog_(user, "Move (removed from tank)", "Tank Assignments", r["Tank ID"] + " / " + itemId,
+              changes.join("; ") + " — moved to " + tankId + " " + apiTankName_(tankId));
+   });
 }
 
 function apiRemoveAssignment_(req, user) {

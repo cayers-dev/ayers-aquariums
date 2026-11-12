@@ -852,6 +852,15 @@
     document.addEventListener("click", e => { if (!root.contains(e.target)) close(); }, true);
   }
 
+  // Tanks (other than this one) where a piece of equipment is currently active.
+  function equipmentElsewhere(itemId, tankId) {
+    const seen = {}, out = [];
+    state.data.assignments.filter(a => a["Item ID"] === itemId && a["Tank ID"] !== tankId && isActiveAssignment(a))
+      .concat((state.otherAssignments || []).filter(a => a["Item ID"] === itemId && a["Tank ID"] !== tankId))
+      .forEach(a => { if (!seen[a["Tank ID"]]) { seen[a["Tank ID"]] = true; out.push({ id: a["Tank ID"], name: a["Tank Name"] || tankName(a["Tank ID"]) }); } });
+    return out;
+  }
+
   function assignmentForm(tankId) {
     const inTank = new Set(tankAssignments(tankId, true).map(a => a["Item ID"]));
     const items = [];
@@ -862,8 +871,9 @@
         .sort((a, b) => String(T.title(a)).localeCompare(String(T.title(b))))
         .forEach(r => {
           const there = inTank.has(r[T.id]);
+          const other = (!there && ty === "equipment") ? equipmentElsewhere(r[T.id], tankId) : [];
           items.push({ value: r[T.id], label: T.title(r), sub: T.sub(r), group: T.label, img: T.img(r),
-                       disabled: there, note: there ? "In tank" : "" });
+                       disabled: there, note: there ? "In tank" : (other.length ? "In " + other.map(o => o.name).join(", ") : "") });
         });
     });
     openSheet({
@@ -875,7 +885,31 @@
         fieldHtml({ name: "Notes", type: "longtext" }, "") +
         '<p class="hint">Only admins can add new species, equipment or plants to the lists. Ask Chris if something is missing.</p>',
       onReady: form => $$("[data-combo]", form).forEach(wireCombo),
-      onSubmit: vals => write("add", { table: "assignments", values: { "Tank ID": tankId, "Item ID": vals["Item ID"], "Date Added": vals["Date Added"], "Notes": vals["Notes"] } }, "Added to tank")
+      onSubmit: vals => {
+        const payload = { table: "assignments", values: { "Tank ID": tankId, "Item ID": vals["Item ID"], "Date Added": vals["Date Added"], "Notes": vals["Notes"] } };
+        const other = equipmentElsewhere(vals["Item ID"], tankId);
+        if (!other.length) return write("add", payload, "Added to tank");
+        const label = vals["Item ID"] + " " + TYPES.equipment.title(findRec("equipment", vals["Item ID"]) || {});
+        const where = other.map(o => o.id + " " + o.name).join(", ");
+        if (!other.every(o => canEditTank(o.id))) throw new Error(label + " is in " + where + ", which you don’t manage. Ask an admin to move it.");
+        confirmMoveSheet(label, where, tankId, payload);
+        return false;   // keep the form open underneath until the move is confirmed
+      }
+    });
+  }
+
+  // Equipment can only be in one tank: confirm taking it out of the other tank first.
+  function confirmMoveSheet(label, where, tankId, payload) {
+    openSheet({
+      title: "Move equipment?",
+      submitLabel: "Yes, move it",
+      body: '<p><b>' + esc(label) + '</b> is currently in <b>' + esc(where) + '</b>.</p>' +
+        '<p>Remove it from ' + esc(where) + ' (marked inactive, Date Removed ' + esc(fmtDate(payload.values["Date Added"]) || "today") + ') and add it to <b>' + esc(tankId + " " + tankName(tankId)) + '</b>?</p>',
+      onSubmit: async () => {
+        const ok = await write("add", Object.assign({ confirmMove: true }, payload), "Moved to " + tankName(tankId));
+        $$(".sheet-backdrop").forEach(b => b.remove()); document.body.style.overflow = "";
+        return ok;
+      }
     });
   }
 
@@ -2121,7 +2155,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "16";
+  const APP_VERSION = "17";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
