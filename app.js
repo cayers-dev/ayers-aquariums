@@ -1375,8 +1375,16 @@
     ticks.filter((v, i, arr) => arr.indexOf(v) === i).forEach(v => {
       svg += '<text class="tick" x="' + (L - 4) + '" y="' + (y(v) + 3).toFixed(1) + '" text-anchor="end">' + esc(fmtNum(Math.round(v * 100) / 100)) + '</text>';
     });
-    svg += '<text class="tick" x="' + L + '" y="' + (H - 4) + '">' + esc(cut.toLocaleDateString(undefined, { month: "short", day: "numeric" })) + '</text>';
-    svg += '<text class="tick" x="' + (W - R) + '" y="' + (H - 4) + '" text-anchor="end">Today</text>';
+    // Date labels along the bottom: 4 on the small cards, 6 on the big chart, evenly spaced.
+    const nTicks = big ? 6 : 4;
+    const longSpan = (now - cut) > 300 * 864e5;
+    for (let i = 0; i < nTicks; i++) {
+      const d = new Date(cut.getTime() + (now - cut) * i / (nTicks - 1));
+      const tx = x(d);
+      const label = i === nTicks - 1 ? "Today" : d.toLocaleDateString(undefined, longSpan ? { month: "short", year: "2-digit" } : { month: "short", day: "numeric" });
+      if (i > 0 && i < nTicks - 1) svg += '<line class="grid" x1="' + tx.toFixed(1) + '" x2="' + tx.toFixed(1) + '" y1="' + T + '" y2="' + (H - B) + '"/>';
+      svg += '<text class="tick" x="' + tx.toFixed(1) + '" y="' + (H - 4) + '" text-anchor="' + (i === 0 ? "start" : i === nTicks - 1 ? "end" : "middle") + '">' + esc(label) + '</text>';
+    }
     if (points.length > 1) {
       svg += '<path class="line" d="' + points.map((p, i) => (i ? "L" : "M") + x(p._t).toFixed(1) + " " + y(num(p["Value"])).toFixed(1)).join(" ") + '"/>';
     }
@@ -1824,7 +1832,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "12";
+  const APP_VERSION = "13";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
