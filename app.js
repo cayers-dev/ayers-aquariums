@@ -950,7 +950,8 @@
       onReady: form => $$("[data-combo]", form).forEach(wireCombo),
       onSubmit: vals => {
         const payload = { table: "assignments", values: { "Tank ID": tankId, "Item ID": vals["Item ID"], "Date Added": vals["Date Added"], "Notes": vals["Notes"] } };
-        const other = equipmentElsewhere(vals["Item ID"], tankId);
+        // Only equipment is limited to one tank; species and plants can be in several tanks.
+        const other = itemType(vals["Item ID"]) === "equipment" ? equipmentElsewhere(vals["Item ID"], tankId) : [];
         if (!other.length) return write("add", payload, "Added to tank");
         const label = vals["Item ID"] + " " + TYPES.equipment.title(findRec("equipment", vals["Item ID"]) || {});
         const where = other.map(o => o.id + " " + o.name).join(", ");
@@ -2735,7 +2736,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "18";
+  const APP_VERSION = "19";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
