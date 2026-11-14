@@ -390,10 +390,13 @@ function apiAiFill_(req, user) {
    const blanks = fillable.filter(f => isBlank(current[f.name]));
    const known = {};
    schema.forEach(f => { if (!isBlank(current[f.name])) known[f.name] = String(current[f.name]).trim(); });
+   // Entered values the AI may correct when a credible source contradicts them: text and
+   // dropdown fields (names included), not numbers. A value ending in * was already corrected.
+   const checkable = fillable.filter(f => f.type !== "number" && !isBlank(current[f.name]) && !/\*\s*$/.test(String(current[f.name])));
    const name = table === "equipment" ? [known["Manufacturer"], known["Filter Model"]].filter(Boolean).join(" ")
               : (known[cfg.name] || known["Common Name"] || known["Scientific Name"] || known["Product Name"]);
    if (!name) throw apiError_("INVALID", "Type a name first" + (table === "equipment" ? " (brand and model)" : "") + ".");
-   if (!blanks.length) return { suggestions: {}, sources: [], notes: "Every field already has a value.", filled: 0 };
+   if (!blanks.length && !checkable.length) return { suggestions: {}, sources: [], notes: "Every field already has a value.", filled: 0 };
 
    // Reference text. Species and plants: credible sources only (FishBase, Seriously Fish,
    // SeaLifeBase, Tropica). Wikipedia is used for the photo, and for information only
@@ -421,6 +424,12 @@ function apiAiFill_(req, user) {
    }
    const credibleLabels = sources.filter(x => !/^Wikipedia:/.test(x.title)).map(x => x.title);
 
+   // Nothing blank and no credible source to check entered values against: nothing to do.
+   if (!blanks.length && !credible) {
+      return { suggestions: {}, corrections: {}, sources: sources, filled: 0, fallback: fallback,
+               notes: "Every field already has a value, and no credible source was found to check them against." };
+   }
+
    // Existing rows show the AI the expected style; list fields get their allowed values.
    const examples = aiExampleRows_(table, fillable.map(f => f.name));
    const fieldLines = blanks.map(f => {
@@ -436,7 +445,7 @@ function apiAiFill_(req, user) {
    const prompt =
       "You fill in records for a home aquarium database. Item type: " + cfg.kind + ".\n" +
       "What the user has entered so far:\n" + JSON.stringify(known, null, 1) + "\n\n" +
-      "Fill in ONLY these blank fields:\n" + fieldLines + "\n\n" +
+      (blanks.length ? "Fill in ONLY these blank fields:\n" + fieldLines + "\n\n" : "There are no blank fields to fill.\n\n") +
       (examples.length ? "Match the style, wording length and units of these existing records from the same list:\n" + JSON.stringify(examples, null, 1) + "\n\n" : "") +
       "Rules:\n" +
       "- Use temperatures in °F and sizes in inches (convert from °C / cm when needed).\n" +
@@ -447,10 +456,20 @@ function apiAiFill_(req, user) {
         : "- Prefer the reference text below when it covers a field; otherwise use well-established knowledge.\n") +
       "- If a value isn't reasonably certain, use null. Never invent model numbers, measurements or links.\n" +
       "- Keep text fields short, like the examples.\n" +
+      (credible && checkable.length
+        ? "- Also check these values the user entered: " + JSON.stringify(checkable.reduce((o, f) => { o[f.name] = String(current[f.name]).trim(); return o; }, {})) + ". " +
+          "Only if a reference page clearly contradicts one, put the corrected value in \"corrections\" with the reference name and a short reason. " +
+          "Don't correct wording, spelling style or format differences, or values the references don't address. " +
+          "Common names vary between sources: only correct a common name if it belongs to a different species than the one the references describe." +
+          (checkable.some(f => f.type === "list" && f.strict) ? " Dropdown fields must still use one of their allowed values: " +
+            JSON.stringify(checkable.filter(f => f.type === "list" && f.strict).reduce((o, f) => { o[f.name] = f.options; return o; }, {})) + "." : "") + "\n"
+        : "") +
       "- In \"fieldSources\", give for each filled field the exact reference name it came from (as written in quotes after REFERENCE), or \"AI knowledge\".\n" +
       "Reply with JSON only: {\"identified\": \"the exact item you filled in for (name, scientific name or brand + model)\", " +
       "\"confidence\": \"High\" | \"Medium\" | \"Low\", \"fields\": {\"<field name>\": value or null}, " +
-      "\"fieldSources\": {\"<field name>\": \"reference name\"}, \"notes\": \"one or two short caveats, or empty\"}" +
+      "\"fieldSources\": {\"<field name>\": \"reference name\"}, " +
+      "\"corrections\": {\"<field name>\": {\"value\": \"corrected value\", \"source\": \"reference name\", \"reason\": \"short\"}}, " +
+      "\"notes\": \"one or two short caveats, or empty\"}" +
       refs;
 
    // Ask, then keep only valid suggestions for fields that were blank.
@@ -466,9 +485,30 @@ function apiAiFill_(req, user) {
       fieldSources[f] = match || (fallback ? (src && /^Wikipedia/i.test(src) ? "Wikipedia" : "AI knowledge") : (src || "AI knowledge"));
    });
    const missing = credible ? blanks.map(f => f.name).filter(n => !(n in suggestions)) : [];
+   // Corrections to entered values: only when traced to a credible source. Text values get a
+   // trailing * so the sheet shows the AI changed them; dropdown values can't hold a *.
+   const corrections = {};
+   if (credible) {
+      const rawC = ai.corrections || {};
+      checkable.forEach(f => {
+         const c = rawC[f.name];
+         if (!c || typeof c !== "object") return;
+         const src = String(c.source || "").trim();
+         const label = credibleLabels.find(l => src && (src === l || src.indexOf(l) !== -1 || l.indexOf(src) !== -1));
+         if (!label) return;
+         const cleaned = aiCleanSuggestions_([f], { [f.name]: c.value })[f.name];
+         if (cleaned === undefined) return;
+         const before = String(current[f.name]).trim();
+         if (String(cleaned).trim().toLowerCase() === before.toLowerCase()) return;
+         const strict = f.type === "list" && f.strict;
+         corrections[f.name] = { from: before, to: strict ? cleaned : String(cleaned).replace(/\s*\*?\s*$/, "") + "*",
+                                 source: label, reason: String(c.reason || "").slice(0, 200) };
+      });
+   }
    const out = {
       suggestions: suggestions,
       fieldSources: fieldSources,
+      corrections: corrections,
       credible: credible,
       fallback: fallback,
       notFound: missing,

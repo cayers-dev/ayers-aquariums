@@ -1458,6 +1458,20 @@
           el.dispatchEvent(new Event("change", { bubbles: true }));
           n++;
         });
+        // Corrections to values you entered (a credible source disagreed). Text values end in *.
+        const fixed = [];
+        Object.keys(res.corrections || {}).forEach(name => {
+          const el = $$("[name]", scope).find(x => x.name === name);
+          const c = res.corrections[name];
+          if (!el) return;
+          if (el.tagName === "SELECT" && !$$("option", el).some(o => o.value === c.to || o.textContent === c.to)) return;
+          el.value = c.to;
+          el.classList.add("ai-corrected");
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          fixed.push('<div class="meta"><b>' + esc(name) + ':</b> “' + esc(c.from) + '” → “' + esc(c.to) + '” <span class="src">(' +
+                     esc(String(c.source).split(":")[0]) + (c.reason ? ": " + esc(c.reason) : "") + ')</span></div>');
+        });
         if (res.photo && opts.onPhoto) opts.onPhoto(res.photo);
         const srcs = (res.sources || []).map(s => '<a href="' + esc(s.url) + '" target="_blank" rel="noopener">' + esc(s.title) + '</a>').join(" · ");
         // Which fields came from which source.
@@ -1471,12 +1485,13 @@
         box.classList.toggle("unverified", !!res.fallback);
         box.innerHTML =
           (res.fallback ? '<div class="ai-warn">No credible source (FishBase, Seriously Fish, SeaLifeBase, Tropica) has a page for this, so these come from Wikipedia or the AI’s own knowledge. Verify before saving.</div>' : "") +
-          '<div><b>' + (n ? "Filled " + n + " field" + (n === 1 ? "" : "s") : "Nothing new to fill") + '</b>' +
+          '<div><b>' + (n ? "Filled " + n + " field" + (n === 1 ? "" : "s") : fixed.length ? "No blank fields filled" : "Nothing new to fill") + '</b>' +
             (res.identified ? ' for <b>' + esc(res.identified) + '</b>' : "") +
             (res.confidence ? ' <span class="pill ' + (res.confidence === "High" ? "good" : res.confidence === "Low" ? "bad" : "warn") + '">' + esc(res.confidence) + ' confidence</span>' : "") + '</div>' +
           (res.notes ? '<div class="meta">' + esc(res.notes) + '</div>' : "") +
           '<div class="meta">Sources: ' + (srcs || "none: from the AI’s own knowledge, so double-check") + '</div>' +
           perSource +
+          (fixed.length ? '<div class="ai-fixes"><div class="meta"><b>Corrected ' + fixed.length + ' value' + (fixed.length === 1 ? "" : "s") + ' you entered</b> (text marked with *):</div>' + fixed.join("") + '</div>' : "") +
           ((res.notFound || []).length ? '<div class="meta">Not in the sources, left blank: ' + esc(res.notFound.join(", ")) + '</div>' : "") +
           (res.photo && opts.onPhoto ? '<div class="meta">Thumbnail: free photo from <a href="' + esc(res.photo.page || res.photo.url) + '" target="_blank" rel="noopener">Wikimedia Commons</a> (' + esc(res.photo.license) + ').</div>' : "") +
           (n ? '<div class="meta">AI-filled fields are highlighted.</div>' : "");
@@ -1489,7 +1504,7 @@
         btn.disabled = false; label.textContent = "Fill with AI";
       }
     });
-    form.addEventListener("input", e => { if (e.isTrusted && e.target.classList) e.target.classList.remove("ai-filled"); });
+    form.addEventListener("input", e => { if (e.isTrusted && e.target.classList) e.target.classList.remove("ai-filled", "ai-unverified", "ai-corrected"); });
   }
 
 
@@ -2758,7 +2773,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "20";
+  const APP_VERSION = "21";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

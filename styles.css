@@ -457,3 +457,7 @@ input.ai-unverified, select.ai-unverified, textarea.ai-unverified { border-color
   .ai-warn { color: #f3c56b; }
   input.ai-unverified, select.ai-unverified, textarea.ai-unverified { box-shadow: 0 0 0 2px #3d2e10; }
 }
+input.ai-corrected, select.ai-corrected, textarea.ai-corrected { border-color: #b4367a; box-shadow: 0 0 0 2px #f8dceb; }
+.ai-fixes { border-top: 1px solid var(--border); padding-top: 6px; margin-top: 2px; }
+.ai-fixes .src { color: var(--muted); }
+@media (prefers-color-scheme: dark) { input.ai-corrected, select.ai-corrected, textarea.ai-corrected { border-color: #e48bbd; box-shadow: 0 0 0 2px #3b1a2c; } }
