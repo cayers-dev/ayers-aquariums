@@ -281,6 +281,7 @@
     state.wishes = r.wishes || [];
     state.compat = r.compat || [];
     state.photos = r.photos || [];
+    state.photosOn = Array.isArray(r.photos);   // false until the server has Photos.gs
     if (r.wishOptions) state.wishOptions = r.wishOptions;
   }
 
@@ -1291,7 +1292,7 @@
   const photosFor = id => state.photos.filter(p => p["Item ID"] === id)
     .sort((a, b) => String(a["Added At"]).localeCompare(String(b["Added At"])));
   function photosSection(type, r) {
-    if (PHOTO_TYPES.indexOf(type) === -1) return "";
+    if (PHOTO_TYPES.indexOf(type) === -1 || !state.photosOn) return "";
     const id = r[TYPES[type].id];
     const list = photosFor(id);
     if (!list.length && !isAdmin()) return "";
@@ -2962,7 +2963,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "27";
+  const APP_VERSION = "28";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
