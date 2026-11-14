@@ -452,6 +452,29 @@ function aiGbifHits_(json, typed, table) {
    return hits;
 }
 
+// GBIF's exact match for a scientific name: { sci (the accepted name), key }, or null when GBIF
+// doesn't know it as a species (or it's in the wrong kingdom, e.g. an animal for a plant).
+function aiGbifMatch_(name, table) {
+   let r = null;
+   try { r = JSON.parse(aiFetchHtml_("https://api.gbif.org/v1/species/match?strict=true&name=" + encodeURIComponent(name)) || "null"); } catch (e) { return null; }
+   if (!r || r.matchType !== "EXACT" || r.rank !== "SPECIES" || !r.species) return null;
+   if (r.kingdom !== (table === "plants" ? "Plantae" : "Animalia")) return null;
+   const b = aiBinomial_(r.species);
+   return b ? { sci: b.genus + " " + b.species, key: r.speciesKey || r.usageKey } : null;
+}
+
+// Other scientific names (synonyms) GBIF lists for a species, e.g. Java fern's older
+// name Microsorum pteropus, which is the name Tropica uses.
+function aiGbifSynonyms_(sci, table) {
+   const g = aiGbifMatch_(sci, table);
+   if (!g || !g.key) return [];
+   let r = null;
+   try { r = JSON.parse(aiFetchHtml_("https://api.gbif.org/v1/species/" + g.key + "/synonyms?limit=50") || "null"); } catch (e) { return []; }
+   const names = [g.sci];
+   ((r && r.results) || []).forEach(x => { const b = aiBinomial_(x.canonicalName); if (b && names.indexOf(b.genus + " " + b.species) === -1) names.push(b.genus + " " + b.species); });
+   return names;
+}
+
 function aiResolveName_(table, typed) {
    const out = { sci: "", how: "", source: null, choices: [], pages: {} };
    const q = encodeURIComponent(String(typed).trim());
@@ -483,14 +506,22 @@ function aiResolveName_(table, typed) {
       return out;
    }
    if (gbif.length > 1) { out.choices = gbif.slice(0, 8).map(h => ({ scientificName: h.sci, commonName: h.common, source: "GBIF" })); return out; }
-   // 3. Fallback: the Wikipedia article's title is often the scientific name; otherwise ask the AI.
+   // 3. Fallback: the Wikipedia article (its title, or the first scientific name in brackets in its
+   //    opening lines), accepted only if GBIF confirms it's a real species; otherwise ask the AI.
    const wiki = aiWikipediaFromJson_(aiFetchHtml_(aiWikipediaUrl_(typed, table)));
-   if (wiki) out.pages.wiki = wiki;
-   if (wiki && aiBinomial_(wiki.title)) {
-      const b = aiBinomial_(wiki.title);
-      out.sci = b.genus + " " + b.species; out.how = "fallback";
-      out.source = { title: "Wikipedia: " + wiki.title, url: wiki.url };
-      return out;
+   if (wiki && !/^List of|^Lists of/i.test(wiki.title)) {
+      out.pages.wiki = wiki;
+      const cands = [wiki.title];
+      const m = String(wiki.text).slice(0, 400).match(/\(([A-Z][a-z]+ [a-z][a-z\-]+)/);
+      if (m) cands.push(m[1]);
+      for (let i = 0; i < cands.length; i++) {
+         const g = aiBinomial_(cands[i]) ? aiGbifMatch_(cands[i], table) : null;
+         if (g) {
+            out.sci = g.sci; out.how = "fallback";
+            out.source = { title: "Wikipedia: " + wiki.title, url: wiki.url };
+            return out;
+         }
+      }
    }
    const ai = aiScientificName_(typed, table);
    if (ai) { out.sci = ai; out.how = "fallback"; }
@@ -517,7 +548,9 @@ function aiCredibleSources_(table, known, sci, pages, wantWiki) {
    const refs = [];
    const wikiName = aiBinomial_(sci) ? sci : known["Common Name"];
    if (table === "plants") {
-      const tUrl = aiTropicaUrl_([sci, known["Common Name"]]);
+      // Tropica may list the plant under an older scientific name: try GBIF's synonyms too.
+      let tUrl = aiTropicaUrl_([sci, known["Common Name"]]);
+      if (!tUrl) tUrl = aiTropicaUrl_(aiGbifSynonyms_(sci, table));
       const got = aiFetchAll_([tUrl, pages.wiki || !wantWiki ? null : aiWikipediaUrl_(wikiName, table)]);
       const t = tUrl ? aiTropicaPage_(tUrl, got[0]) : null;
       if (t) refs.push(t);
