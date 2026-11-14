@@ -12,9 +12,10 @@
 //
 // Free tier notes: Google Search isn't available to these models on
 // the free tier, so answers come from the model's own knowledge plus
-// reference text this script fetches itself (the Wikipedia article for
-// species and plants, or a product page link you provide). Google may
-// use free-tier requests to improve its products.
+// reference text this script fetches itself (FishBase, Seriously Fish,
+// SeaLifeBase, Tropica and Wikipedia for species and plants, or a product
+// page link you provide). Google may use free-tier requests to improve
+// its products.
 //
 // Nothing here writes to the sheet: suggestions go back to the app,
 // and you review them before saving.
@@ -29,7 +30,9 @@ const AI_CONFIG = {
    fallbackModels: ["gemini-flash-latest", "gemini-3.8-flash"],
    apiBase: "https://generativelanguage.googleapis.com/v1beta/models/",
    maxRefChars: 12000,
-   userAgent: "AyersAquariums/1.0 (Google Apps Script; personal aquarium database)"
+   userAgent: "AyersAquariums/1.0 (Google Apps Script; personal aquarium database)",
+   // Change this when the lookup changes, so lookups saved in the last 6 hours aren't reused.
+   cacheVersion: "2"
 };
 
 // Fields the AI never fills (links, IDs, dates, purchase details, status).
@@ -582,7 +585,8 @@ function apiAiFill_(req, user) {
    const t0 = Date.now();
    const vals = {};
    Object.keys(req.values || {}).sort().forEach(k => { const v = String(req.values[k] === null || req.values[k] === undefined ? "" : req.values[k]).trim(); if (v) vals[k] = v; });
-   const key = "aifill_" + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5,
+   // The key includes AI_CONFIG.cacheVersion, so saved results are dropped when the lookup logic changes.
+   const key = "aifill_" + AI_CONFIG.cacheVersion + "_" + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5,
       JSON.stringify([req.table, vals, req.link || "", !!req.findPhoto]), Utilities.Charset.UTF_8));
    const cache = CacheService.getScriptCache();
    const hit = cache.get(key);
@@ -635,8 +639,6 @@ function aiFill_(req) {
    }
    let wiki = null, nameHow = "typed", nameLabel = "", direct = {};
    if (table === "species" || table === "plants") {
-      // A scientific name typed into Common Name counts as the scientific name.
-      if (!aiBinomial_(sci) && aiBinomial_(known["Common Name"]) && /^[A-Z][a-z]+ [a-z\-]+$/.test(known["Common Name"])) sci = known["Common Name"];
       // Common name only: find the scientific name (trusted sources first).
       let pages = {};
       if (!aiBinomial_(sci) && known["Common Name"]) {
