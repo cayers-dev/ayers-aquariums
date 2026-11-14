@@ -139,10 +139,10 @@ function apiUploadReceipt_(req, user) {
    const bytes = Utilities.base64Decode(String(img.data).replace(/^data:[^,]*,/, ""));
    if (bytes.length > RECEIPTS_CONFIG.maxImageBytes) throw apiError_("INVALID", "That photo is too large.");
 
-   // Admins can assign records at upload time (optional).
+   // Records can be assigned at upload time (optional): admins any record, editors items in their tanks.
    const itemIds = (req.itemIds || []).map(s => String(s).trim()).filter(Boolean);
    if (itemIds.length) {
-      apiRequireAdmin_(user);
+      apiRequireLinkRights_(user, itemIds);
       apiCheckLinkTargets_(itemIds);
    }
 
@@ -244,17 +244,32 @@ function apiRetireReceipt_(req, user) {
 
 
 // ------------------------------------------------------------
-// Links (admins)
+// Links (admins; editors for items in their tanks, see apiRequireLinkRights_)
 // ------------------------------------------------------------
 function apiLinkReceipt_(req, user) {
-   apiRequireAdmin_(user);
+   apiRequireReceipts_(user);
    const tabs = apiEnsureReceiptTabs_();
    const rec = apiReadReceipts_().find(r => r["Receipt ID"] === req.id);
    if (!rec) throw apiError_("NOT_FOUND", "That receipt no longer exists.");
    const itemIds = (req.itemIds || []).map(s => String(s).trim()).filter(Boolean);
    if (!itemIds.length) throw apiError_("INVALID", "Choose at least one record to link.");
+   apiRequireLinkRights_(user, itemIds);
    apiCheckLinkTargets_(itemIds);
    return { linked: apiAddReceiptLinks_(tabs, rec["Receipt ID"], itemIds, user) };
+}
+
+// Who may link receipts to records: admins to any record; editors only to species,
+// equipment or plants that are currently in one of their tanks (from the item's page).
+function apiRequireLinkRights_(user, itemIds) {
+   if (user.role === "Admin") return;
+   if (user.role !== "Editor") throw apiError_("FORBIDDEN", "Only admins and editors can link receipts.");
+   const inMyTanks = {};
+   apiReadTable_("assignments").rows.forEach(a => {
+      if (a["Active"] === true && !a["Date Removed"] && user.tanks.indexOf(a["Tank ID"]) !== -1) inMyTanks[a["Item ID"]] = true;
+   });
+   itemIds.forEach(id => {
+      if (!inMyTanks[id]) throw apiError_("FORBIDDEN", id + " isn't in one of your tanks, so only an admin can link a receipt to it.");
+   });
 }
 
 // Throws if any ID isn't a tank, species, equipment, plant or medication.

@@ -600,7 +600,8 @@
       const rows = state.data.assignments.filter(a => a["Item ID"] === id && isActiveAssignment(a));
       const others = (state.otherAssignments || []).filter(a => a["Item ID"] === id);
       const total = rows.length + others.length;
-      inTanks = '<div class="section"><div class="section-head"><h3>In tanks (' + total + ')</h3></div><div class="card list">' +
+      const addBtn = canAddItemToTank(type, r) ? '<button class="btn small" data-act="item-to-tank" data-type="' + type + '" data-id="' + esc(id) + '">' + ICONS.plus + 'Add to tank</button>' : "";
+      inTanks = '<div class="section"><div class="section-head"><h3>In tanks (' + total + ')</h3>' + addBtn + '</div><div class="card list">' +
         (rows.map(a => '<a class="list-item" href="#/tank/' + encodeURIComponent(a["Tank ID"]) + '"><div class="body"><div class="title">' + esc(tankName(a["Tank ID"])) + '</div>' +
           '<div class="sub">' + esc([a["Tank ID"], a["Date Added"] ? "Added " + fmtDate(a["Date Added"]) : ""].filter(Boolean).join(" · ")) + '</div></div></a>').join("") +
          others.slice().sort((x, y) => String(x["Tank Name"]).localeCompare(String(y["Tank Name"]))).map(a =>
@@ -619,7 +620,7 @@
       '</div></div>';
     const wishes = state.wishes.filter(w => w["Item ID"] === id && wishIsOpen(w));
     const wishNote = wishes.length ? '<div class="section"><div class="card list">' + wishes.map(wishRow).join("") + '</div></div>' : "";
-    return { title: T.title(r), back: true, html: hero + photosSection(type, r) + wishNote + inTanks + receiptsSection(id) + detailsSection(type, r, "Details") };
+    return { title: T.title(r), back: true, html: hero + photosSection(type, r) + wishNote + inTanks + receiptsSection(id, canItemReceipts(type, r) ? type : "") + detailsSection(type, r, "Details") };
   }
 
   // ---------- Users (admin) ----------
@@ -887,6 +888,8 @@
       hidden.value = picked.join(",");
       opts.forEach(o => o.classList.toggle("on", picked.indexOf(o.dataset.value) !== -1));
     };
+    // A multi picker can start with choices already made (value="A,B").
+    if (mode === "multi" && hidden.value) { hidden.value.split(",").filter(Boolean).forEach(v => picked.push(v)); renderChips(); }
     const pick = o => {
       if (mode === "multi") {
         const i = picked.indexOf(o.dataset.value);
@@ -961,6 +964,91 @@
       .concat((state.otherAssignments || []).filter(a => a["Item ID"] === itemId && a["Tank ID"] !== tankId))
       .forEach(a => { if (!seen[a["Tank ID"]]) { seen[a["Tank ID"]] = true; out.push({ id: a["Tank ID"], name: a["Tank Name"] || tankName(a["Tank ID"]) }); } });
     return out;
+  }
+
+  // ---------- From an item's page: add it to a tank, upload or link a receipt ----------
+  // Tanks this person can add items to (Admins: all; Editors: their tanks), not retired.
+  const tanksICanAddTo = () => state.data.tanks.filter(t => !isRetired(t) && canEditTank(t["Tank ID"]))
+    .sort((a, b) => String(a["Tank Name"]).localeCompare(String(b["Tank Name"])));
+  function canAddItemToTank(type, r) {
+    return ITEM_TYPES.indexOf(type) !== -1 && !isWishItem(r) && !isRetired(r) && tanksICanAddTo().length > 0;
+  }
+  // Admins: any item. Editors: species, equipment or plants currently in one of their tanks.
+  function canItemReceipts(type, r) {
+    if (!canReceipts() || !r) return false;
+    if (isAdmin()) return true;
+    const id = r[TYPES[type].id];
+    return ITEM_TYPES.indexOf(type) !== -1 &&
+      state.data.assignments.some(a => a["Item ID"] === id && isActiveAssignment(a) && canEditTank(a["Tank ID"]));
+  }
+
+  function itemToTankForm(type, id) {
+    const r = findRec(type, id);
+    if (!r) return;
+    const T = TYPES[type];
+    const tanks = tanksICanAddTo().map(t => {
+      const there = state.data.assignments.some(a => a["Tank ID"] === t["Tank ID"] && a["Item ID"] === id && isActiveAssignment(a));
+      return { value: t["Tank ID"], label: t["Tank Name"], sub: [t["Volume (gal)"] ? t["Volume (gal)"] + " gal" : "", t["Aquarium Type"]].filter(Boolean).join(" · "),
+               disabled: there, note: there ? "In tank" : "" };
+    });
+    const elsewhere = type === "equipment" ? equipmentElsewhere(id, "") : [];
+    openSheet({
+      title: "Add to tank",
+      submitLabel: "Add",
+      body:
+        '<p class="meta">' + esc(id + " " + T.title(r)) + '</p>' +
+        comboHtml({ name: "Tank ID", label: "Tank", required: true, noThumbs: true, placeholder: "Tap to choose a tank" }, tanks) +
+        fieldHtml({ name: "Date Added", type: "date" }, today()) +
+        fieldHtml({ name: "Notes", type: "longtext" }, "") +
+        (elsewhere.length ? '<p class="hint">Equipment can only be in one tank. It’s now in ' + esc(elsewhere.map(o => o.id + " " + o.name).join(", ")) + '; you’ll be asked to confirm moving it.</p>' : ""),
+      onReady: form => $$("[data-combo]", form).forEach(wireCombo),
+      onSubmit: vals => {
+        const tankId = vals["Tank ID"];
+        const payload = { table: "assignments", values: { "Tank ID": tankId, "Item ID": id, "Date Added": vals["Date Added"], "Notes": vals["Notes"] } };
+        const other = type === "equipment" ? equipmentElsewhere(id, tankId) : [];
+        if (!other.length) return write("add", payload, "Added to " + tankName(tankId));
+        const label = id + " " + T.title(r);
+        const where = other.map(o => o.id + " " + o.name).join(", ");
+        if (!other.every(o => canEditTank(o.id))) throw new Error(label + " is in " + where + ", which you don’t manage. Ask an admin to move it.");
+        confirmMoveSheet(label, where, tankId, payload);
+        return false;
+      }
+    });
+  }
+
+  // Links receipts that are already uploaded to this item.
+  function itemLinkReceiptForm(type, id) {
+    const r = findRec(type, id);
+    if (!r) return;
+    const linked = new Set(receiptsForRecord(id).map(x => x["Receipt ID"]));
+    const items = state.receipts.filter(x => !isRetired(x))
+      .sort((x, y) => receiptSortKey(y).localeCompare(receiptSortKey(x)))
+      .map(x => ({ value: x["Receipt ID"], label: receiptTitle(x), sub: [x["Receipt ID"], x["Vendor"], money(x["Total"])].filter(Boolean).join(" · "),
+                   disabled: linked.has(x["Receipt ID"]), note: linked.has(x["Receipt ID"]) ? "Linked" : "" }));
+    openSheet({
+      title: "Link receipts",
+      submitLabel: "Link",
+      body: '<p class="meta">' + esc(id + " " + TYPES[type].title(r)) + '</p>' +
+        (items.length ? comboHtml({ name: "receiptIds", label: "Receipts", mode: "multi", required: true, noThumbs: true, placeholder: "Search by name, store, date or total" }, items)
+                      : '<p class="empty">No receipts uploaded yet. Use Upload instead.</p>'),
+      onReady: form => $$("[data-combo]", form).forEach(wireCombo),
+      onSubmit: async vals => {
+        const ids = String(vals.receiptIds || "").split(",").filter(Boolean);
+        if (!ids.length) throw new Error("Choose at least one receipt.");
+        // One link call per receipt, then reload the data once.
+        busy(true);
+        try {
+          for (const rid of ids) await api("linkReceipt", { id: rid, itemIds: [id] });
+          applyBootstrap(await api("bootstrap"));
+          render();
+          toast(ids.length === 1 ? "Receipt linked" : ids.length + " receipts linked");
+          return true;
+        } catch (err) {
+          if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) { handleError(err); return true; }
+          throw err;
+        } finally { busy(false); }
+      }
+    });
   }
 
   function assignmentForm(tankId) {
@@ -1208,10 +1296,13 @@
       '</a>';
   }
 
-  function receiptsSection(id) {
+  // addType: an item's type when this person may add receipts to it from its page (buttons in the heading).
+  function receiptsSection(id, addType) {
     if (!canReceipts()) return "";
     const list = receiptsForRecord(id).sort((x, y) => receiptSortKey(y).localeCompare(receiptSortKey(x)));
-    return '<div class="section"><div class="section-head"><h3>Receipts (' + list.length + ')</h3></div>' +
+    const btns = addType ? '<div class="head-btns"><button class="btn small" data-act="item-upload-receipt" data-type="' + addType + '" data-id="' + esc(id) + '">' + ICONS.plus + 'Upload</button>' +
+      '<button class="btn small" data-act="item-link-receipt" data-type="' + addType + '" data-id="' + esc(id) + '">Link</button></div>' : "";
+    return '<div class="section"><div class="section-head"><h3>Receipts (' + list.length + ')</h3>' + btns + '</div>' +
       '<div class="card list">' + (list.map(receiptRow).join("") || '<div class="empty">None</div>') + '</div></div>';
   }
 
@@ -1506,8 +1597,10 @@
     };
   }
 
-  function uploadReceiptForm() {
+  // presetItem (optional): an item ID to link the receipt to (opened from that item's page).
+  function uploadReceiptForm(presetItem) {
     let image = null;
+    const preRec = presetItem ? recordOf(presetItem) : null;
     openSheet({
       title: "Upload receipt",
       submitLabel: "Upload",
@@ -1522,8 +1615,9 @@
         fieldHtml({ name: "purchaseDate", label: "Purchase date", type: "date" }, today()) +
         '<div class="field"><label for="f_total">Total</label><input type="text" inputmode="decimal" id="f_total" name="total" placeholder="0.00" autocomplete="off"></div>' +
         fieldHtml({ name: "notes", label: "Notes", type: "longtext" }, "") +
+        (presetItem && !isAdmin() ? '<p class="hint">This receipt will be linked to <b>' + esc(presetItem + (preRec ? " " + TYPES[preRec.type].title(preRec.rec) : "")) + '</b>.</p>' : "") +
         (isAdmin() ? '<div class="form-section"><h3>Assign to records <span class="opt">optional</span></h3>' +
-          comboHtml({ name: "itemIds", label: "Records on this receipt", mode: "multi",
+          comboHtml({ name: "itemIds", label: "Records on this receipt", mode: "multi", value: presetItem || "",
                       placeholder: "Search tanks, species, equipment, plants, medications" }, linkableItems(new Set())) +
           '<p class="hint">Leave empty to assign later from the receipt’s page.</p></div>' : ""),
       onReady: form => {
@@ -1553,7 +1647,7 @@
         if (!image) throw new Error("Please add a photo of the receipt.");
         const total = String(vals.total || "").replace(/[$,\s]/g, "");
         if (total && isNaN(Number(total))) throw new Error("Total must be an amount like 24.99.");
-        const itemIds = isAdmin() ? String(vals.itemIds || "").split(",").filter(Boolean) : [];
+        const itemIds = isAdmin() ? String(vals.itemIds || "").split(",").filter(Boolean) : (presetItem ? [presetItem] : []);
         return write("uploadReceipt", {
           receipt: { fileName: vals.fileName, vendor: vals.vendor, purchaseDate: vals.purchaseDate, total: total, notes: vals.notes },
           image: { data: image.data, mimeType: image.mimeType },
@@ -2952,6 +3046,9 @@
       case "add-photo": addPhotoForm(d.type, d.id); break;
       case "delete-record": deleteRecordForm(d.type, d.id); break;
       case "delete-receipt": deleteReceiptForm(d.id); break;
+      case "item-to-tank": itemToTankForm(d.type, d.id); break;
+      case "item-upload-receipt": uploadReceiptForm(d.id); break;
+      case "item-link-receipt": itemLinkReceiptForm(d.type, d.id); break;
       case "open-photo": photoViewer(d.id); break;
       case "add-assignment": assignmentForm(d.tank); break;
       case "remove-assignment":
@@ -3036,7 +3133,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "29";
+  const APP_VERSION = "30";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

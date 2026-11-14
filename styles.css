@@ -111,6 +111,7 @@ img { max-width: 100%; }
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   margin: 0 2px 8px;
 }
+.head-btns { display: flex; gap: 6px; }
 .section-head h3 { margin: 0; font-size: 15px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 .list { overflow: hidden; }
 .list-item {
