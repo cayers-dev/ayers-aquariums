@@ -1369,10 +1369,11 @@
     if (!r) return { title: "Receipt", back: true, html: '<div class="empty">That receipt wasn\'t found.</div>' };
     const links = receiptLinksFor(id);
     const cached = state.photoCache[id];
+    const pdf = /\.pdf$/i.test(String(r["File Name"] || ""));
     const photo = '<div class="card receipt-photo" data-photo="' + esc(id) + '">' +
-      (cached && cached.url ? '<img alt="Receipt photo" src="' + cached.url + '" data-act="zoom-photo" data-id="' + esc(id) + '">' :
+      (cached && cached.url ? receiptFileHtml(id, r, cached) :
        cached && cached.error ? '<div class="empty">' + esc(cached.error) + '</div>' :
-       '<div class="photo-loading"><div class="spinner"></div><span>Loading photo…</span></div>') + '</div>';
+       '<div class="photo-loading"><div class="spinner"></div><span>' + (pdf ? "Loading PDF…" : "Loading photo…") + '</span></div>') + '</div>';
     const hero = '<div class="card hero"><h2>' + esc(receiptTitle(r)) + '</h2>' +
       '<div class="meta">' + esc([id, r["Vendor"], money(r["Total"])].filter(Boolean).join(" · ")) + '</div>' +
       (isRetired(r) ? '<div class="counts"><span class="pill retired">Retired</span></div>' : links.length ? "" : '<div class="counts"><span class="pill warn">Unassigned</span></div>') +
@@ -1414,7 +1415,8 @@
       const bin = atob(res.image.data);
       const bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      state.photoCache[id] = { url: URL.createObjectURL(new Blob([bytes], { type: res.image.mimeType || "image/jpeg" })) };
+      const mime = res.image.mimeType || "image/jpeg";
+      state.photoCache[id] = { url: URL.createObjectURL(new Blob([bytes], { type: mime })), mime: mime };
     } catch (err) {
       if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) { delete state.photoCache[id]; handleError(err); return; }
       state.photoCache[id] = { error: err.message || "The photo couldn't be loaded." };
@@ -1422,8 +1424,18 @@
     const box = $('[data-photo="' + CSS.escape(id) + '"]');
     if (box) {
       const c = state.photoCache[id];
-      box.innerHTML = c.url ? '<img alt="Receipt photo" src="' + c.url + '" data-act="zoom-photo" data-id="' + esc(id) + '">' : '<div class="empty">' + esc(c.error) + '</div>';
+      box.innerHTML = c.url ? receiptFileHtml(id, findReceipt(id) || {}, c) : '<div class="empty">' + esc(c.error) + '</div>';
     }
+  }
+
+  // The receipt's photo (tap to zoom), or for a PDF a card that opens it in the phone's PDF viewer.
+  function receiptFileHtml(id, r, c) {
+    if (c.mime === "application/pdf") {
+      return '<a class="receipt-pdf" href="' + c.url + '" target="_blank" rel="noopener">' + ICONS.receipts +
+        '<span class="body"><span class="title">' + esc(r["File Name"] || "Receipt PDF") + '</span><span class="sub">PDF · tap to open</span></span>' +
+        '<span class="btn small primary">Open PDF</span></a>';
+    }
+    return '<img alt="Receipt photo" src="' + c.url + '" data-act="zoom-photo" data-id="' + esc(id) + '">';
   }
 
   function zoomPhoto(id) {
@@ -1437,6 +1449,16 @@
     const img = $("img", v);
     img.addEventListener("click", () => v.classList.toggle("full"));
     $("button", v).addEventListener("click", () => { v.remove(); document.body.style.overflow = ""; });
+  }
+
+  // A PDF file as { data (base64), mimeType } for upload.
+  function readPdf(file) {
+    return new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve({ data: String(fr.result).replace(/^data:[^,]*,/, ""), mimeType: "application/pdf", preview: "" });
+      fr.onerror = () => reject(new Error("That PDF couldn't be read."));
+      fr.readAsDataURL(file);
+    });
   }
 
   // Shrinks a photo to a sensible size and converts it to JPEG.
@@ -1602,13 +1624,16 @@
 
   // Photo picker with two buttons: "Take photo" opens the camera directly (capture),
   // "Choose image" opens the photo library / files. id is the base id for the two hidden inputs.
-  function photoPickerHtml(id) {
+  // opts.pdf: "Choose" also accepts PDF files (receipts).
+  function photoPickerHtml(id, opts) {
+    const pdf = !!(opts && opts.pdf);
     return '<input type="file" accept="image/*" capture="environment" id="' + id + '_cam" hidden>' +
-      '<input type="file" accept="image/*" id="' + id + '" hidden>' +
+      '<input type="file" accept="' + (pdf ? "image/*,application/pdf,.pdf" : "image/*") + '" id="' + id + '" hidden>' +
       '<div class="photo-pick" data-photo-pick="' + id + '"><img class="photo-preview" alt="" hidden>' +
+        '<div class="file-card" hidden>' + ICONS.receipts + '<span class="file-name"></span><span class="pill">PDF</span></div>' +
         '<div class="photo-btns">' +
           '<button type="button" class="btn" data-pick-camera>' + ICONS.camera + '<span>Take photo</span></button>' +
-          '<button type="button" class="btn" data-pick-file>' + ICONS.image + '<span>Choose image</span></button>' +
+          '<button type="button" class="btn" data-pick-file>' + ICONS.image + '<span>' + (pdf ? "Choose image or PDF" : "Choose image") + '</span></button>' +
         '</div><div class="hint photo-status" hidden></div></div>';
   }
   // Wires the picker; onFile(file) runs when a photo is taken or chosen.
@@ -1616,7 +1641,8 @@
   function wirePhotoPicker(form, id, onFile) {
     const cam = $("#" + id + "_cam", form), lib = $("#" + id, form);
     const box = $('[data-photo-pick="' + id + '"]', form);
-    const prev = $(".photo-preview", box), st = $(".photo-status", box);
+    const prev = $(".photo-preview", box), st = $(".photo-status", box), card = $(".file-card", box);
+    card.addEventListener("click", () => lib.click());
     $("[data-pick-camera]", box).addEventListener("click", () => cam.click());
     $("[data-pick-file]", box).addEventListener("click", () => lib.click());
     prev.addEventListener("click", () => lib.click());
@@ -1636,7 +1662,9 @@
           st.appendChild(b);
         }
       },
-      preview: url => { if (url) { prev.src = url; prev.hidden = false; } else { prev.removeAttribute("src"); prev.hidden = true; } }
+      preview: url => { if (url) { prev.src = url; prev.hidden = false; card.hidden = true; } else { prev.removeAttribute("src"); prev.hidden = true; } },
+      // file(name): shows a PDF card instead of a photo preview ("" hides it).
+      file: name => { card.hidden = !name; $(".file-name", card).textContent = name || ""; if (name) { prev.removeAttribute("src"); prev.hidden = true; } }
     };
   }
 
@@ -1649,10 +1677,10 @@
       submitLabel: "Upload",
       body:
         '<div class="field"><label>Photo <span class="req">*</span></label>' +
-          photoPickerHtml("f_photo") + '</div>' +
+          photoPickerHtml("f_photo", { pdf: true }) + '</div>' +
         '<div class="field"><label for="f_fileName">File name <span class="req">*</span></label>' +
           '<input type="text" id="f_fileName" name="fileName" required value="' + esc(defaultReceiptName(today(), "")) + '">' +
-          '<div class="hint">.jpg is added automatically.</div></div>' +
+          '<div class="hint">.jpg (or .pdf for a PDF) is added automatically.</div></div>' +
         comboHtml({ name: "vendor", label: "Store / vendor", mode: "free", noThumbs: true, newLabel: "will be added to the vendor list",
                     placeholder: "Choose or type a new vendor" }, vendorItems()) +
         fieldHtml({ name: "purchaseDate", label: "Purchase date", type: "date" }, today()) +
@@ -1675,9 +1703,18 @@
         $("input[name=vendor]", form).addEventListener("change", refreshName);
         $("[name=purchaseDate]", form).addEventListener("change", refreshName);
         const pick = wirePhotoPicker(form, "f_photo", async f => {
+          // PDFs are uploaded as-is (up to 10 MB); photos are shrunk first.
+          if (f.type === "application/pdf" || /\.pdf$/i.test(f.name)) {
+            if (f.size > 10 * 1024 * 1024) { toast("That PDF is larger than 10 MB.", true); return; }
+            pick.status("Reading PDF…");
+            try { image = await readPdf(f); pick.file(f.name); pick.status(""); }
+            catch (err) { image = null; pick.file(""); pick.status(""); toast(err.message, true); }
+            return;
+          }
           pick.status("Preparing photo…");
           try {
             image = await prepareImage(f);
+            pick.file("");
             pick.preview(image.preview);
             pick.status("");
           } catch (err) {
@@ -1687,7 +1724,7 @@
         });
       },
       onSubmit: async vals => {
-        if (!image) throw new Error("Please add a photo of the receipt.");
+        if (!image) throw new Error("Please add a photo or PDF of the receipt.");
         const total = String(vals.total || "").replace(/[$,\s]/g, "");
         if (total && isNaN(Number(total))) throw new Error("Total must be an amount like 24.99.");
         const itemIds = isAdmin() ? String(vals.itemIds || "").split(",").filter(Boolean) : (presetItem ? [presetItem] : []);
@@ -3195,7 +3232,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "31";
+  const APP_VERSION = "32";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

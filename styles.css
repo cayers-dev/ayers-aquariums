@@ -302,6 +302,14 @@ img { max-width: 100%; }
 .viewer-wrap { border-radius: 12px; overflow: hidden; border: 1px solid var(--border); background: var(--surface-2); }
 .viewer-img { width: 100%; max-height: 60vh; object-fit: contain; display: block; }
 img.viewer-img.drive-img:not([src]), img.tile-img.drive-img:not([src]) { min-height: 120px; }
+.file-card { display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); cursor: pointer; }
+.file-card svg { width: 26px; height: 26px; flex: none; }
+.file-card .file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.receipt-pdf { display: flex; align-items: center; gap: 12px; padding: 16px; color: inherit; text-decoration: none; }
+.receipt-pdf svg { width: 34px; height: 34px; flex: none; color: var(--primary); }
+.receipt-pdf .body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.receipt-pdf .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.receipt-pdf .sub { color: var(--muted); font-size: 13px; }
 .photo-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .photo-btns .btn { justify-content: center; }
 .photo-preview { width: 100%; max-height: 240px; object-fit: contain; border-radius: 12px; border: 1px solid var(--border); background: var(--surface-2); cursor: pointer; }

@@ -17,7 +17,9 @@ const RECEIPTS_CONFIG = {
    receiptsSheetName: "Receipts",
    linksSheetName: "Receipt Links",
    prefix: "RC-",
-   maxImageBytes: 12 * 1024 * 1024
+   maxImageBytes: 12 * 1024 * 1024,
+   // PDF receipts (chosen from files) are stored as-is, up to this size.
+   maxPdfBytes: 10 * 1024 * 1024
 };
 
 // Columns of the Receipts tab, in order.
@@ -133,11 +135,15 @@ function apiUploadReceipt_(req, user) {
    apiRequireReceipts_(user);
    const r = apiCleanReceipt_(req.receipt || {}, true);
    const img = req.image || {};
-   if (!img.data) throw apiError_("INVALID", "Add a photo of the receipt.");
-   // Check the photo type and size.
-   const mimeType = /^image\/(jpeg|png|webp|gif|heic|heif)$/.test(String(img.mimeType)) ? img.mimeType : "image/jpeg";
+   if (!img.data) throw apiError_("INVALID", "Add a photo or PDF of the receipt.");
+   // Check the file type and size: a photo, or a PDF (stored as-is).
+   const isPdf = String(img.mimeType) === "application/pdf";
+   const mimeType = isPdf ? "application/pdf" : /^image\/(jpeg|png|webp|gif|heic|heif)$/.test(String(img.mimeType)) ? img.mimeType : "image/jpeg";
    const bytes = Utilities.base64Decode(String(img.data).replace(/^data:[^,]*,/, ""));
-   if (bytes.length > RECEIPTS_CONFIG.maxImageBytes) throw apiError_("INVALID", "That photo is too large.");
+   if (isPdf) {
+      if (bytes.length > RECEIPTS_CONFIG.maxPdfBytes) throw apiError_("INVALID", "That PDF is larger than 10 MB.");
+      if (String.fromCharCode.apply(null, bytes.slice(0, 5).map(b => b & 255)) !== "%PDF-") throw apiError_("INVALID", "That file isn't a PDF.");
+   } else if (bytes.length > RECEIPTS_CONFIG.maxImageBytes) throw apiError_("INVALID", "That photo is too large.");
 
    // Records can be assigned at upload time (optional): admins any record, editors items in their tanks.
    const itemIds = (req.itemIds || []).map(s => String(s).trim()).filter(Boolean);
@@ -147,7 +153,7 @@ function apiUploadReceipt_(req, user) {
    }
 
    const ext = { "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif",
-                 "image/heic": ".heic", "image/heif": ".heif" }[mimeType];
+                 "image/heic": ".heic", "image/heif": ".heif", "application/pdf": ".pdf" }[mimeType];
    const fileName = apiFileNameWithExt_(r.fileName, ext);
 
    // Save the photo to the Receipts folder, then record it on the Receipts tab.
@@ -331,7 +337,7 @@ function apiCleanReceipt_(raw, isNew) {
 
 // The file name with the photo's extension (any old image extension replaced).
 function apiFileNameWithExt_(name, ext) {
-   const base = String(name).replace(/\.(jpe?g|png|webp|gif|heic|heif)$/i, "").trim();
+   const base = String(name).replace(/\.(jpe?g|png|webp|gif|heic|heif|pdf)$/i, "").trim();
    return base + ext;
 }
 
