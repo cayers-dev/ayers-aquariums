@@ -354,14 +354,14 @@ function aiCredibleSources_(table, known, sci) {
       if (t) refs.push(t);
       return refs;
    }
-   const invert = /invertebrate|shrimp|snail|crab|crayfish/i.test(String(known["Category"] || ""));
-   if (!invert) {
-      const fb = aiFishBase_(sci, false);
-      if (fb) refs.push(fb);
+   // Fish are on FishBase (+ Seriously Fish); anything FishBase doesn't have is tried on
+   // SeaLifeBase. The Category typed in isn't trusted here, since it may be the thing that's wrong.
+   const fb = aiFishBase_(sci, false);
+   if (fb) {
+      refs.push(fb);
       const sf = aiSeriouslyFish_(sci);
       if (sf) refs.push(sf);
-   }
-   if (!refs.length) {
+   } else {
       const slb = aiFishBase_(sci, true);
       if (slb) refs.push(slb);
    }
