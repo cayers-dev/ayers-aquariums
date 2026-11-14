@@ -147,6 +147,7 @@
     water: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5c3.2 4 5.5 7.2 5.5 10.2a5.5 5.5 0 0 1-11 0c0-3 2.3-6.2 5.5-10.2z"/><path d="M9.2 14.5a2.9 2.9 0 0 0 2.8 2.6"/></svg>',
     receipts: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6M9 16h3"/></svg>',
     camera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
+    image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M20.5 16l-5-5-8.5 8.5"/></svg>',
     maint: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.2L3.5 17.3a1.8 1.8 0 0 0 2.5 2.5l5.8-5.8a4 4 0 0 0 5.2-5.4l-2.6 2.6-2.3-.4-.4-2.3z"/></svg>',
     wish: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/></svg>',
     sparkle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>',
@@ -1257,6 +1258,37 @@
   const vendorItems = () => state.vendors.slice().sort((x, y) => x.localeCompare(y)).map(v => ({ value: v, label: v }));
   const defaultReceiptName = (date, vendor) => [date || today(), vendor, "receipt"].filter(Boolean).join(" ");
 
+  // Photo picker with two buttons: "Take photo" opens the camera directly (capture),
+  // "Choose image" opens the photo library / files. id is the base id for the two hidden inputs.
+  function photoPickerHtml(id) {
+    return '<input type="file" accept="image/*" capture="environment" id="' + id + '_cam" hidden>' +
+      '<input type="file" accept="image/*" id="' + id + '" hidden>' +
+      '<div class="photo-pick" data-photo-pick="' + id + '"><img class="photo-preview" alt="" hidden>' +
+        '<div class="photo-btns">' +
+          '<button type="button" class="btn" data-pick-camera>' + ICONS.camera + '<span>Take photo</span></button>' +
+          '<button type="button" class="btn" data-pick-file>' + ICONS.image + '<span>Choose image</span></button>' +
+        '</div><div class="hint photo-status" hidden></div></div>';
+  }
+  // Wires the picker; onFile(file) runs when a photo is taken or chosen.
+  // Returns { status(text), preview(url) } for showing progress and the picked photo.
+  function wirePhotoPicker(form, id, onFile) {
+    const cam = $("#" + id + "_cam", form), lib = $("#" + id, form);
+    const box = $('[data-photo-pick="' + id + '"]', form);
+    const prev = $(".photo-preview", box), st = $(".photo-status", box);
+    $("[data-pick-camera]", box).addEventListener("click", () => cam.click());
+    $("[data-pick-file]", box).addEventListener("click", () => lib.click());
+    prev.addEventListener("click", () => lib.click());
+    [cam, lib].forEach(input => input.addEventListener("change", () => {
+      const f = input.files && input.files[0];
+      input.value = "";   // lets the same photo be picked again
+      if (f) onFile(f);
+    }));
+    return {
+      status: t => { st.textContent = t || ""; st.hidden = !t; },
+      preview: url => { if (url) { prev.src = url; prev.hidden = false; } else { prev.removeAttribute("src"); prev.hidden = true; } }
+    };
+  }
+
   function uploadReceiptForm() {
     let image = null;
     openSheet({
@@ -1264,11 +1296,7 @@
       submitLabel: "Upload",
       body:
         '<div class="field"><label>Photo <span class="req">*</span></label>' +
-          '<input type="file" accept="image/*" id="f_photo" name="photo" data-label="Photo" required hidden>' +
-          '<div class="photo-pick">' +
-            '<img class="photo-preview" alt="" hidden>' +
-            '<button type="button" class="btn block" data-pick-photo>' + ICONS.camera + '<span>Take or choose photo</span></button>' +
-          '</div></div>' +
+          photoPickerHtml("f_photo") + '</div>' +
         '<div class="field"><label for="f_fileName">File name <span class="req">*</span></label>' +
           '<input type="text" id="f_fileName" name="fileName" required value="' + esc(defaultReceiptName(today(), "")) + '">' +
           '<div class="hint">.jpg is added automatically.</div></div>' +
@@ -1283,7 +1311,6 @@
           '<p class="hint">Leave empty to assign later from the receipt’s page.</p></div>' : ""),
       onReady: form => {
         $$("[data-combo]", form).forEach(wireCombo);
-        const file = $("#f_photo", form), btn = $("[data-pick-photo]", form), prev = $(".photo-preview", form);
         const nameEl = $("#f_fileName", form);
         let nameTouched = false;
         nameEl.addEventListener("input", () => { nameTouched = true; });
@@ -1293,20 +1320,14 @@
         };
         $("input[name=vendor]", form).addEventListener("change", refreshName);
         $("[name=purchaseDate]", form).addEventListener("change", refreshName);
-        const choose = () => file.click();
-        btn.addEventListener("click", choose);
-        prev.addEventListener("click", choose);
-        file.addEventListener("change", async () => {
-          const f = file.files && file.files[0];
-          if (!f) return;
-          $("span", btn).textContent = "Preparing photo…";
+        const pick = wirePhotoPicker(form, "f_photo", async f => {
+          pick.status("Preparing photo…");
           try {
             image = await prepareImage(f);
-            prev.src = image.preview; prev.hidden = false;
-            $("span", btn).textContent = "Retake / choose another";
+            pick.preview(image.preview);
+            pick.status("");
           } catch (err) {
-            image = null; prev.hidden = true; file.value = "";
-            $("span", btn).textContent = "Take or choose photo";
+            image = null; pick.preview(""); pick.status("");
             toast(err.message, true);
           }
         });
@@ -1700,9 +1721,7 @@
       body:
         '<div class="segmented wish-type">' + WISH_TYPES.map(t => '<button type="button" class="' + (t === type ? "on" : "") + '" data-wtype="' + t + '">' + TYPES[t].label + '</button>').join("") + '</div>' +
         '<div class="field"><label>Photo <span class="opt">optional</span></label>' +
-          '<input type="file" accept="image/*" id="f_wphoto" hidden>' +
-          '<div class="photo-pick"><img class="photo-preview" alt="" hidden>' +
-          '<button type="button" class="btn block" data-pick-photo>' + ICONS.camera + '<span>Take or choose photo</span></button></div>' +
+          photoPickerHtml("f_wphoto") +
           '<div class="hint">The AI will try to identify it. The photo becomes the item’s picture.</div>' +
           '<div class="id-result" hidden></div></div>' +
         '<div class="reuse" hidden></div>' +
@@ -1763,10 +1782,7 @@
                    { scope: () => details, onPhoto: p => { if (!image) commons = p; } });
 
         // Photo + identify
-        const file = $("#f_wphoto", form), btn = $("[data-pick-photo]", form), prev = $(".photo-preview", form), idBox = $(".id-result", form);
-        const choose = () => file.click();
-        btn.addEventListener("click", choose);
-        prev.addEventListener("click", choose);
+        const idBox = $(".id-result", form);
         const applyGuess = (g, alt) => {
           const t = WISH_TYPES.indexOf(g.type) !== -1 ? g.type : type;
           if (t !== type) { type = t; $$("[data-wtype]", form).forEach(x => x.classList.toggle("on", x.dataset.wtype === t)); setReuse(""); renderDetails(); }
@@ -1774,16 +1790,14 @@
           if (type === "equipment") { set("Manufacturer", g.manufacturer); set("Filter Model", g.model || g.name); }
           else { set("Common Name", alt ? alt.name : g.name); set("Scientific Name", alt ? alt.scientificName : g.scientificName); }
         };
-        file.addEventListener("change", async () => {
-          const f = file.files && file.files[0];
-          if (!f) return;
-          $("span", btn).textContent = "Preparing photo…";
+        const pick = wirePhotoPicker(form, "f_wphoto", async f => {
+          pick.status("Preparing photo…");
           try {
             image = await prepareImage(f, 1280, 0.85);
             commons = null;
-            prev.src = image.preview; prev.hidden = false;
-          } catch (err) { image = null; prev.hidden = true; file.value = ""; $("span", btn).textContent = "Take or choose photo"; toast(err.message, true); return; }
-          $("span", btn).textContent = "Identifying…";
+            pick.preview(image.preview);
+          } catch (err) { image = null; pick.preview(""); pick.status(""); toast(err.message, true); return; }
+          pick.status("Identifying…");
           idBox.hidden = true;
           try {
             const g = await api("aiIdentify", { image: { data: image.data, mimeType: image.mimeType }, typeHint: type });
@@ -1802,7 +1816,7 @@
           } catch (err) {
             if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) { handleError(err); return; }
             idBox.innerHTML = '<div class="form-error-inline">' + esc(err.message) + '</div>'; idBox.hidden = false;
-          } finally { $("span", btn).textContent = "Retake / choose another"; }
+          } finally { pick.status(""); }
         });
       },
       onSubmit: async (vals, form) => {
@@ -2801,7 +2815,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "24";
+  const APP_VERSION = "25";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
