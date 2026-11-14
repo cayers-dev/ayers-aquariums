@@ -240,21 +240,132 @@ function aiFindPhoto_(type, names) {
    }
 }
 
-// Visible text of a product or info page the user linked.
-function aiPageText_(url) {
+// Raw HTML of a web page, or null if it can't be fetched (not found, blocked, timed out).
+function aiFetchHtml_(url) {
    if (!/^https?:\/\/[^\s]+$/i.test(String(url || ""))) return null;
    let res;
    try {
       res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true, headers: { "User-Agent": "Mozilla/5.0 (compatible; " + AI_CONFIG.userAgent + ")" } });
    } catch (e) { return null; }
    if (res.getResponseCode() !== 200) return null;
-   const html = res.getContentText();
+   return res.getContentText();
+}
+
+// Visible text of a web page (a product page the user linked, or a credible source page).
+function aiPageText_(url) {
+   const html = aiFetchHtml_(url);
+   if (!html) return null;
    const title = ((html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || url).replace(/\s+/g, " ").trim();
    const text = html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ")
       .replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"')
       .replace(/\s+/g, " ").trim();
    if (text.length < 200) return null;
    return { title: title.slice(0, 120), url: url, text: text.slice(0, AI_CONFIG.maxRefChars) };
+}
+
+
+// ------------------------------------------------------------
+// Credible sources for species and plants (fetched by this script)
+//   Fish:             FishBase (scientific data) + Seriously Fish (aquarium care)
+//   Shrimp, snails..: SeaLifeBase (FishBase's sister database for other aquatic life)
+//   Plants:           Tropica (aquarium plant grower)
+// Each returns { title, url, text } or null when it has no page for the species.
+// ------------------------------------------------------------
+
+// "Genus species" from a scientific name (drops authors, "var.", extra words).
+function aiBinomial_(sci) {
+   const m = String(sci || "").trim().match(/^([A-Z][a-z]+)\s+([a-z][a-z\-]+)/);
+   return m ? { genus: m[1], species: m[2] } : null;
+}
+
+// FishBase or SeaLifeBase species summary page.
+function aiFishBase_(sci, sealife) {
+   const b = aiBinomial_(sci);
+   if (!b) return null;
+   const site = sealife ? "https://www.sealifebase.se" : "https://www.fishbase.se";
+   const url = site + "/summary/" + b.genus + "-" + b.species + ".html";
+   const pg = aiPageText_(url);
+   // A real species page has its environment and size sections.
+   if (!pg || !/Environment/i.test(pg.text) || !/(Max length|Size)/i.test(pg.text)) return null;
+   const i = pg.text.search(/Environment/i);
+   pg.text = pg.text.slice(Math.max(0, i - 200), Math.max(0, i - 200) + AI_CONFIG.maxRefChars);   // skip the menus
+   pg.title = (sealife ? "SeaLifeBase: " : "FishBase: ") + b.genus + " " + b.species;
+   return pg;
+}
+
+// Seriously Fish species profile (aquarium size, water conditions, diet, behaviour).
+function aiSeriouslyFish_(sci) {
+   const b = aiBinomial_(sci);
+   if (!b) return null;
+   const url = "https://www.seriouslyfish.com/species/" + (b.genus + "-" + b.species).toLowerCase() + "/";
+   const pg = aiPageText_(url);
+   if (!pg || !/(Water conditions|Temp)/i.test(pg.text)) return null;
+   pg.title = "Seriously Fish: " + b.genus + " " + b.species;
+   return pg;
+}
+
+// Tropica plant page, found by matching the name against Tropica's plant list.
+function aiTropica_(names) {
+   const norm = s => String(s || "").toLowerCase().replace(/var\.|'/g, "").replace(/[^a-z0-9]/g, "");
+   const cache = CacheService.getScriptCache();
+   let list = null;
+   try { list = JSON.parse(cache.get("tropica_plants") || "null"); } catch (e) { list = null; }
+   if (!list) {
+      const html = aiFetchHtml_("https://tropica.com/en/plants/");
+      if (!html) return null;
+      list = [];
+      const seen = {};
+      const re = /\/en\/plants\/plantdetails\/([^"<>\s]+?)\(([A-Za-z0-9]+)\)\/(\d+)/g;
+      let m;
+      while ((m = re.exec(html))) {
+         const path = m[0];
+         if (seen[path]) continue;
+         seen[path] = true;
+         let label = m[1];
+         try { label = decodeURIComponent(label); } catch (e) { /* keep as is */ }
+         list.push({ key: norm(label), path: path });
+      }
+      if (list.length) cache.put("tropica_plants", JSON.stringify(list), 21600);   // 6 hours
+   }
+   const wanted = names.map(norm).filter(k => k.length >= 4);
+   let hit = null;
+   wanted.some(w => (hit = list.find(x => x.key === w)));                          // exact name
+   if (!hit) wanted.some(w => (hit = list.find(x => x.key.indexOf(w) === 0)));      // e.g. "anubiasbarteri" -> "anubiasbarterinana"
+   if (!hit) return null;
+   const pg = aiPageText_("https://tropica.com" + hit.path);
+   if (!pg) return null;
+   pg.title = "Tropica: " + pg.title.replace(/\s*[|-].*$/, "");
+   return pg;
+}
+
+// Asks the AI for the scientific name when only a common name was typed.
+function aiScientificName_(commonName, type) {
+   const ai = aiGenerateJson_([{ text:
+      "Give the accepted scientific name (genus and species) of this " + AI_TABLES[type].kind + " as it is sold in the aquarium hobby: \"" +
+      commonName + "\". Reply with JSON only: {\"scientificName\": \"Genus species\" or \"\" if unsure}" }]);
+   return aiBinomial_(ai.scientificName) ? String(ai.scientificName).trim() : "";
+}
+
+// Credible reference pages for a species or plant.
+function aiCredibleSources_(table, known, sci) {
+   const refs = [];
+   if (table === "plants") {
+      const t = aiTropica_([sci, known["Common Name"]]);
+      if (t) refs.push(t);
+      return refs;
+   }
+   const invert = /invertebrate|shrimp|snail|crab|crayfish/i.test(String(known["Category"] || ""));
+   if (!invert) {
+      const fb = aiFishBase_(sci, false);
+      if (fb) refs.push(fb);
+      const sf = aiSeriouslyFish_(sci);
+      if (sf) refs.push(sf);
+   }
+   if (!refs.length) {
+      const slb = aiFishBase_(sci, true);
+      if (slb) refs.push(slb);
+   }
+   return refs;
 }
 
 
@@ -284,18 +395,31 @@ function apiAiFill_(req, user) {
    if (!name) throw apiError_("INVALID", "Type a name first" + (table === "equipment" ? " (brand and model)" : "") + ".");
    if (!blanks.length) return { suggestions: {}, sources: [], notes: "Every field already has a value.", filled: 0 };
 
-   // Reference text.
+   // Reference text. Species and plants: credible sources only (FishBase, Seriously Fish,
+   // SeaLifeBase, Tropica). Wikipedia is used for the photo, and for information only
+   // when no credible source has the species (then everything is marked to verify).
    const sources = [];
    let refs = "";
+   let credible = false, fallback = false, sci = known["Scientific Name"] || "";
+   const addRef = (label, pg) => {
+      refs += "\n\nREFERENCE \"" + label + "\" (" + pg.url + "):\n" + pg.text;
+      sources.push({ title: label, url: pg.url });
+   };
    if (req.link) {
       const pg = aiPageText_(req.link);
-      if (pg) { refs += "\n\nREFERENCE (product/info page \"" + pg.title + "\"):\n" + pg.text; sources.push({ title: pg.title, url: pg.url }); }
+      if (pg) addRef(pg.title, pg);
    }
    let wiki = null;
    if (table === "species" || table === "plants") {
-      wiki = aiWikipedia_([known["Scientific Name"], known["Common Name"]], table);
-      if (wiki) { refs += "\n\nREFERENCE (Wikipedia: " + wiki.title + "):\n" + wiki.text; sources.push({ title: "Wikipedia: " + wiki.title, url: wiki.url }); }
+      if (!aiBinomial_(sci) && known["Common Name"]) sci = aiScientificName_(known["Common Name"], table);
+      const found = aiCredibleSources_(table, known, sci);
+      found.forEach(pg => addRef(pg.title, pg));
+      credible = found.length > 0;
+      if (!credible || (req.findPhoto && isBlank(current["Thumbnail URL"]))) wiki = aiWikipedia_([sci, known["Common Name"]], table);
+      if (!credible && wiki) { addRef("Wikipedia: " + wiki.title, { url: wiki.url, text: wiki.text }); }
+      fallback = !credible;
    }
+   const credibleLabels = sources.filter(x => !/^Wikipedia:/.test(x.title)).map(x => x.title);
 
    // Existing rows show the AI the expected style; list fields get their allowed values.
    const examples = aiExampleRows_(table, fillable.map(f => f.name));
@@ -315,19 +439,40 @@ function apiAiFill_(req, user) {
       "Fill in ONLY these blank fields:\n" + fieldLines + "\n\n" +
       (examples.length ? "Match the style, wording length and units of these existing records from the same list:\n" + JSON.stringify(examples, null, 1) + "\n\n" : "") +
       "Rules:\n" +
-      "- Use typical, widely accepted aquarium-hobby values (temperatures in °F, sizes in inches).\n" +
+      "- Use temperatures in °F and sizes in inches (convert from °C / cm when needed).\n" +
+      (credible
+        ? "- Use ONLY the reference pages below. If none of them supports a field, return null for it. " +
+          "For aquarium care (temperature range, group size, temperament, diet, difficulty, adult size in aquariums) prefer the aquarium-care source " +
+          "(Seriously Fish or Tropica) over FishBase/SeaLifeBase, whose temperatures are wild habitat values.\n"
+        : "- Prefer the reference text below when it covers a field; otherwise use well-established knowledge.\n") +
       "- If a value isn't reasonably certain, use null. Never invent model numbers, measurements or links.\n" +
-      "- Prefer the reference text below when it covers a field; otherwise use well-established knowledge.\n" +
       "- Keep text fields short, like the examples.\n" +
+      "- In \"fieldSources\", give for each filled field the exact reference name it came from (as written in quotes after REFERENCE), or \"AI knowledge\".\n" +
       "Reply with JSON only: {\"identified\": \"the exact item you filled in for (name, scientific name or brand + model)\", " +
-      "\"confidence\": \"High\" | \"Medium\" | \"Low\", \"fields\": {\"<field name>\": value or null}, \"notes\": \"one or two short caveats, or empty\"}" +
+      "\"confidence\": \"High\" | \"Medium\" | \"Low\", \"fields\": {\"<field name>\": value or null}, " +
+      "\"fieldSources\": {\"<field name>\": \"reference name\"}, \"notes\": \"one or two short caveats, or empty\"}" +
       refs;
 
    // Ask, then keep only valid suggestions for fields that were blank.
    const ai = aiGenerateJson_([{ text: prompt }]);
    const suggestions = aiCleanSuggestions_(blanks, ai.fields || {});
+   // Where each value came from. With credible sources, anything not traced to one is dropped.
+   const fieldSources = {};
+   const rawSources = ai.fieldSources || {};
+   Object.keys(suggestions).forEach(f => {
+      const src = String(rawSources[f] || "").trim();
+      const match = credibleLabels.find(l => src && (src === l || src.indexOf(l) !== -1 || l.indexOf(src) !== -1));
+      if (credible && !match) { delete suggestions[f]; return; }
+      fieldSources[f] = match || (fallback ? (src && /^Wikipedia/i.test(src) ? "Wikipedia" : "AI knowledge") : (src || "AI knowledge"));
+   });
+   const missing = credible ? blanks.map(f => f.name).filter(n => !(n in suggestions)) : [];
    const out = {
       suggestions: suggestions,
+      fieldSources: fieldSources,
+      credible: credible,
+      fallback: fallback,
+      notFound: missing,
+      scientificName: sci,
       filled: Object.keys(suggestions).length,
       identified: String(ai.identified || "").slice(0, 200),
       confidence: /^(High|Medium|Low)$/i.test(String(ai.confidence)) ? String(ai.confidence).replace(/^./, c => c.toUpperCase()) : "",

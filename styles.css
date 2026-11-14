@@ -449,3 +449,11 @@ input.ai-filled, select.ai-filled, textarea.ai-filled { border-color: var(--prim
 img.drive-img:not([src]) { background: var(--border); }
 img.drive-img.photo-error { background: var(--danger-soft); }
 img.big-img.drive-img:not([src]) { min-height: 180px; }
+input.ai-unverified, select.ai-unverified, textarea.ai-unverified { border-color: #c98a00; box-shadow: 0 0 0 2px #fff1d6; }
+.ai-result.unverified { background: #fff6e5; }
+.ai-warn { font-weight: 600; color: #8a5a00; }
+@media (prefers-color-scheme: dark) {
+  .ai-result.unverified { background: #3d2e10; }
+  .ai-warn { color: #f3c56b; }
+  input.ai-unverified, select.ai-unverified, textarea.ai-unverified { box-shadow: 0 0 0 2px #3d2e10; }
+}

@@ -765,7 +765,16 @@
       title: (editing ? "Edit " : "Add ") + T.one.toLowerCase(),
       submitLabel: editing ? "Save" : "Add",
       body: (ai ? aiBarHtml() : "") + fields.map(f => fieldHtml(f, values[f.name])).join(""),
-      onReady: form => { if (ai) wireAiFill(form, type, () => { const l = $('[name="Vendor Link"], [name="Product Page"]', form); return l ? l.value.trim() : ""; }); },
+      onReady: form => {
+        if (!ai) return;
+        const thumb = $('[name="Thumbnail URL"]', form);
+        // Species and plants: a free Wikimedia Commons photo fills a blank Thumbnail URL (link only).
+        const onPhoto = (type === "species" || type === "plants") && thumb ? p => {
+          if (thumb.value.trim()) return;
+          thumb.value = p.url; thumb.classList.add("ai-filled");
+        } : null;
+        wireAiFill(form, type, () => { const l = $('[name="Vendor Link"], [name="Product Page"]', form); return l ? l.value.trim() : ""; }, { onPhoto: onPhoto });
+      },
       onSubmit: async vals => {
         if (editing) {
           const changed = {};
@@ -1432,7 +1441,7 @@
       const values = {};
       $$("input[name], select[name], textarea[name]", scope).forEach(el => { if (el.type !== "checkbox" && el.type !== "file") values[el.name] = el.value; });
       const label = $("span", btn);
-      btn.disabled = true; label.textContent = "Asking the AI…";
+      btn.disabled = true; label.textContent = (t === "species" || t === "plants") ? "Checking sources…" : "Asking the AI…";
       box.hidden = true;
       try {
         const res = await api("aiFill", { table: t, values: values, link: getLink ? getLink() : "", findPhoto: !!opts.onPhoto });
@@ -1444,19 +1453,32 @@
           if (el.tagName === "SELECT" && !$$("option", el).some(o => o.value === v || o.textContent === v)) return;
           el.value = v;
           el.classList.add("ai-filled");
+          if (res.fallback) el.classList.add("ai-unverified");
           el.dispatchEvent(new Event("input", { bubbles: true }));
           el.dispatchEvent(new Event("change", { bubbles: true }));
           n++;
         });
         if (res.photo && opts.onPhoto) opts.onPhoto(res.photo);
         const srcs = (res.sources || []).map(s => '<a href="' + esc(s.url) + '" target="_blank" rel="noopener">' + esc(s.title) + '</a>').join(" · ");
+        // Which fields came from which source.
+        const bySource = {};
+        Object.keys(res.fieldSources || {}).forEach(f => {
+          if (!(f in (res.suggestions || {}))) return;
+          const src = String(res.fieldSources[f]).split(":")[0];   // "Seriously Fish: Genus species" -> "Seriously Fish"
+          (bySource[src] = bySource[src] || []).push(f);
+        });
+        const perSource = Object.keys(bySource).map(src => '<div class="meta"><b>' + esc(src) + ':</b> ' + esc(bySource[src].join(", ")) + '</div>').join("");
+        box.classList.toggle("unverified", !!res.fallback);
         box.innerHTML =
+          (res.fallback ? '<div class="ai-warn">No credible source (FishBase, Seriously Fish, SeaLifeBase, Tropica) has a page for this, so these come from Wikipedia or the AI’s own knowledge. Verify before saving.</div>' : "") +
           '<div><b>' + (n ? "Filled " + n + " field" + (n === 1 ? "" : "s") : "Nothing new to fill") + '</b>' +
             (res.identified ? ' for <b>' + esc(res.identified) + '</b>' : "") +
             (res.confidence ? ' <span class="pill ' + (res.confidence === "High" ? "good" : res.confidence === "Low" ? "bad" : "warn") + '">' + esc(res.confidence) + ' confidence</span>' : "") + '</div>' +
           (res.notes ? '<div class="meta">' + esc(res.notes) + '</div>' : "") +
           '<div class="meta">Sources: ' + (srcs || "none: from the AI’s own knowledge, so double-check") + '</div>' +
-          (res.photo && opts.onPhoto ? '<div class="meta">Found a free photo on Wikimedia Commons (' + esc(res.photo.license) + '). It will be used as the thumbnail.</div>' : "") +
+          perSource +
+          ((res.notFound || []).length ? '<div class="meta">Not in the sources, left blank: ' + esc(res.notFound.join(", ")) + '</div>' : "") +
+          (res.photo && opts.onPhoto ? '<div class="meta">Thumbnail: free photo from <a href="' + esc(res.photo.page || res.photo.url) + '" target="_blank" rel="noopener">Wikimedia Commons</a> (' + esc(res.photo.license) + ').</div>' : "") +
           (n ? '<div class="meta">AI-filled fields are highlighted.</div>' : "");
         box.hidden = false;
       } catch (err) {
@@ -2736,7 +2758,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "19";
+  const APP_VERSION = "20";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
