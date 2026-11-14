@@ -361,7 +361,34 @@ function aiTropicaUrl_(names) {
    let hit = null;
    wanted.some(w => (hit = list.find(x => x.key === w)));                          // exact name
    if (!hit) wanted.some(w => (hit = list.find(x => x.key.indexOf(w) === 0)));      // e.g. "anubiasbarteri" -> "anubiasbarterinana"
+   // Spelling variants of a scientific name (GBIF's "Microsorium pteropus" = Tropica's "Microsorum pteropus"):
+   // same species word, genus off by at most 2 letters. The shortest match (no variety name) wins.
+   if (!hit) {
+      names.forEach(n => {
+         const b = aiBinomial_(n);
+         if (!b || hit) return;
+         const ep = b.species.toLowerCase().replace(/[^a-z]/g, ""), gen = b.genus.toLowerCase();
+         const cands = list.filter(x => {
+            const i = x.key.indexOf(ep);
+            return i > 0 && aiEditDistance_(x.key.slice(0, i), gen) <= 2;
+         }).sort((a, c) => a.key.length - c.key.length);
+         if (cands.length) hit = cands[0];
+      });
+   }
    return hit ? "https://tropica.com" + hit.path : null;
+}
+
+// Number of single-letter changes between two short words (for spelling variants).
+function aiEditDistance_(a, b) {
+   const d = [];
+   for (let i = 0; i <= a.length; i++) { d[i] = [i]; }
+   for (let j = 1; j <= b.length; j++) d[0][j] = j;
+   for (let i = 1; i <= a.length; i++) {
+      for (let j = 1; j <= b.length; j++) {
+         d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      }
+   }
+   return d[a.length][b.length];
 }
 
 // Tropica plant page, from its fetched HTML.
