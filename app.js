@@ -167,7 +167,8 @@
     equipment: {
       label: "Equipment", one: "Equipment", id: "Equipment ID",
       title: r => [r["Manufacturer"], r["Filter Model"]].filter(Boolean).join(" ") || r["Category"] || r["Equipment ID"],
-      sub: r => r["Category"],
+      // Serial number (when there is one) tells apart two of the same model.
+      sub: r => [r["Category"], String(r["Serial Number"] || "").trim() ? "S/N " + String(r["Serial Number"]).trim() : ""].filter(Boolean).join(" · "),
       img: r => r["Thumbnail URL"]
     },
     plants: {
@@ -2815,7 +2816,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "25";
+  const APP_VERSION = "26";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
