@@ -1453,7 +1453,7 @@
           if (el.tagName === "SELECT" && !$$("option", el).some(o => o.value === v || o.textContent === v)) return;
           el.value = v;
           el.classList.add("ai-filled");
-          if (res.fallback) el.classList.add("ai-unverified");
+          if (res.fallback || (res.unverified || []).indexOf(name) !== -1) el.classList.add("ai-unverified");
           el.dispatchEvent(new Event("input", { bubbles: true }));
           el.dispatchEvent(new Event("change", { bubbles: true }));
           n++;
@@ -1483,7 +1483,9 @@
         });
         const perSource = Object.keys(bySource).map(src => '<div class="meta"><b>' + esc(src) + ':</b> ' + esc(bySource[src].join(", ")) + '</div>').join("");
         box.classList.toggle("unverified", !!res.fallback);
+        const someUnverified = !res.fallback && (res.unverified || []).some(f => f in (res.suggestions || {}));
         box.innerHTML =
+          (someUnverified ? '<div class="ai-warn">Fields outlined in amber aren’t covered by the credible source, so they come from Wikipedia or the AI’s own knowledge. Verify them before saving.</div>' : "") +
           (res.fallback ? '<div class="ai-warn">No credible source (FishBase, Seriously Fish, SeaLifeBase, Tropica) has a page for this, so these come from Wikipedia or the AI’s own knowledge. Verify before saving.</div>' : "") +
           '<div><b>' + (n ? "Filled " + n + " field" + (n === 1 ? "" : "s") : fixed.length ? "No blank fields filled" : "Nothing new to fill") + '</b>' +
             (res.identified ? ' for <b>' + esc(res.identified) + '</b>' : "") +
@@ -2773,7 +2775,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "22";
+  const APP_VERSION = "23";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

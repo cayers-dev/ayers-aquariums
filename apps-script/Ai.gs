@@ -403,7 +403,7 @@ function apiAiFill_(req, user) {
    // when no credible source has the species (then everything is marked to verify).
    const sources = [];
    let refs = "";
-   let credible = false, fallback = false, sci = known["Scientific Name"] || "";
+   let credible = false, fallback = false, partial = false, sci = known["Scientific Name"] || "";
    const addRef = (label, pg) => {
       refs += "\n\nREFERENCE \"" + label + "\" (" + pg.url + "):\n" + pg.text;
       sources.push({ title: label, url: pg.url });
@@ -418,8 +418,11 @@ function apiAiFill_(req, user) {
       const found = aiCredibleSources_(table, known, sci);
       found.forEach(pg => addRef(pg.title, pg));
       credible = found.length > 0;
-      if (!credible || (req.findPhoto && isBlank(current["Thumbnail URL"]))) wiki = aiWikipedia_([sci, known["Common Name"]], table);
-      if (!credible && wiki) { addRef("Wikipedia: " + wiki.title, { url: wiki.url, text: wiki.text }); }
+      // SeaLifeBase alone has little aquarium data (shrimp, snails): fields it doesn't cover may
+      // come from Wikipedia / AI knowledge, marked "verify" in the app.
+      partial = credible && found.every(pg => /^SeaLifeBase:/.test(pg.title));
+      if (!credible || partial || (req.findPhoto && isBlank(current["Thumbnail URL"]))) wiki = aiWikipedia_([sci, known["Common Name"]], table);
+      if ((!credible || partial) && wiki) { addRef("Wikipedia: " + wiki.title, { url: wiki.url, text: wiki.text }); }
       fallback = !credible;
    }
    const credibleLabels = sources.filter(x => !/^Wikipedia:/.test(x.title)).map(x => x.title);
@@ -449,7 +452,10 @@ function apiAiFill_(req, user) {
       (examples.length ? "Match the style, wording length and units of these existing records from the same list:\n" + JSON.stringify(examples, null, 1) + "\n\n" : "") +
       "Rules:\n" +
       "- Use temperatures in °F and sizes in inches (convert from °C / cm when needed).\n" +
-      (credible
+      (partial
+        ? "- Use the SeaLifeBase reference wherever it covers a field. For fields it doesn't cover, use the Wikipedia reference or " +
+          "well-established aquarium-hobby knowledge, and name that source (\"Wikipedia\" or \"AI knowledge\") in fieldSources.\n"
+        : credible
         ? "- Use ONLY the reference pages below. If none of them supports a field, return null for it. " +
           "For aquarium care (temperature range, group size, temperament, diet, difficulty, adult size in aquariums) prefer the aquarium-care source " +
           "(Seriously Fish or Tropica) over FishBase/SeaLifeBase, whose temperatures are wild habitat values.\n"
@@ -481,10 +487,12 @@ function apiAiFill_(req, user) {
    Object.keys(suggestions).forEach(f => {
       const src = String(rawSources[f] || "").trim();
       const match = credibleLabels.find(l => src && (src === l || src.indexOf(l) !== -1 || l.indexOf(src) !== -1));
-      if (credible && !match) { delete suggestions[f]; return; }
+      if (credible && !partial && !match) { delete suggestions[f]; return; }
       fieldSources[f] = match || (fallback ? (src && /^Wikipedia/i.test(src) ? "Wikipedia" : "AI knowledge") : (src || "AI knowledge"));
    });
    const missing = credible ? blanks.map(f => f.name).filter(n => !(n in suggestions)) : [];
+   // Fields not traced to a credible source (all of them in fallback mode): the app outlines them amber.
+   const unverified = Object.keys(suggestions).filter(f => fallback || !credibleLabels.some(l => fieldSources[f] === l));
    // Corrections to entered values: only when traced to a credible source. The app outlines
    // corrected fields so you can review them before saving.
    const corrections = {};
@@ -508,6 +516,7 @@ function apiAiFill_(req, user) {
       suggestions: suggestions,
       fieldSources: fieldSources,
       corrections: corrections,
+      unverified: unverified,
       credible: credible,
       fallback: fallback,
       notFound: missing,
