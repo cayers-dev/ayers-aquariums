@@ -533,6 +533,13 @@ function aiResolveName_(table, typed) {
       return out;
    }
    if (gbif.length > 1) { out.choices = gbif.slice(0, 8).map(h => ({ scientificName: h.sci, commonName: h.common, source: "GBIF" })); return out; }
+   // The name typed may itself be a scientific name (e.g. "Anubias nana"): GBIF gives its accepted name.
+   const asSci = aiBinomial_(typed) ? aiGbifMatch_(String(typed).trim(), table) : null;
+   if (asSci) {
+      out.sci = asSci.sci; out.how = "trusted";
+      out.source = { title: "GBIF: scientific name \"" + typed + "\"", url: "https://www.gbif.org/species/" + asSci.key };
+      return out;
+   }
    // 3. Fallback: the Wikipedia article (its title, or the first scientific name in brackets in its
    //    opening lines), accepted only if GBIF confirms it's a real species; otherwise ask the AI.
    const wiki = aiWikipediaFromJson_(aiFetchHtml_(aiWikipediaUrl_(typed, table)));
