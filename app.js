@@ -1458,7 +1458,7 @@
           el.dispatchEvent(new Event("change", { bubbles: true }));
           n++;
         });
-        // Corrections to values you entered (a credible source disagreed). Text values end in *.
+        // Corrections to values you entered (a credible source disagreed), outlined in pink.
         const fixed = [];
         Object.keys(res.corrections || {}).forEach(name => {
           const el = $$("[name]", scope).find(x => x.name === name);
@@ -1491,7 +1491,7 @@
           (res.notes ? '<div class="meta">' + esc(res.notes) + '</div>' : "") +
           '<div class="meta">Sources: ' + (srcs || "none: from the AI’s own knowledge, so double-check") + '</div>' +
           perSource +
-          (fixed.length ? '<div class="ai-fixes"><div class="meta"><b>Corrected ' + fixed.length + ' value' + (fixed.length === 1 ? "" : "s") + ' you entered</b> (text marked with *):</div>' + fixed.join("") + '</div>' : "") +
+          (fixed.length ? '<div class="ai-fixes"><div class="meta"><b>Corrected ' + fixed.length + ' value' + (fixed.length === 1 ? "" : "s") + ' you entered</b> (outlined in pink):</div>' + fixed.join("") + '</div>' : "") +
           ((res.notFound || []).length ? '<div class="meta">Not in the sources, left blank: ' + esc(res.notFound.join(", ")) + '</div>' : "") +
           (res.photo && opts.onPhoto ? '<div class="meta">Thumbnail: free photo from <a href="' + esc(res.photo.page || res.photo.url) + '" target="_blank" rel="noopener">Wikimedia Commons</a> (' + esc(res.photo.license) + ').</div>' : "") +
           (n ? '<div class="meta">AI-filled fields are highlighted.</div>' : "");
@@ -2773,7 +2773,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "21";
+  const APP_VERSION = "22";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

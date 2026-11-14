@@ -390,9 +390,9 @@ function apiAiFill_(req, user) {
    const blanks = fillable.filter(f => isBlank(current[f.name]));
    const known = {};
    schema.forEach(f => { if (!isBlank(current[f.name])) known[f.name] = String(current[f.name]).trim(); });
-   // Entered values the AI may correct when a credible source contradicts them: text and
-   // dropdown fields (names included), not numbers. A value ending in * was already corrected.
-   const checkable = fillable.filter(f => f.type !== "number" && !isBlank(current[f.name]) && !/\*\s*$/.test(String(current[f.name])));
+   // Entered values the AI may correct when a credible source contradicts them
+   // (text, dropdown and number fields, names included).
+   const checkable = fillable.filter(f => !isBlank(current[f.name]));
    const name = table === "equipment" ? [known["Manufacturer"], known["Filter Model"]].filter(Boolean).join(" ")
               : (known[cfg.name] || known["Common Name"] || known["Scientific Name"] || known["Product Name"]);
    if (!name) throw apiError_("INVALID", "Type a name first" + (table === "equipment" ? " (brand and model)" : "") + ".");
@@ -485,8 +485,8 @@ function apiAiFill_(req, user) {
       fieldSources[f] = match || (fallback ? (src && /^Wikipedia/i.test(src) ? "Wikipedia" : "AI knowledge") : (src || "AI knowledge"));
    });
    const missing = credible ? blanks.map(f => f.name).filter(n => !(n in suggestions)) : [];
-   // Corrections to entered values: only when traced to a credible source. Text values get a
-   // trailing * so the sheet shows the AI changed them; dropdown values can't hold a *.
+   // Corrections to entered values: only when traced to a credible source. The app outlines
+   // corrected fields so you can review them before saving.
    const corrections = {};
    if (credible) {
       const rawC = ai.corrections || {};
@@ -499,10 +499,9 @@ function apiAiFill_(req, user) {
          const cleaned = aiCleanSuggestions_([f], { [f.name]: c.value })[f.name];
          if (cleaned === undefined) return;
          const before = String(current[f.name]).trim();
-         if (String(cleaned).trim().toLowerCase() === before.toLowerCase()) return;
-         const strict = f.type === "list" && f.strict;
-         corrections[f.name] = { from: before, to: strict ? cleaned : String(cleaned).replace(/\s*\*?\s*$/, "") + "*",
-                                 source: label, reason: String(c.reason || "").slice(0, 200) };
+         if (f.type === "number" ? Number(String(before).replace(/,/g, "")) === Number(cleaned)
+                                 : String(cleaned).trim().toLowerCase() === before.toLowerCase()) return;
+         corrections[f.name] = { from: before, to: cleaned, source: label, reason: String(c.reason || "").slice(0, 200) };
       });
    }
    const out = {
