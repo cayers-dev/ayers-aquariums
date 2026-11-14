@@ -692,6 +692,8 @@ function apiCheckWish_(req, user) {
    const keep = wished.concat(bestFit).filter(id => results[id]);
    const missing = wished.filter(id => !results[id]);
 
+   // Cancelled while the AI was answering: nothing is saved.
+   aiCheckCancelled_();
    // Save: earlier results stop being Current; new rows for wished tanks and suggestions.
    return apiWrite_(() => {
       const tabs = apiEnsureWishTabs_();

@@ -228,6 +228,8 @@ img { max-width: 100%; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .busy { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; background: rgba(0, 0, 0, .15); }
 .busy .spinner { margin: 0; }
+.busy-box { display: flex; flex-direction: column; align-items: center; gap: 12px; background: var(--surface); padding: 20px 24px; border-radius: 16px; box-shadow: 0 8px 30px rgba(0,0,0,.2); }
+.busy-label { font-weight: 600; }
 #toast {
   position: fixed; left: 50%; bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 14px);
   transform: translateX(-50%) translateY(20px); opacity: 0; transition: .25s;

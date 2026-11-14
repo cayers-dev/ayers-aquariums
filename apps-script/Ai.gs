@@ -82,6 +82,36 @@ function aiModel_() {
 // The model that answered the most recent request (shown in the app's AI notes).
 let AI_LAST_MODEL = "";
 
+// ------------------------------------------------------------
+// Cancel: the app sends a cancelId with each AI request; its Cancel
+// button calls cancelAi with the same ID. AI steps that haven't
+// started yet (the next Gemini call, saving a compatibility check)
+// are then skipped. A Gemini call already under way can't be stopped.
+// ------------------------------------------------------------
+let AI_CANCEL_ID = "";
+
+// Remembers the request's cancel ID (set by the router for AI actions).
+function aiSetCancelId_(req) {
+   const id = String((req && req.cancelId) || "");
+   AI_CANCEL_ID = /^[A-Za-z0-9_-]{8,64}$/.test(id) ? id : "";
+}
+
+// req: { cancelId } -> marks that request cancelled for 10 minutes.
+function apiCancelAi_(req, user) {
+   aiRequireUser_(user);
+   const id = String(req.cancelId || "");
+   if (!/^[A-Za-z0-9_-]{8,64}$/.test(id)) throw apiError_("BAD_REQUEST", "Unknown request.");
+   CacheService.getScriptCache().put("ai_cancel_" + id, "1", 600);
+   return { cancelled: true };
+}
+
+// Throws CANCELLED if the person cancelled this request.
+function aiCheckCancelled_() {
+   if (AI_CANCEL_ID && CacheService.getScriptCache().get("ai_cancel_" + AI_CANCEL_ID)) {
+      throw apiError_("CANCELLED", "Cancelled.");
+   }
+}
+
 // Sends parts ([{text}|{inline_data}]) and returns the parsed JSON reply.
 // Falls back to other Flash models when one is busy or out of free quota.
 function aiGenerateJson_(parts) {
@@ -92,6 +122,7 @@ function aiGenerateJson_(parts) {
    const models = ready.length ? ready : all;
    let lastErr = null;
    for (let i = 0; i < models.length; i++) {
+      aiCheckCancelled_();   // skip the next model if the person cancelled
       try {
          const out = aiGenerateOnce_(parts, models[i]);
          AI_LAST_MODEL = models[i];

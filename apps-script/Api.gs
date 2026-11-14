@@ -115,21 +115,22 @@ function apiRoute_(req, user) {
       case "updateWaterChange":   return apiWrite_(() => apiUpdateWaterChange_(req, user));
       case "retireWaterChange":   return apiWrite_(() => apiRetireWaterChange_(req, user));
       // AI helper (Ai.gs)
-      case "aiFill":              return apiAiFill_(req, user);
-      case "aiIdentify":          return apiAiIdentify_(req, user);
+      case "aiFill":              aiSetCancelId_(req); return apiAiFill_(req, user);
+      case "aiIdentify":          aiSetCancelId_(req); return apiAiIdentify_(req, user);
+      case "cancelAi":            return apiCancelAi_(req, user);
       // Wishlist (Wishlist.gs)
       case "addWish":             return apiAddWish_(req, user);
       case "updateWish":          return apiWrite_(() => apiUpdateWish_(req, user));
       case "closeWish":           return apiWrite_(() => apiCloseWish_(req, user));
       case "purchaseWish":        return apiWrite_(() => apiPurchaseWish_(req, user));
-      case "checkWish":           return apiCheckWish_(req, user);
+      case "checkWish":           aiSetCancelId_(req); return apiCheckWish_(req, user);
       case "itemPhoto":           return apiItemPhoto_(req, user);
       // Item photos (Photos.gs)
       case "addItemPhoto":        return apiWrite_(() => apiAddItemPhoto_(req, user));
       case "updatePhoto":         return apiWrite_(() => apiUpdatePhoto_(req, user));
       case "setListPhoto":        return apiWrite_(() => apiSetListPhoto_(req, user));
       case "removeItemPhoto":     return apiWrite_(() => apiRemoveItemPhoto_(req, user));
-      case "aiReadLabel":         return apiAiReadLabel_(req, user);
+      case "aiReadLabel":         aiSetCancelId_(req); return apiAiReadLabel_(req, user);
       // Permanent delete, admins only (Delete.gs)
       case "deleteRecord":        return apiWrite_(() => apiDeleteRecord_(req, user));
       case "deleteReceipt":       return apiWrite_(() => apiDeleteReceipt_(req, user));

@@ -83,14 +83,20 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { el.className = ""; }, isError ? 4500 : 2200);
   }
-  function busy(on) {
+  // Full-screen spinner. onCancel (optional): shows a Cancel button with a label (for AI steps).
+  function busy(on, onCancel, label) {
     let el = $(".busy");
     if (on && !el) {
       el = document.createElement("div");
       el.className = "busy";
       el.innerHTML = '<div class="spinner"></div>';
       document.body.appendChild(el);
-    } else if (!on && el) el.remove();
+    } else if (!on && el) { el.remove(); return; }
+    if (on && el && onCancel) {
+      el.innerHTML = '<div class="busy-box"><div class="spinner"></div>' + (label ? '<div class="busy-label">' + esc(label) + '</div>' : "") +
+        '<button type="button" class="btn" data-busy-cancel>Cancel</button></div>';
+      $("[data-busy-cancel]", el).addEventListener("click", () => { $("[data-busy-cancel]", el).disabled = true; onCancel(); });
+    }
   }
   function thumbUrl(url, width) {
     if (!url) return "";
@@ -214,7 +220,8 @@
   // ------------------------------------------------------------------
   // API
   // ------------------------------------------------------------------
-  async function api(action, payload) {
+  // signal (optional): an AbortController signal; aborting stops waiting (error code CANCELLED).
+  async function api(action, payload, signal) {
     if (!state.token || !tokenValid(state.token)) {
       const e = new Error("Your sign-in has expired. Please sign in again.");
       e.code = "AUTH";
@@ -224,19 +231,23 @@
     try {
       res = await fetch(CFG.apiUrl, {
         method: "POST",
-        body: JSON.stringify(Object.assign({ action: action, idToken: state.token }, payload || {}))
+        body: JSON.stringify(Object.assign({ action: action, idToken: state.token }, payload || {})),
+        signal: signal
       });
     } catch (err) {
+      if (signal && signal.aborted) { const c = new Error("Cancelled."); c.code = "CANCELLED"; throw c; }
       const e = new Error("Can't reach the server. Check your connection and try again.");
       e.code = "NETWORK";
       throw e;
     }
     let json;
     try { json = await res.json(); } catch (err) {
+      if (signal && signal.aborted) { const c = new Error("Cancelled."); c.code = "CANCELLED"; throw c; }
       const e = new Error("The server sent an unexpected response.");
       e.code = "ERROR";
       throw e;
     }
+    if (signal && signal.aborted) { const c = new Error("Cancelled."); c.code = "CANCELLED"; throw c; }
     if (!json.ok) {
       const e = new Error(json.message || "Something went wrong.");
       e.code = json.code;
@@ -244,6 +255,24 @@
       throw e;
     }
     return json;
+  }
+
+  // An AI request that can be cancelled. job.run(action, payload) calls the server with a cancel ID;
+  // job.cancel() stops waiting right away and tells the server to skip AI steps it hasn't started.
+  function aiJob() {
+    const ctrl = new AbortController();
+    const id = "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    let cancelled = false;
+    return {
+      get cancelled() { return cancelled; },
+      run: (action, payload) => api(action, Object.assign({ cancelId: id }, payload || {}), ctrl.signal),
+      cancel: () => {
+        if (cancelled) return;
+        cancelled = true;
+        ctrl.abort();
+        api("cancelAi", { cancelId: id }).catch(() => { /* best effort */ });
+      }
+    };
   }
 
   function handleError(err) {
@@ -1505,7 +1534,8 @@
           ? '<div class="field"><label for="f_caption">Caption</label><input type="text" id="f_caption" name="caption" maxlength="100" value="' + esc(p["Caption"] || "") + '" autocomplete="off"></div>' +
             '<div class="actions">' +
               (isList ? '<span class="pill good">List picture</span>' : '<button type="button" class="btn small" data-photo-list>Use as list picture</button>') +
-              (type === "equipment" ? '<button type="button" class="btn small ai-btn" data-photo-read>' + ICONS.sparkle + '<span>Read label</span></button>' : "") +
+              (type === "equipment" ? '<button type="button" class="btn small ai-btn" data-photo-read>' + ICONS.sparkle + '<span>Read label</span></button>' +
+                '<button type="button" class="btn small" data-read-cancel hidden>Cancel</button>' : "") +
               '<button type="button" class="btn small danger" data-photo-remove>Remove</button>' +
               '<button type="button" class="btn small danger" data-photo-delete>Delete</button>' +
             '</div><div class="ai-result" hidden></div>'
@@ -1540,11 +1570,15 @@
           });
         });
         const readBtn = $("[data-photo-read]", form);
+        const readCancel = $("[data-read-cancel]", form);
+        let readJob = null;
+        if (readCancel) readCancel.addEventListener("click", () => { if (readJob) readJob.cancel(); });
         if (readBtn) readBtn.addEventListener("click", async () => {
           const label = $("span", readBtn);
           readBtn.disabled = true; label.textContent = "Reading label…"; box.hidden = true;
+          readJob = aiJob(); readCancel.hidden = false;
           try {
-            const res = await api("aiReadLabel", { photoId: photoId, values: r || {} });
+            const res = await readJob.run("aiReadLabel", { photoId: photoId, values: r || {} });
             if (!Object.keys(res.suggestions || {}).length) {
               box.innerHTML = '<div><b>Nothing new to fill.</b></div>' + (res.notes ? '<div class="meta">' + esc(res.notes) + '</div>' : "");
               box.hidden = false;
@@ -1554,8 +1588,8 @@
             recordForm(type, itemId, res);
           } catch (err) {
             if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) { handleError(err); return; }
-            box.innerHTML = '<div class="form-error-inline">' + esc(err.message) + '</div>'; box.hidden = false;
-          } finally { readBtn.disabled = false; label.textContent = "Read label"; }
+            box.innerHTML = err.code === "CANCELLED" ? '<div class="meta">Cancelled.</div>' : '<div class="form-error-inline">' + esc(err.message) + '</div>'; box.hidden = false;
+          } finally { readBtn.disabled = false; label.textContent = "Read label"; readJob = null; readCancel.hidden = true; }
         });
       },
       onSubmit: async vals => {
@@ -1592,7 +1626,16 @@
       if (f) onFile(f);
     }));
     return {
-      status: t => { st.textContent = t || ""; st.hidden = !t; },
+      // status(text, onCancel?): progress text; onCancel adds a Cancel button (AI steps).
+      status: (t, onCancel) => {
+        st.textContent = t || ""; st.hidden = !t;
+        if (t && onCancel) {
+          const b = document.createElement("button");
+          b.type = "button"; b.className = "btn small"; b.textContent = "Cancel"; b.style.marginLeft = "8px";
+          b.addEventListener("click", () => { b.disabled = true; onCancel(); });
+          st.appendChild(b);
+        }
+      },
       preview: url => { if (url) { prev.src = url; prev.hidden = false; } else { prev.removeAttribute("src"); prev.hidden = true; } }
     };
   }
@@ -1757,6 +1800,7 @@
 
   function aiBarHtml() {
     return '<div class="ai-bar"><button type="button" class="btn small ai-btn" data-ai-fill>' + ICONS.sparkle + '<span>Fill with AI</span></button>' +
+      '<button type="button" class="btn small" data-ai-cancel hidden>Cancel</button>' +
       '<span class="hint">Fills blank fields only. Check them before saving.</span></div><div class="ai-result" hidden></div>';
   }
 
@@ -1769,6 +1813,10 @@
     if (!btn) return;
     // Scientific name picked from the list shown when a common name fits several species.
     let pickedSci = "";
+    // The running lookup (null when idle); its Cancel button stops it.
+    let job = null;
+    const cancelBtn = $("[data-ai-cancel]", form);
+    if (cancelBtn) cancelBtn.addEventListener("click", () => { if (job) job.cancel(); });
     btn.addEventListener("click", async () => {
       const t = typeof type === "function" ? type() : type;
       const scope = opts.scope ? opts.scope() : form;
@@ -1779,7 +1827,9 @@
       btn.disabled = true; label.textContent = (t === "species" || t === "plants") ? "Checking sources…" : "Asking the AI…";
       box.hidden = true;
       try {
-        const res = await api("aiFill", { table: t, values: values, link: getLink ? getLink() : "", findPhoto: !!opts.onPhoto });
+        job = aiJob();
+        if (cancelBtn) cancelBtn.hidden = false;
+        const res = await job.run("aiFill", { table: t, values: values, link: getLink ? getLink() : "", findPhoto: !!opts.onPhoto });
         // The common name fits several species: list them to pick from, then look up the one picked.
         if ((res.choices || []).length) {
           box.classList.remove("unverified");
@@ -1846,10 +1896,13 @@
         box.hidden = false;
       } catch (err) {
         if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) { handleError(err); return; }
-        box.innerHTML = '<div class="form-error-inline">' + esc(err.message) + '</div>';
+        box.classList.remove("unverified");
+        box.innerHTML = err.code === "CANCELLED" ? '<div class="meta">Cancelled. Nothing was filled.</div>' : '<div class="form-error-inline">' + esc(err.message) + '</div>';
         box.hidden = false;
       } finally {
         btn.disabled = false; label.textContent = "Fill with AI";
+        job = null;
+        if (cancelBtn) cancelBtn.hidden = true;
       }
     });
     box.addEventListener("click", e => {
@@ -2108,10 +2161,11 @@
             commons = null;
             pick.preview(image.preview);
           } catch (err) { image = null; pick.preview(""); pick.status(""); toast(err.message, true); return; }
-          pick.status("Identifying…");
+          const idJob = aiJob();
+          pick.status("Identifying…", () => idJob.cancel());
           idBox.hidden = true;
           try {
-            const g = await api("aiIdentify", { image: { data: image.data, mimeType: image.mimeType }, typeHint: type });
+            const g = await idJob.run("aiIdentify", { image: { data: image.data, mimeType: image.mimeType }, typeHint: type });
             const name = g.type === "equipment" ? [g.manufacturer, g.model || g.name].filter(Boolean).join(" ") : [g.name, g.scientificName ? "(" + g.scientificName + ")" : ""].filter(Boolean).join(" ");
             idBox.innerHTML = '<div><b>Looks like:</b> ' + esc(name || "not sure") + ' <span class="pill ' + (g.confidence === "High" ? "good" : g.confidence === "Low" ? "bad" : "warn") + '">' + esc(g.confidence) + ' confidence</span></div>' +
               (g.notes ? '<div class="meta">' + esc(g.notes) + '</div>' : "") +
@@ -2126,7 +2180,9 @@
             };
           } catch (err) {
             if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) { handleError(err); return; }
-            idBox.innerHTML = '<div class="form-error-inline">' + esc(err.message) + '</div>'; idBox.hidden = false;
+            idBox.innerHTML = err.code === "CANCELLED" ? '<div class="meta">Identification cancelled. The photo is kept; type the name instead.</div>'
+                                                       : '<div class="form-error-inline">' + esc(err.message) + '</div>';
+            idBox.hidden = false;
           } finally { pick.status(""); }
         });
       },
@@ -2157,8 +2213,12 @@
           throw err;
         }
         let note = "Added to the wishlist";
-        try { await api("checkWish", { wishId: res.wishId }); }
-        catch (err) { note = "Added. The compatibility check didn’t run: " + err.message; }
+        // The compatibility check can be cancelled; the wish stays either way (Recheck later from its page).
+        const chk = aiJob();
+        busy(false); busy(true, () => chk.cancel(), "Checking compatibility…");
+        try { await chk.run("checkWish", { wishId: res.wishId }); }
+        catch (err) { note = err.code === "CANCELLED" ? "Added. Compatibility check cancelled; use Recheck on the wish later." : "Added. The compatibility check didn’t run: " + err.message; }
+        busy(false); busy(true);
         try { applyBootstrap(await api("bootstrap")); } catch (err) { /* shown on next refresh */ }
         busy(false);
         location.hash = "#/wish/" + encodeURIComponent(res.wishId);
@@ -2288,14 +2348,16 @@
   }
 
   async function checkWishNow(id) {
-    busy(true);
+    const chk = aiJob();
+    busy(true, () => chk.cancel(), "Checking compatibility…");
     try {
-      const res = await api("checkWish", { wishId: id });
+      const res = await chk.run("checkWish", { wishId: id });
       applyBootstrap(await api("bootstrap"));
       render();
       toast(res.summary ? "Checked: " + res.summary : "Compatibility checked");
     } catch (err) {
-      if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) handleError(err); else toast(err.message, true);
+      if (err.code === "CANCELLED") toast("Compatibility check cancelled");
+      else if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) handleError(err); else toast(err.message, true);
     } finally {
       busy(false);
     }
@@ -3133,7 +3195,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "30";
+  const APP_VERSION = "31";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
