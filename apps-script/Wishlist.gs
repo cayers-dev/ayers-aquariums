@@ -274,7 +274,8 @@ function apiCleanCommonsPhoto_(p) {
             author: s(p.author), license: s(p.license) };
 }
 
-// req: { fileId } -> the photo, only if some item uses it as its thumbnail.
+// req: { fileId } -> the photo, only if some item uses it as its thumbnail
+// or it's an active photo on the Item Photos tab (Photos.gs).
 function apiItemPhoto_(req, user) {
    const fileId = String(req.fileId || "");
    if (!/^[A-Za-z0-9_-]{10,}$/.test(fileId)) throw apiError_("BAD_REQUEST", "Unknown photo.");
@@ -286,6 +287,10 @@ function apiItemPhoto_(req, user) {
          const m = String(r["Thumbnail URL"] || "").match(/drive\.google\.com\/file\/d\/([A-Za-z0-9_-]+)/);
          if (m) found.push(m[1]);
       }));
+      apiActivePhotos_().forEach(r => {
+         const m = String(r["Photo URL"] || "").match(/drive\.google\.com\/file\/d\/([A-Za-z0-9_-]+)/);
+         if (m) found.push(m[1]);
+      });
       ids = found.join(",");
       cache.put("item_photo_ids", ids, 300);
    }

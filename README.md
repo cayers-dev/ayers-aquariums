@@ -18,7 +18,8 @@ All of these live in the sheet's Apps Script project ("Aquarium Database"); GitH
 | `Receipts.gs` | Receipt photo uploads (Drive) and linking receipts to records. |
 | `WaterTests.gs` | Test types, water test sessions and readings. |
 | `Maintenance.gs` | Water changes. |
-| `Ai.gs` | Google Gemini helper: Fill with AI, photo identification. Needs the `GEMINI_API_KEY` script property; run `aiTest()` to check it. |
+| `Ai.gs` | Google Gemini helper: Fill with AI, photo identification, Read label (equipment photos). Needs the `GEMINI_API_KEY` script property; run `aiTest()` to check it. |
 | `Wishlist.gs` | Wishlist, Mark purchased, AI compatibility checks, private item photos. |
+| `Photos.gs` | Item Photos tab: several photos per species, equipment or plant (admins add, caption, remove, pick the list picture; everyone can view). |
 
 `apps-script/archive/` holds old code that is no longer in the project (kept for reference only).

@@ -124,6 +124,12 @@ function apiRoute_(req, user) {
       case "purchaseWish":        return apiWrite_(() => apiPurchaseWish_(req, user));
       case "checkWish":           return apiCheckWish_(req, user);
       case "itemPhoto":           return apiItemPhoto_(req, user);
+      // Item photos (Photos.gs)
+      case "addItemPhoto":        return apiWrite_(() => apiAddItemPhoto_(req, user));
+      case "updatePhoto":         return apiWrite_(() => apiUpdatePhoto_(req, user));
+      case "setListPhoto":        return apiWrite_(() => apiSetListPhoto_(req, user));
+      case "removeItemPhoto":     return apiWrite_(() => apiRemoveItemPhoto_(req, user));
+      case "aiReadLabel":         return apiAiReadLabel_(req, user);
       default: throw apiError_("BAD_REQUEST", "Unknown action.");
    }
 }
@@ -208,6 +214,7 @@ function apiBootstrap_(user) {
    Object.assign(out, apiWaterBootstrap_(user));
    Object.assign(out, apiMaintBootstrap_(user));
    Object.assign(out, apiWishBootstrap_(user, out.data.assignments));
+   Object.assign(out, apiPhotosBootstrap_());
    if (user.role !== "Admin") apiLimitToAssignedTanks_(out, user);
    return out;
 }

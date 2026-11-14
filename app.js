@@ -40,6 +40,7 @@
     maintTank: (function () { try { return localStorage.getItem("aa_maint_tank") || ""; } catch (e) { return ""; } })(),
     wishes: [],
     compat: [],
+    photos: [],
     wishOptions: { priorities: ["High", "Medium", "Low"], statuses: ["Researching", "Want", "Purchased", "Not getting"] },
     wishFilter: "open",
     wishTank: "",
@@ -279,6 +280,7 @@
     state.waterChanges = r.waterChanges || [];
     state.wishes = r.wishes || [];
     state.compat = r.compat || [];
+    state.photos = r.photos || [];
     if (r.wishOptions) state.wishOptions = r.wishOptions;
   }
 
@@ -614,7 +616,7 @@
       '</div></div>';
     const wishes = state.wishes.filter(w => w["Item ID"] === id && wishIsOpen(w));
     const wishNote = wishes.length ? '<div class="section"><div class="card list">' + wishes.map(wishRow).join("") + '</div></div>' : "";
-    return { title: T.title(r), back: true, html: hero + wishNote + inTanks + receiptsSection(id) + detailsSection(type, r, "Details") };
+    return { title: T.title(r), back: true, html: hero + photosSection(type, r) + wishNote + inTanks + receiptsSection(id) + detailsSection(type, r, "Details") };
   }
 
   // ---------- Users (admin) ----------
@@ -720,7 +722,7 @@
       '<form class="sheet" novalidate>' +
         '<div class="sheet-head"><h2>' + esc(opts.title) + '</h2><button type="button" class="icon-btn" data-close aria-label="Close">' + ICONS.close + '</button></div>' +
         '<div class="sheet-body"><div class="form-error" hidden></div>' + opts.body + '</div>' +
-        '<div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button>' +
+        '<div class="sheet-foot">' + (opts.noCancel ? "" : '<button type="button" class="btn" data-close>Cancel</button>') +
         '<button type="submit" class="btn ' + (opts.danger ? "danger" : "primary") + '">' + esc(opts.submitLabel || "Save") + '</button></div>' +
       '</form>';
     document.body.appendChild(back);
@@ -753,7 +755,29 @@
     });
   }
 
-  function recordForm(type, id) {
+  // Puts Read label suggestions into blank fields of an open record form, with a note on top.
+  function applyPrefill(form, prefill) {
+    const filled = [];
+    Object.keys(prefill.suggestions || {}).forEach(name => {
+      const el = $$("[name]", form).find(x => x.name === name);
+      if (!el || String(el.value).trim() !== "") return;
+      const v = String(prefill.suggestions[name]);
+      if (el.tagName === "SELECT" && !$$("option", el).some(o => o.value === v || o.textContent === v)) return;
+      el.value = v;
+      el.classList.add("ai-filled", "ai-unverified");
+      filled.push(name);
+    });
+    const note = document.createElement("div");
+    note.className = "ai-result";
+    note.innerHTML = '<div><b>' + (filled.length ? "Read from the label: " + esc(filled.join(", ")) : "Nothing new could be read from the label") + '</b></div>' +
+      (prefill.notes ? '<div class="meta">' + esc(prefill.notes) + '</div>' : "") +
+      (filled.length ? '<div class="ai-warn">Check the outlined fields against the photo before saving, especially serial and model numbers.</div>' : "");
+    $(".sheet-body", form).insertBefore(note, $(".sheet-body", form).children[1] || null);
+  }
+
+  // prefill (optional): { suggestions: { field: value }, notes, source } from Read label;
+  // fills blank fields only, outlined so they can be checked before saving.
+  function recordForm(type, id, prefill) {
     const T = TYPES[type];
     const editing = !!id;
     const rec = editing ? findRec(type, id) : {};
@@ -768,6 +792,7 @@
       submitLabel: editing ? "Save" : "Add",
       body: (ai ? aiBarHtml() : "") + fields.map(f => fieldHtml(f, values[f.name])).join(""),
       onReady: form => {
+        if (prefill) applyPrefill(form, prefill);
         if (!ai) return;
         const thumb = $('[name="Thumbnail URL"]', form);
         // Species and plants: a free Wikimedia Commons photo fills a blank Thumbnail URL (link only).
@@ -1258,6 +1283,125 @@
 
   const vendorItems = () => state.vendors.slice().sort((x, y) => x.localeCompare(y)).map(v => ({ value: v, label: v }));
   const defaultReceiptName = (date, vendor) => [date || today(), vendor, "receipt"].filter(Boolean).join(" ");
+
+  // ---------- Item photos (species, equipment, plants) ----------
+  // Several photos per item (e.g. the whole filter, its serial label). Admins add, caption,
+  // remove and pick the list picture; everyone signed in can view them.
+  const PHOTO_TYPES = ["species", "equipment", "plants"];
+  const photosFor = id => state.photos.filter(p => p["Item ID"] === id)
+    .sort((a, b) => String(a["Added At"]).localeCompare(String(b["Added At"])));
+  function photosSection(type, r) {
+    if (PHOTO_TYPES.indexOf(type) === -1) return "";
+    const id = r[TYPES[type].id];
+    const list = photosFor(id);
+    if (!list.length && !isAdmin()) return "";
+    const tiles = list.map(p =>
+      '<button type="button" class="photo-tile" data-act="open-photo" data-id="' + esc(p["Photo ID"]) + '">' +
+        photoHtml(p["Photo URL"], "tile-img", 400, "") +
+        (String(r["Thumbnail URL"] || "") === String(p["Photo URL"]) ? '<span class="pill good tile-pill">List picture</span>' : "") +
+        (p["Caption"] ? '<span class="tile-cap">' + esc(p["Caption"]) + '</span>' : "") +
+      '</button>').join("");
+    return '<div class="section"><div class="section-head"><h3>Photos (' + list.length + ')</h3>' +
+      (isAdmin() ? '<button class="btn small" data-act="add-photo" data-type="' + type + '" data-id="' + esc(id) + '">' + ICONS.plus + 'Add</button>' : "") + '</div>' +
+      (tiles ? '<div class="photo-grid">' + tiles + '</div>' : '<div class="card"><div class="empty">No photos yet. Add the whole item, its label (serial / model), the box…</div></div>') + '</div>';
+  }
+
+  function addPhotoForm(type, id) {
+    const r = findRec(type, id);
+    if (!r) return;
+    let image = null;
+    openSheet({
+      title: "Add photo",
+      submitLabel: "Add photo",
+      body:
+        '<p class="meta">' + esc(id + " " + TYPES[type].title(r)) + '</p>' +
+        '<div class="field"><label>Photo <span class="req">*</span></label>' + photoPickerHtml("f_iphoto") + '</div>' +
+        '<div class="field"><label for="f_caption">Caption <span class="opt">optional</span></label>' +
+          '<input type="text" id="f_caption" name="caption" maxlength="100" placeholder="e.g. Serial label, Overall, Box" autocomplete="off"></div>' +
+        '<div class="field"><label class="check"><input type="checkbox" name="useAsListPicture"> Use as list picture</label></div>',
+      onReady: form => {
+        // Labels need detail to stay readable, so photos are kept larger than receipts.
+        const pick = wirePhotoPicker(form, "f_iphoto", async f => {
+          pick.status("Preparing photo…");
+          try { image = await prepareImage(f, 2400, 0.88); pick.preview(image.preview); pick.status(""); }
+          catch (err) { image = null; pick.preview(""); pick.status(""); toast(err.message, true); }
+        });
+      },
+      onSubmit: async vals => {
+        if (!image) throw new Error("Take or choose a photo first.");
+        return write("addItemPhoto", { itemId: id, photo: { data: image.data, mimeType: image.mimeType },
+                                       caption: vals.caption, useAsListPicture: !!vals.useAsListPicture }, "Photo added");
+      }
+    });
+  }
+
+  function photoViewer(photoId) {
+    const p = state.photos.find(x => x["Photo ID"] === photoId);
+    if (!p) return;
+    const type = p["Item Type"], itemId = p["Item ID"];
+    const r = findRec(type, itemId);
+    const isList = !!r && String(r["Thumbnail URL"] || "") === String(p["Photo URL"]);
+    const admin = isAdmin();
+    openSheet({
+      title: p["Caption"] || "Photo",
+      submitLabel: admin ? "Save caption" : "Close",
+      noCancel: !admin,
+      body:
+        '<div class="viewer-wrap">' + photoHtml(p["Photo URL"], "viewer-img", 1600, "") + '</div>' +
+        '<p class="meta">' + esc([itemId + (r ? " " + TYPES[type].title(r) : ""), p["Added At"] ? "Added " + fmtDate(String(p["Added At"]).slice(0, 10)) : ""].filter(Boolean).join(" · ")) + '</p>' +
+        (admin
+          ? '<div class="field"><label for="f_caption">Caption</label><input type="text" id="f_caption" name="caption" maxlength="100" value="' + esc(p["Caption"] || "") + '" autocomplete="off"></div>' +
+            '<div class="actions">' +
+              (isList ? '<span class="pill good">List picture</span>' : '<button type="button" class="btn small" data-photo-list>Use as list picture</button>') +
+              (type === "equipment" ? '<button type="button" class="btn small ai-btn" data-photo-read>' + ICONS.sparkle + '<span>Read label</span></button>' : "") +
+              '<button type="button" class="btn small danger" data-photo-remove>Remove</button>' +
+            '</div><div class="ai-result" hidden></div>'
+          : (p["Caption"] ? '<p>' + esc(p["Caption"]) + '</p>' : "")),
+      onReady: form => {
+        if (!admin) return;
+        const close = () => { const b = $("[data-close]", form); if (b) b.click(); };
+        const box = $(".ai-result", form);
+        const listBtn = $("[data-photo-list]", form);
+        if (listBtn) listBtn.addEventListener("click", async () => {
+          listBtn.disabled = true;
+          try { await write("setListPhoto", { photoId: photoId }, "List picture set"); close(); }
+          catch (err) { listBtn.disabled = false; toast(err.message, true); }
+        });
+        $("[data-photo-remove]", form).addEventListener("click", () => {
+          close();
+          openSheet({
+            title: "Remove photo", submitLabel: "Remove", danger: true,
+            body: '<p>Remove this photo' + (p["Caption"] ? ' (<b>' + esc(p["Caption"]) + '</b>)' : "") + ' from ' + esc(itemId) + '? It’s hidden in the app and marked Removed on the Item Photos tab; the file stays in Drive.' +
+              (isList ? ' It’s the list picture, so the item will go back to having no list picture.' : "") + '</p>',
+            onSubmit: () => write("removeItemPhoto", { photoId: photoId }, "Photo removed")
+          });
+        });
+        const readBtn = $("[data-photo-read]", form);
+        if (readBtn) readBtn.addEventListener("click", async () => {
+          const label = $("span", readBtn);
+          readBtn.disabled = true; label.textContent = "Reading label…"; box.hidden = true;
+          try {
+            const res = await api("aiReadLabel", { photoId: photoId, values: r || {} });
+            if (!Object.keys(res.suggestions || {}).length) {
+              box.innerHTML = '<div><b>Nothing new to fill.</b></div>' + (res.notes ? '<div class="meta">' + esc(res.notes) + '</div>' : "");
+              box.hidden = false;
+              return;
+            }
+            close();
+            recordForm(type, itemId, res);
+          } catch (err) {
+            if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) { handleError(err); return; }
+            box.innerHTML = '<div class="form-error-inline">' + esc(err.message) + '</div>'; box.hidden = false;
+          } finally { readBtn.disabled = false; label.textContent = "Read label"; }
+        });
+      },
+      onSubmit: async vals => {
+        if (!admin) return true;
+        if (String(vals.caption || "").trim() === String(p["Caption"] || "").trim()) return true;
+        return write("updatePhoto", { photoId: photoId, caption: vals.caption }, "Caption saved");
+      }
+    });
+  }
 
   // Photo picker with two buttons: "Take photo" opens the camera directly (capture),
   // "Choose image" opens the photo library / files. id is the base id for the two hidden inputs.
@@ -2733,6 +2877,8 @@
       case "add-record": recordForm(d.type); break;
       case "edit-record": recordForm(d.type, d.id); break;
       case "retire": retireForm(d.type, d.id); break;
+      case "add-photo": addPhotoForm(d.type, d.id); break;
+      case "open-photo": photoViewer(d.id); break;
       case "add-assignment": assignmentForm(d.tank); break;
       case "remove-assignment":
         e.stopPropagation();
@@ -2816,7 +2962,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "26";
+  const APP_VERSION = "27";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

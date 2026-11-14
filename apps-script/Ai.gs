@@ -917,6 +917,45 @@ function aiCleanSuggestions_(fields, raw) {
 
 
 // ------------------------------------------------------------
+// Read label (admins, equipment): reads a photo of the manufacturer
+// label / nameplate and suggests values for the item's blank fields.
+// req: { photoId, values: { field: current value } }
+// ------------------------------------------------------------
+function apiAiReadLabel_(req, user) {
+   apiRequireAdmin_(user);
+   const p = apiFindPhoto_(String(req.photoId || ""));
+   if (p["Item Type"] !== "equipment") throw apiError_("INVALID", "Read label works on equipment photos.");
+   const img = apiPhotoBytes_(p);
+   if (img.data.length > 8 * 1024 * 1024) throw apiError_("INVALID", "That photo is too large to read.");
+   const current = req.values || {};
+   const isBlank = v => v === undefined || v === null || String(v).trim() === "";
+   // Fields a label can show: text, list and number fields (not links, dates, checkboxes or status).
+   const schema = apiSchema_("equipment", apiReadLists_(apiSs_()));
+   const fields = schema.filter(f => !f.readOnly && f.type !== "url" && f.type !== "date" && f.type !== "boolean" &&
+                                     ["Status", "Vendor", "Stores"].indexOf(f.name) === -1 && !/URL$|Link$|Page$/.test(f.name));
+   const blanks = fields.filter(f => isBlank(current[f.name]));
+   if (!blanks.length) return { suggestions: {}, notes: "Every field this could fill already has a value." };
+   const lines = blanks.map(f => {
+      let line = "- \"" + f.name + "\"";
+      if (f.type === "number") line += " (number only)";
+      if (f.type === "list" && f.options && f.options.length) {
+         line += f.strict ? " MUST be exactly one of: " + JSON.stringify(f.options) : " (prefer one of these spellings if it applies: " + JSON.stringify(f.options.slice(0, 40)) + ")";
+      }
+      return line;
+   }).join("\n");
+   const prompt =
+      "This photo shows aquarium equipment, usually its manufacturer label, nameplate, box or sticker.\n" +
+      "Read ONLY what is printed in the photo and fill these blank fields of the equipment record:\n" + lines + "\n" +
+      "Rules: copy serial numbers and model numbers exactly as printed (same letters, digits and dashes). " +
+      "Use null for anything not clearly readable in the photo; never guess. " +
+      "Category may be inferred from the product name or type printed on the label.\n" +
+      "Reply with JSON only: {\"fields\": {\"<field name>\": value or null}, \"notes\": \"short: what the label shows, or what was unreadable\"}";
+   const ai = aiGenerateJson_([{ text: prompt }, { inline_data: { mime_type: img.mimeType, data: img.data } }]);
+   return { suggestions: aiCleanSuggestions_(blanks, ai.fields || {}), notes: String(ai.notes || "").slice(0, 400), model: AI_LAST_MODEL };
+}
+
+
+// ------------------------------------------------------------
 // Identify from a photo
 // req: { image: { data: <base64>, mimeType }, typeHint? }
 // ------------------------------------------------------------
