@@ -182,25 +182,15 @@ function aiFetchJson_(url) {
 }
 
 // Best Wikipedia article for a species or plant: { title, url, text, imageFile }
+// (tries each name in turn; one request per name).
 function aiWikipedia_(names, kind) {
    const tried = {};
    for (let i = 0; i < names.length; i++) {
       const q = String(names[i] || "").trim();
       if (!q || tried[q.toLowerCase()]) continue;
       tried[q.toLowerCase()] = true;
-      const hint = kind === "plants" ? " aquatic plant" : " aquarium";
-      const search = aiFetchJson_("https://en.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit=1&srsearch=" +
-                                  encodeURIComponent(q + hint));
-      const hit = search && search.query && search.query.search && search.query.search[0];
-      if (!hit) continue;
-      const page = aiFetchJson_("https://en.wikipedia.org/w/api.php?action=query&format=json&redirects=1&prop=extracts%7Cpageimages%7Cinfo" +
-                                "&explaintext=1&piprop=original&inprop=url&titles=" + encodeURIComponent(hit.title));
-      const pages = page && page.query && page.query.pages;
-      const p = pages && pages[Object.keys(pages)[0]];
-      if (!p || !p.extract) continue;
-      const imageFile = p.original && p.original.source ? decodeURIComponent(String(p.original.source).split("?")[0].split("/").pop()) : "";
-      return { title: p.title, url: p.fullurl || ("https://en.wikipedia.org/wiki/" + encodeURIComponent(p.title.replace(/ /g, "_"))),
-               text: String(p.extract).slice(0, AI_CONFIG.maxRefChars), imageFile: imageFile };
+      const wiki = aiWikipediaFromJson_(aiFetchHtml_(aiWikipediaUrl_(q, kind)));
+      if (wiki) return wiki;
    }
    return null;
 }
@@ -240,27 +230,58 @@ function aiFindPhoto_(type, names) {
    }
 }
 
+// Request options shared by the page fetches below.
+function aiFetchOpts_(url) {
+   return { url: url, muteHttpExceptions: true, followRedirects: true,
+            headers: { "User-Agent": "Mozilla/5.0 (compatible; " + AI_CONFIG.userAgent + ")" } };
+}
+
 // Raw HTML of a web page, or null if it can't be fetched (not found, blocked, timed out).
 function aiFetchHtml_(url) {
-   if (!/^https?:\/\/[^\s]+$/i.test(String(url || ""))) return null;
-   let res;
-   try {
-      res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true, headers: { "User-Agent": "Mozilla/5.0 (compatible; " + AI_CONFIG.userAgent + ")" } });
-   } catch (e) { return null; }
-   if (res.getResponseCode() !== 200) return null;
-   return res.getContentText();
+   return aiFetchAll_([url])[0];
+}
+
+// Fetches several pages at the same time (much faster than one after another).
+// Returns each page's HTML (or null) in the same order as the URLs; a null URL gives null.
+function aiFetchAll_(urls) {
+   const ok = u => /^https?:\/\/[^\s]+$/i.test(String(u || ""));
+   const list = urls.filter(ok);
+   const byUrl = {};
+   if (list.length) {
+      let res = null;
+      try {
+         res = UrlFetchApp.fetchAll(list.map(aiFetchOpts_));
+      } catch (e) {
+         // One bad host makes fetchAll fail as a whole: fall back to one at a time.
+         res = list.map(u => { try { return UrlFetchApp.fetch(u, aiFetchOpts_(u)); } catch (e2) { return null; } });
+      }
+      list.forEach((u, i) => {
+         const r = res[i];
+         byUrl[u] = r && r.getResponseCode() === 200 ? r.getContentText() : null;
+      });
+   }
+   return urls.map(u => (ok(u) ? byUrl[u] : null));
+}
+
+// Page HTML -> plain text (scripts, styles and tags removed, common entities decoded).
+function aiHtmlText_(html) {
+   return String(html || "").replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"')
+      .replace(/&deg;/g, "°").replace(/&ndash;|&#8211;/g, "–").replace(/\s+/g, " ").trim();
+}
+
+// { title, url, text } from a fetched page, or null when there's next to no text.
+function aiPageFromHtml_(url, html) {
+   if (!html) return null;
+   const title = aiHtmlText_((html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || url);
+   const text = aiHtmlText_(html);
+   if (text.length < 200) return null;
+   return { title: title.slice(0, 120), url: url, text: text.slice(0, AI_CONFIG.maxRefChars) };
 }
 
 // Visible text of a web page (a product page the user linked, or a credible source page).
 function aiPageText_(url) {
-   const html = aiFetchHtml_(url);
-   if (!html) return null;
-   const title = ((html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || url).replace(/\s+/g, " ").trim();
-   const text = html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ")
-      .replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"')
-      .replace(/\s+/g, " ").trim();
-   if (text.length < 200) return null;
-   return { title: title.slice(0, 120), url: url, text: text.slice(0, AI_CONFIG.maxRefChars) };
+   return aiPageFromHtml_(url, aiFetchHtml_(url));
 }
 
 
@@ -269,7 +290,7 @@ function aiPageText_(url) {
 //   Fish:             FishBase (scientific data) + Seriously Fish (aquarium care)
 //   Shrimp, snails..: SeaLifeBase (FishBase's sister database for other aquatic life)
 //   Plants:           Tropica (aquarium plant grower)
-// Each returns { title, url, text } or null when it has no page for the species.
+// Each page is { title, url, text } (null when the site has no page for the species).
 // ------------------------------------------------------------
 
 // "Genus species" from a scientific name (drops authors, "var.", extra words).
@@ -278,34 +299,40 @@ function aiBinomial_(sci) {
    return m ? { genus: m[1], species: m[2] } : null;
 }
 
-// FishBase or SeaLifeBase species summary page.
-function aiFishBase_(sci, sealife) {
+// Page addresses for a species on each site.
+function aiFishBaseUrl_(sci, sealife) {
    const b = aiBinomial_(sci);
-   if (!b) return null;
-   const site = sealife ? "https://www.sealifebase.se" : "https://www.fishbase.se";
-   const url = site + "/summary/" + b.genus + "-" + b.species + ".html";
-   const pg = aiPageText_(url);
+   return b ? (sealife ? "https://www.sealifebase.se" : "https://www.fishbase.se") + "/summary/" + b.genus + "-" + b.species + ".html" : null;
+}
+function aiSeriouslyFishUrl_(sci) {
+   const b = aiBinomial_(sci);
+   return b ? "https://www.seriouslyfish.com/species/" + (b.genus + "-" + b.species).toLowerCase() + "/" : null;
+}
+
+// FishBase or SeaLifeBase species summary page, from its fetched HTML.
+function aiFishBasePage_(sci, sealife, html) {
+   const b = aiBinomial_(sci);
+   const pg = b ? aiPageFromHtml_(aiFishBaseUrl_(sci, sealife), html) : null;
    // A real species page has its environment and size sections.
    if (!pg || !/Environment/i.test(pg.text) || !/(Max length|Size)/i.test(pg.text)) return null;
-   const i = pg.text.search(/Environment/i);
-   pg.text = pg.text.slice(Math.max(0, i - 200), Math.max(0, i - 200) + AI_CONFIG.maxRefChars);   // skip the menus
+   const full = aiHtmlText_(html);
+   const i = full.search(/Environment/i);
+   pg.text = full.slice(Math.max(0, i - 200), Math.max(0, i - 200) + AI_CONFIG.maxRefChars);   // skip the menus
    pg.title = (sealife ? "SeaLifeBase: " : "FishBase: ") + b.genus + " " + b.species;
    return pg;
 }
 
-// Seriously Fish species profile (aquarium size, water conditions, diet, behaviour).
-function aiSeriouslyFish_(sci) {
+// Seriously Fish species profile (aquarium size, water conditions, diet, behaviour), from its fetched HTML.
+function aiSeriouslyFishPage_(sci, html) {
    const b = aiBinomial_(sci);
-   if (!b) return null;
-   const url = "https://www.seriouslyfish.com/species/" + (b.genus + "-" + b.species).toLowerCase() + "/";
-   const pg = aiPageText_(url);
+   const pg = b ? aiPageFromHtml_(aiSeriouslyFishUrl_(sci), html) : null;
    if (!pg || !/(Water conditions|Temp)/i.test(pg.text)) return null;
    pg.title = "Seriously Fish: " + b.genus + " " + b.species;
    return pg;
 }
 
-// Tropica plant page, found by matching the name against Tropica's plant list.
-function aiTropica_(names) {
+// Tropica plant page address, found by matching the name against Tropica's plant list.
+function aiTropicaUrl_(names) {
    const norm = s => String(s || "").toLowerCase().replace(/var\.|'/g, "").replace(/[^a-z0-9]/g, "");
    const cache = CacheService.getScriptCache();
    let list = null;
@@ -331,14 +358,143 @@ function aiTropica_(names) {
    let hit = null;
    wanted.some(w => (hit = list.find(x => x.key === w)));                          // exact name
    if (!hit) wanted.some(w => (hit = list.find(x => x.key.indexOf(w) === 0)));      // e.g. "anubiasbarteri" -> "anubiasbarterinana"
-   if (!hit) return null;
-   const pg = aiPageText_("https://tropica.com" + hit.path);
+   return hit ? "https://tropica.com" + hit.path : null;
+}
+
+// Tropica plant page, from its fetched HTML.
+function aiTropicaPage_(url, html) {
+   const pg = aiPageFromHtml_(url, html);
    if (!pg) return null;
    pg.title = "Tropica: " + pg.title.replace(/\s*[|-].*$/, "");
    return pg;
 }
 
-// Asks the AI for the scientific name when only a common name was typed.
+// Wikipedia search address that returns the best article's text, photo and link in one request.
+function aiWikipediaUrl_(name, kind) {
+   const q = String(name || "").trim();
+   if (!q) return null;
+   return "https://en.wikipedia.org/w/api.php?action=query&format=json&redirects=1&generator=search&gsrlimit=1" +
+          "&prop=extracts%7Cpageimages%7Cinfo&explaintext=1&piprop=original&inprop=url&gsrsearch=" +
+          encodeURIComponent(q + (kind === "plants" ? " aquatic plant" : " aquarium"));
+}
+
+// { title, url, text, imageFile } from that request's JSON, or null.
+function aiWikipediaFromJson_(json) {
+   let data = null;
+   try { data = JSON.parse(json || "null"); } catch (e) { return null; }
+   const pages = data && data.query && data.query.pages;
+   const p = pages && pages[Object.keys(pages)[0]];
+   if (!p || !p.extract) return null;
+   const imageFile = p.original && p.original.source ? decodeURIComponent(String(p.original.source).split("?")[0].split("/").pop()) : "";
+   return { title: p.title, url: p.fullurl || ("https://en.wikipedia.org/wiki/" + encodeURIComponent(p.title.replace(/ /g, "_"))),
+            text: String(p.extract).slice(0, AI_CONFIG.maxRefChars), imageFile: imageFile };
+}
+
+
+// ------------------------------------------------------------
+// Scientific name from a typed common name (trusted sources first)
+//   1. FishBase / SeaLifeBase common-name search (species)
+//   2. GBIF, the Global Biodiversity Information Facility (species and plants)
+//   3. Fallback: Wikipedia's article title, then the AI (the app outlines it amber)
+// Returns { sci, how: "trusted" | "fallback" | "", source: {title, url} | null,
+//           choices: [{ scientificName, commonName, source }], pages: { fishbase html, ... } }
+// ------------------------------------------------------------
+
+// Compares common names loosely ("Amano Shrimp" = "amano shrimps" = "Amano's shrimp").
+function aiNameKey_(s) {
+   return String(s || "").toLowerCase().replace(/&#39;|'s\b|'/g, "").replace(/[^a-z0-9]/g, "").replace(/s$/, "");
+}
+
+// Species whose common name matches exactly, from a FishBase / SeaLifeBase common-name search page.
+// When only one species matches, FishBase opens its summary page directly; that page is returned too.
+function aiComNameHits_(html, typed) {
+   if (!html) return { hits: [] };
+   const title = aiHtmlText_((html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || "");
+   if (/Environment/i.test(html) && aiBinomial_(title) && !/Search Result/i.test(title)) {
+      const b = aiBinomial_(title);
+      return { hits: [{ sci: b.genus + " " + b.species, common: typed }], summary: html };
+   }
+   const m = html.match(/var table_data_arr = (\{[\s\S]*?\});\s*var /);
+   if (!m) return { hits: [] };
+   let rows = [];
+   try { rows = (JSON.parse(m[1]).table_filter) || []; } catch (e) { return { hits: [] }; }
+   const want = aiNameKey_(typed);
+   const hits = [];
+   rows.forEach(r => {
+      const common = aiHtmlText_(r[1]);
+      const b = aiBinomial_(aiHtmlText_(r[6]));
+      if (!b || aiNameKey_(common) !== want) return;
+      const sci = b.genus + " " + b.species;
+      if (!hits.some(h => h.sci === sci)) hits.push({ sci: sci, common: common });
+   });
+   return { hits: hits };
+}
+
+// Species whose English common name matches exactly, from GBIF's name search.
+function aiGbifHits_(json, typed, table) {
+   let data = null;
+   try { data = JSON.parse(json || "null"); } catch (e) { return []; }
+   const kingdom = table === "plants" ? "Plantae" : "Animalia";
+   const want = aiNameKey_(typed);
+   const hits = [];
+   ((data && data.results) || []).forEach(r => {
+      if (r.kingdom !== kingdom || !aiBinomial_(r.canonicalName)) return;
+      const names = (r.vernacularNames || []).filter(v => !v.language || v.language === "eng").map(v => v.vernacularName);
+      const match = names.find(n => aiNameKey_(n) === want);
+      if (!match) return;
+      const b = aiBinomial_(r.canonicalName);
+      const sci = b.genus + " " + b.species;
+      if (!hits.some(h => h.sci === sci)) hits.push({ sci: sci, common: match });
+   });
+   return hits;
+}
+
+function aiResolveName_(table, typed) {
+   const out = { sci: "", how: "", source: null, choices: [], pages: {} };
+   const q = encodeURIComponent(String(typed).trim());
+   // 1. FishBase and SeaLifeBase common names (searched at the same time).
+   if (table === "species") {
+      const urls = ["https://www.fishbase.se/ComNames/CommonNameSearchList.php?CommonName=" + q,
+                    "https://www.sealifebase.se/ComNames/CommonNameSearchList.php?CommonName=" + q];
+      const html = aiFetchAll_(urls);
+      const fb = aiComNameHits_(html[0], typed), slb = aiComNameHits_(html[1], typed);
+      const hits = [];
+      fb.hits.forEach(h => hits.push({ sci: h.sci, common: h.common, source: "FishBase", url: urls[0] }));
+      slb.hits.forEach(h => { if (!hits.some(x => x.sci === h.sci)) hits.push({ sci: h.sci, common: h.common, source: "SeaLifeBase", url: urls[1] }); });
+      if (fb.summary) out.pages.fishbase = fb.summary;
+      if (slb.summary) out.pages.sealife = slb.summary;
+      if (hits.length === 1) {
+         out.sci = hits[0].sci; out.how = "trusted";
+         out.source = { title: hits[0].source + ": common name \"" + typed + "\"", url: hits[0].url };
+         return out;
+      }
+      if (hits.length > 1) { out.choices = hits.map(h => ({ scientificName: h.sci, commonName: h.common, source: h.source })); return out; }
+   }
+   // 2. GBIF common names.
+   const gbifUrl = "https://api.gbif.org/v1/species/search?qField=VERNACULAR&rank=SPECIES&status=ACCEPTED" +
+                   "&datasetKey=d7dddbf4-2cf0-4f39-9b2a-bb099caae36c&limit=20&q=" + q;
+   const gbif = aiGbifHits_(aiFetchHtml_(gbifUrl), typed, table);
+   if (gbif.length === 1) {
+      out.sci = gbif[0].sci; out.how = "trusted";
+      out.source = { title: "GBIF: common name \"" + typed + "\"", url: "https://www.gbif.org/species/search?q=" + q };
+      return out;
+   }
+   if (gbif.length > 1) { out.choices = gbif.slice(0, 8).map(h => ({ scientificName: h.sci, commonName: h.common, source: "GBIF" })); return out; }
+   // 3. Fallback: the Wikipedia article's title is often the scientific name; otherwise ask the AI.
+   const wiki = aiWikipediaFromJson_(aiFetchHtml_(aiWikipediaUrl_(typed, table)));
+   if (wiki) out.pages.wiki = wiki;
+   if (wiki && aiBinomial_(wiki.title)) {
+      const b = aiBinomial_(wiki.title);
+      out.sci = b.genus + " " + b.species; out.how = "fallback";
+      out.source = { title: "Wikipedia: " + wiki.title, url: wiki.url };
+      return out;
+   }
+   const ai = aiScientificName_(typed, table);
+   if (ai) { out.sci = ai; out.how = "fallback"; }
+   return out;
+}
+
+// Asks the AI for the scientific name when no source recognizes the common name.
 function aiScientificName_(commonName, type) {
    const ai = aiGenerateJson_([{ text:
       "Give the accepted scientific name (genus and species) of this " + AI_TABLES[type].kind + " as it is sold in the aquarium hobby: \"" +
@@ -346,36 +502,101 @@ function aiScientificName_(commonName, type) {
    return aiBinomial_(ai.scientificName) ? String(ai.scientificName).trim() : "";
 }
 
-// Credible reference pages for a species or plant.
-function aiCredibleSources_(table, known, sci) {
+
+// ------------------------------------------------------------
+// Credible reference pages for a species or plant, plus the Wikipedia
+// article (photo, and fallback text), all fetched at the same time.
+// pages: HTML already fetched while finding the scientific name.
+// Returns { refs: [page], wiki }
+// ------------------------------------------------------------
+function aiCredibleSources_(table, known, sci, pages, wantWiki) {
+   pages = pages || {};
    const refs = [];
+   const wikiName = aiBinomial_(sci) ? sci : known["Common Name"];
    if (table === "plants") {
-      const t = aiTropica_([sci, known["Common Name"]]);
+      const tUrl = aiTropicaUrl_([sci, known["Common Name"]]);
+      const got = aiFetchAll_([tUrl, pages.wiki || !wantWiki ? null : aiWikipediaUrl_(wikiName, table)]);
+      const t = tUrl ? aiTropicaPage_(tUrl, got[0]) : null;
       if (t) refs.push(t);
-      return refs;
+      return { refs: refs, wiki: pages.wiki || aiWikipediaFromJson_(got[1]) };
    }
-   // Fish are on FishBase (+ Seriously Fish); anything FishBase doesn't have is tried on
+   // Fish are on FishBase (+ Seriously Fish); anything FishBase doesn't have is taken from
    // SeaLifeBase. The Category typed in isn't trusted here, since it may be the thing that's wrong.
-   const fb = aiFishBase_(sci, false);
+   const got = aiFetchAll_([
+      pages.fishbase ? null : aiFishBaseUrl_(sci, false),
+      pages.sealife ? null : aiFishBaseUrl_(sci, true),
+      aiSeriouslyFishUrl_(sci),
+      pages.wiki || !wantWiki ? null : aiWikipediaUrl_(wikiName, table)
+   ]);
+   const fb = aiFishBasePage_(sci, false, pages.fishbase || got[0]);
    if (fb) {
       refs.push(fb);
-      const sf = aiSeriouslyFish_(sci);
+      const sf = aiSeriouslyFishPage_(sci, got[2]);
       if (sf) refs.push(sf);
    } else {
-      const slb = aiFishBase_(sci, true);
+      const slb = aiFishBasePage_(sci, true, pages.sealife || got[1]);
       if (slb) refs.push(slb);
    }
-   return refs;
+   return { refs: refs, wiki: pages.wiki || aiWikipediaFromJson_(got[3]) };
+}
+
+// Numbers read straight off the credible pages (no AI), so they match the source exactly.
+// Seriously Fish (aquarium values) wins over FishBase/SeaLifeBase (wild habitat values).
+// Returns { field: { value, source } } for Temp Min °F, Temp Max °F and Max Size (in).
+function aiSourceNumbers_(refs) {
+   const out = {};
+   const set = (f, v, src) => { if (!(f in out) && v !== null && isFinite(v)) out[f] = { value: v, source: src }; };
+   const ordered = refs.filter(r => /^Seriously Fish:/.test(r.title)).concat(refs.filter(r => /^(FishBase|SeaLifeBase):/.test(r.title)));
+   ordered.forEach(r => {
+      const t = r.text;
+      let m;
+      if (/^Seriously Fish:/.test(r.title)) {
+         // "Quick facts ... Max size 150 mm SL 6 in SL ... Temp 24–28 °C 75–82 °F"
+         if ((m = t.match(/Temp\s+[\d.]+\s*[–-]\s*[\d.]+\s*°C\s+(\d+(?:\.\d+)?)\s*[–-]\s*(\d+(?:\.\d+)?)\s*°F/))) {
+            const lo = Math.round(Number(m[1])), hi = Math.round(Number(m[2]));
+            if (lo < hi && lo >= 32 && hi <= 100) { set("Temp Min °F", lo, r.title); set("Temp Max °F", hi, r.title); }
+         }
+         if ((m = t.match(/Max size\s+[\d.]+\s*mm\s*\w*\s+(\d+(?:\.\d+)?)\s*in\b/))) set("Max Size (in)", Number(m[1]), r.title);
+      } else {
+         // "Tropical; 21°C - 25°C" and "Max length : 27.5 cm TL"
+         if ((m = t.match(/(-?\d+(?:\.\d+)?)\s*°C\s*[–-]\s*(-?\d+(?:\.\d+)?)\s*°C/))) {
+            const lo = Math.round(Number(m[1]) * 9 / 5 + 32), hi = Math.round(Number(m[2]) * 9 / 5 + 32);
+            if (lo < hi && lo >= 32 && hi <= 100) { set("Temp Min °F", lo, r.title); set("Temp Max °F", hi, r.title); }
+         }
+         if ((m = t.match(/Max length\s*:\s*(\d+(?:\.\d+)?)\s*cm/i))) set("Max Size (in)", Math.round(Number(m[1]) / 2.54 * 10) / 10, r.title);
+      }
+   });
+   return out;
 }
 
 
 // ------------------------------------------------------------
 // Fill with AI
 // req: { table, values: { field: current value }, link?, findPhoto? }
-// Returns suggestions for the blank fields only.
+// Returns suggestions for the blank fields only, corrections to entered
+// values, or (when a common name fits several species) choices to pick from.
+// The same lookup repeated within 6 hours is answered from the cache.
 // ------------------------------------------------------------
 function apiAiFill_(req, user) {
    aiRequireUser_(user);
+   const t0 = Date.now();
+   const vals = {};
+   Object.keys(req.values || {}).sort().forEach(k => { const v = String(req.values[k] === null || req.values[k] === undefined ? "" : req.values[k]).trim(); if (v) vals[k] = v; });
+   const key = "aifill_" + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5,
+      JSON.stringify([req.table, vals, req.link || "", !!req.findPhoto]), Utilities.Charset.UTF_8));
+   const cache = CacheService.getScriptCache();
+   const hit = cache.get(key);
+   if (hit) {
+      try { const out = JSON.parse(hit); out.cached = true; out.ms = Date.now() - t0; return out; } catch (e) { /* look it up again */ }
+   }
+   const out = aiFill_(req);
+   out.ms = Date.now() - t0;
+   try { cache.put(key, JSON.stringify(out), 21600); } catch (e) { /* too big to cache: fine */ }
+   return out;
+}
+
+// The lookup itself (apiAiFill_ adds the cache).
+function aiFill_(req) {
    const table = req.table;
    const cfg = AI_TABLES[table];
    if (!cfg) throw apiError_("BAD_REQUEST", "Fill with AI doesn't work for that list.");
@@ -412,30 +633,67 @@ function apiAiFill_(req, user) {
       const pg = aiPageText_(req.link);
       if (pg) addRef(pg.title, pg);
    }
-   let wiki = null;
+   let wiki = null, nameHow = "typed", nameLabel = "", direct = {};
    if (table === "species" || table === "plants") {
-      if (!aiBinomial_(sci) && known["Common Name"]) sci = aiScientificName_(known["Common Name"], table);
-      const found = aiCredibleSources_(table, known, sci);
-      found.forEach(pg => addRef(pg.title, pg));
-      credible = found.length > 0;
+      // A scientific name typed into Common Name counts as the scientific name.
+      if (!aiBinomial_(sci) && aiBinomial_(known["Common Name"]) && /^[A-Z][a-z]+ [a-z\-]+$/.test(known["Common Name"])) sci = known["Common Name"];
+      // Common name only: find the scientific name (trusted sources first).
+      let pages = {};
+      if (!aiBinomial_(sci) && known["Common Name"]) {
+         const nm = aiResolveName_(table, known["Common Name"]);
+         if (nm.choices.length) {
+            return { choices: nm.choices, suggestions: {}, corrections: {}, sources: [], filled: 0,
+                     notes: "\"" + known["Common Name"] + "\" is the common name of more than one species. Pick the one you mean." };
+         }
+         sci = nm.sci; nameHow = nm.how || "none"; pages = nm.pages;
+         nameLabel = nm.source ? nm.source.title : "";
+         if (nm.source && nm.how === "trusted") sources.push(nm.source);
+      }
+      const wantWiki = !!(req.findPhoto && isBlank(current["Thumbnail URL"]));
+      // The Wikipedia article is fetched alongside (photo, and text when the sources fall short).
+      const found = aiBinomial_(sci) ? aiCredibleSources_(table, known, sci, pages, true) : { refs: [], wiki: pages.wiki || null };
+      found.refs.forEach(pg => addRef(pg.title, pg));
+      credible = found.refs.length > 0;
       // SeaLifeBase alone has little aquarium data (shrimp, snails): fields it doesn't cover may
       // come from Wikipedia / AI knowledge, marked "verify" in the app.
-      partial = credible && found.every(pg => /^SeaLifeBase:/.test(pg.title));
-      if (!credible || partial || (req.findPhoto && isBlank(current["Thumbnail URL"]))) wiki = aiWikipedia_([sci, known["Common Name"]], table);
+      partial = credible && found.refs.every(pg => /^SeaLifeBase:/.test(pg.title));
+      wiki = found.wiki;
+      if (!wiki && (!credible || partial || wantWiki)) wiki = aiWikipedia_([sci, known["Common Name"]], table);
       if ((!credible || partial) && wiki) { addRef("Wikipedia: " + wiki.title, { url: wiki.url, text: wiki.text }); }
       fallback = !credible;
+      // Numbers read straight off the credible pages (no AI needed for these).
+      direct = credible ? aiSourceNumbers_(found.refs) : {};
+      Object.keys(direct).forEach(f => { if (!fillable.some(x => x.name === f)) delete direct[f]; });
    }
    const credibleLabels = sources.filter(x => !/^Wikipedia:/.test(x.title)).map(x => x.title);
+   const preset = {}, presetSources = {};
+   if (table === "species" || table === "plants") {
+      if (isBlank(current["Scientific Name"]) && aiBinomial_(sci) && (nameHow === "trusted" || nameHow === "fallback")) {
+         preset["Scientific Name"] = sci;
+         presetSources["Scientific Name"] = nameHow === "trusted" ? nameLabel : (/^Wikipedia/.test(nameLabel) ? "Wikipedia" : "AI knowledge");
+      }
+      Object.keys(direct).forEach(f => { if (isBlank(current[f])) { preset[f] = direct[f].value; presetSources[f] = direct[f].source; } });
+   }
+   const aiBlanks = blanks.filter(f => !(f.name in preset));
+   // Entered numbers the source states exactly are checked here, not by the AI.
+   const directFixes = {};
+   checkable.forEach(f => {
+      const d = direct[f.name];
+      if (!d) return;
+      const before = String(current[f.name]).trim();
+      if (Number(before.replace(/,/g, "")) !== Number(d.value)) directFixes[f.name] = { from: before, to: d.value, source: d.source, reason: "the source gives " + d.value };
+   });
+   const aiCheckable = checkable.filter(f => !direct[f.name]);
 
    // Nothing blank and no credible source to check entered values against: nothing to do.
-   if (!blanks.length && !credible) {
+   if (!blanks.length && !credible && !Object.keys(preset).length) {
       return { suggestions: {}, corrections: {}, sources: sources, filled: 0, fallback: fallback,
                notes: "Every field already has a value, and no credible source was found to check them against." };
    }
 
    // Existing rows show the AI the expected style; list fields get their allowed values.
    const examples = aiExampleRows_(table, fillable.map(f => f.name));
-   const fieldLines = blanks.map(f => {
+   const fieldLines = aiBlanks.map(f => {
       let line = "- \"" + f.name + "\"";
       if (f.type === "number") line += " (number only)";
       if (f.type === "list" && f.options && f.options.length) {
@@ -448,7 +706,8 @@ function apiAiFill_(req, user) {
    const prompt =
       "You fill in records for a home aquarium database. Item type: " + cfg.kind + ".\n" +
       "What the user has entered so far:\n" + JSON.stringify(known, null, 1) + "\n\n" +
-      (blanks.length ? "Fill in ONLY these blank fields:\n" + fieldLines + "\n\n" : "There are no blank fields to fill.\n\n") +
+      (Object.keys(preset).length ? "Already taken from the sources (don't change these): " + JSON.stringify(preset) + "\n\n" : "") +
+      (aiBlanks.length ? "Fill in ONLY these blank fields:\n" + fieldLines + "\n\n" : "There are no blank fields to fill.\n\n") +
       (examples.length ? "Match the style, wording length and units of these existing records from the same list:\n" + JSON.stringify(examples, null, 1) + "\n\n" : "") +
       "Rules:\n" +
       "- Use temperatures in °F and sizes in inches (convert from °C / cm when needed).\n" +
@@ -462,13 +721,13 @@ function apiAiFill_(req, user) {
         : "- Prefer the reference text below when it covers a field; otherwise use well-established knowledge.\n") +
       "- If a value isn't reasonably certain, use null. Never invent model numbers, measurements or links.\n" +
       "- Keep text fields short, like the examples.\n" +
-      (credible && checkable.length
-        ? "- Also check these values the user entered: " + JSON.stringify(checkable.reduce((o, f) => { o[f.name] = String(current[f.name]).trim(); return o; }, {})) + ". " +
+      (credible && aiCheckable.length
+        ? "- Also check these values the user entered: " + JSON.stringify(aiCheckable.reduce((o, f) => { o[f.name] = String(current[f.name]).trim(); return o; }, {})) + ". " +
           "Only if a reference page clearly contradicts one, put the corrected value in \"corrections\" with the reference name and a short reason. " +
           "Don't correct wording, spelling style or format differences, or values the references don't address. " +
           "Common names vary between sources: only correct a common name if it belongs to a different species than the one the references describe." +
-          (checkable.some(f => f.type === "list" && f.strict) ? " Dropdown fields must still use one of their allowed values: " +
-            JSON.stringify(checkable.filter(f => f.type === "list" && f.strict).reduce((o, f) => { o[f.name] = f.options; return o; }, {})) + "." : "") + "\n"
+          (aiCheckable.some(f => f.type === "list" && f.strict) ? " Dropdown fields must still use one of their allowed values: " +
+            JSON.stringify(aiCheckable.filter(f => f.type === "list" && f.strict).reduce((o, f) => { o[f.name] = f.options; return o; }, {})) + "." : "") + "\n"
         : "") +
       "- In \"fieldSources\", give for each filled field the exact reference name it came from (as written in quotes after REFERENCE), or \"AI knowledge\".\n" +
       "Reply with JSON only: {\"identified\": \"the exact item you filled in for (name, scientific name or brand + model)\", " +
@@ -479,8 +738,9 @@ function apiAiFill_(req, user) {
       refs;
 
    // Ask, then keep only valid suggestions for fields that were blank.
-   const ai = aiGenerateJson_([{ text: prompt }]);
-   const suggestions = aiCleanSuggestions_(blanks, ai.fields || {});
+   // The AI is only asked when something is left for it (blank fields, or entered values to check).
+   const ai = (aiBlanks.length || (credible && aiCheckable.length)) ? aiGenerateJson_([{ text: prompt }]) : {};
+   const suggestions = aiCleanSuggestions_(aiBlanks, ai.fields || {});
    // Where each value came from. With credible sources, anything not traced to one is dropped.
    const fieldSources = {};
    const rawSources = ai.fieldSources || {};
@@ -490,15 +750,24 @@ function apiAiFill_(req, user) {
       if (credible && !partial && !match) { delete suggestions[f]; return; }
       fieldSources[f] = match || (fallback ? (src && /^Wikipedia/i.test(src) ? "Wikipedia" : "AI knowledge") : (src || "AI knowledge"));
    });
+   // Values taken straight from the sources join the AI's suggestions.
+   Object.keys(preset).forEach(f => {
+      const cleaned = aiCleanSuggestions_(blanks.filter(x => x.name === f), { [f]: preset[f] })[f];
+      if (cleaned === undefined) return;
+      suggestions[f] = cleaned;
+      fieldSources[f] = presetSources[f];
+   });
    const missing = credible ? blanks.map(f => f.name).filter(n => !(n in suggestions)) : [];
    // Fields not traced to a credible source (all of them in fallback mode): the app outlines them amber.
    const unverified = Object.keys(suggestions).filter(f => fallback || !credibleLabels.some(l => fieldSources[f] === l));
+   // A scientific name found only through Wikipedia / the AI is always marked to verify.
+   if (nameHow === "fallback" && "Scientific Name" in suggestions && unverified.indexOf("Scientific Name") === -1) unverified.push("Scientific Name");
    // Corrections to entered values: only when traced to a credible source. The app outlines
    // corrected fields so you can review them before saving.
-   const corrections = {};
+   const corrections = directFixes;
    if (credible) {
       const rawC = ai.corrections || {};
-      checkable.forEach(f => {
+      aiCheckable.forEach(f => {
          const c = rawC[f.name];
          if (!c || typeof c !== "object") return;
          const src = String(c.source || "").trim();
@@ -521,12 +790,13 @@ function apiAiFill_(req, user) {
       fallback: fallback,
       notFound: missing,
       scientificName: sci,
+      nameFrom: nameHow,
       filled: Object.keys(suggestions).length,
       identified: String(ai.identified || "").slice(0, 200),
       confidence: /^(High|Medium|Low)$/i.test(String(ai.confidence)) ? String(ai.confidence).replace(/^./, c => c.toUpperCase()) : "",
       notes: String(ai.notes || "").slice(0, 500),
       sources: sources,
-      model: AI_LAST_MODEL
+      model: ai.fields ? AI_LAST_MODEL : ""
    };
    // A free-licensed photo when the item has no thumbnail yet.
    if (req.findPhoto && isBlank(current["Thumbnail URL"]) && wiki) {

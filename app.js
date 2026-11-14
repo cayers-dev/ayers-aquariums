@@ -1435,16 +1435,29 @@
     const btn = $("[data-ai-fill]", form);
     const box = $(".ai-result", form);
     if (!btn) return;
+    // Scientific name picked from the list shown when a common name fits several species.
+    let pickedSci = "";
     btn.addEventListener("click", async () => {
       const t = typeof type === "function" ? type() : type;
       const scope = opts.scope ? opts.scope() : form;
       const values = {};
       $$("input[name], select[name], textarea[name]", scope).forEach(el => { if (el.type !== "checkbox" && el.type !== "file") values[el.name] = el.value; });
+      if (pickedSci && !String(values["Scientific Name"] || "").trim()) values["Scientific Name"] = pickedSci;
       const label = $("span", btn);
       btn.disabled = true; label.textContent = (t === "species" || t === "plants") ? "Checking sources…" : "Asking the AI…";
       box.hidden = true;
       try {
         const res = await api("aiFill", { table: t, values: values, link: getLink ? getLink() : "", findPhoto: !!opts.onPhoto });
+        // The common name fits several species: list them to pick from, then look up the one picked.
+        if ((res.choices || []).length) {
+          box.classList.remove("unverified");
+          box.innerHTML = '<div><b>Which one do you mean?</b></div><div class="meta">' + esc(res.notes || "") + '</div>' +
+            '<div class="ai-choices">' + res.choices.map(c =>
+              '<button type="button" class="match" data-sci="' + esc(c.scientificName) + '"><i>' + esc(c.scientificName) + '</i> ' +
+              '<span>' + esc(c.commonName) + ' · ' + esc(c.source) + '</span></button>').join("") + '</div>';
+          box.hidden = false;
+          return;
+        }
         let n = 0;
         Object.keys(res.suggestions || {}).forEach(name => {
           const el = $$("[name]", scope).find(x => x.name === name);
@@ -1492,6 +1505,7 @@
             (res.confidence ? ' <span class="pill ' + (res.confidence === "High" ? "good" : res.confidence === "Low" ? "bad" : "warn") + '">' + esc(res.confidence) + ' confidence</span>' : "") + '</div>' +
           (res.notes ? '<div class="meta">' + esc(res.notes) + '</div>' : "") +
           '<div class="meta">Sources: ' + (srcs || "none: from the AI’s own knowledge, so double-check") + '</div>' +
+          (res.cached ? '<div class="meta">You ran this same lookup in the last 6 hours, so this is the saved result.</div>' : "") +
           perSource +
           (fixed.length ? '<div class="ai-fixes"><div class="meta"><b>Corrected ' + fixed.length + ' value' + (fixed.length === 1 ? "" : "s") + ' you entered</b> (outlined in pink):</div>' + fixed.join("") + '</div>' : "") +
           ((res.notFound || []).length ? '<div class="meta">Not in the sources, left blank: ' + esc(res.notFound.join(", ")) + '</div>' : "") +
@@ -1506,7 +1520,19 @@
         btn.disabled = false; label.textContent = "Fill with AI";
       }
     });
-    form.addEventListener("input", e => { if (e.isTrusted && e.target.classList) e.target.classList.remove("ai-filled", "ai-unverified", "ai-corrected"); });
+    box.addEventListener("click", e => {
+      const b = e.target.closest("[data-sci]");
+      if (!b || btn.disabled) return;
+      pickedSci = b.dataset.sci;
+      const scope = opts.scope ? opts.scope() : form;
+      const sciEl = $$("[name]", scope).find(x => x.name === "Scientific Name");
+      if (sciEl && !String(sciEl.value).trim()) { sciEl.value = pickedSci; sciEl.dispatchEvent(new Event("input", { bubbles: true })); }
+      btn.click();
+    });
+    form.addEventListener("input", e => {
+      if (e.isTrusted && e.target.classList) e.target.classList.remove("ai-filled", "ai-unverified", "ai-corrected");
+      if (e.isTrusted && e.target.name === "Common Name") pickedSci = "";   // a new name needs a new pick
+    });
   }
 
 
@@ -2775,7 +2801,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "23";
+  const APP_VERSION = "24";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
