@@ -531,6 +531,7 @@
         '<button class="btn primary" data-act="add-assignment" data-tank="' + esc(id) + '">' + ICONS.plus + 'Add to tank</button>' +
         '<button class="btn" data-act="edit-record" data-type="tanks" data-id="' + esc(id) + '">Edit tank</button>' +
         (isAdmin() && !isRetired(t) ? '<button class="btn danger" data-act="retire" data-type="tanks" data-id="' + esc(id) + '">Retire</button>' : "") +
+        (isAdmin() ? '<button class="btn danger" data-act="delete-record" data-type="tanks" data-id="' + esc(id) + '">Delete</button>' : "") +
       '</div>' : "") + '</div>';
 
     return {
@@ -612,7 +613,8 @@
       '<div class="hero"><h2>' + esc(T.title(r)) + '</h2><div class="meta">' + esc([r[T.id], T.sub(r)].filter(Boolean).join(" · ")) + '</div>' +
       (isRetired(r) ? '<div class="counts"><span class="pill retired">Retired</span></div>' : isWishItem(r) ? '<div class="counts"><span class="pill wishpill">' + ICONS.wish + 'Wishlist</span></div>' : "") +
       (isAdmin() ? '<div class="actions"><button class="btn" data-act="edit-record" data-type="' + type + '" data-id="' + esc(id) + '">Edit</button>' +
-        (!isRetired(r) && "Status" in r ? '<button class="btn danger" data-act="retire" data-type="' + type + '" data-id="' + esc(id) + '">Retire</button>' : "") + '</div>'
+        (!isRetired(r) && "Status" in r ? '<button class="btn danger" data-act="retire" data-type="' + type + '" data-id="' + esc(id) + '">Retire</button>' : "") +
+        '<button class="btn danger" data-act="delete-record" data-type="' + type + '" data-id="' + esc(id) + '">Delete</button></div>'
         : canEditItem(type, r) ? '<div class="actions"><button class="btn" data-act="edit-record" data-type="' + type + '" data-id="' + esc(id) + '">Edit details</button></div>' : "") +
       '</div></div>';
     const wishes = state.wishes.filter(w => w["Item ID"] === id && wishIsOpen(w));
@@ -1061,6 +1063,63 @@
     });
   }
 
+  // Permanent delete (admins). Lists what goes with the record, from the data the app already has.
+  function deleteRecordForm(type, id) {
+    const r = findRec(type, id);
+    if (!r) return;
+    const n = (k, v) => v ? "<li>" + v + " " + k + "</li>" : "";
+    const isId = (row, col) => String(row[col] || "").trim() === id;
+    let also = "";
+    if (type === "tanks") {
+      also = n("tank assignment rows (current and past items)", state.data.assignments.filter(a => isId(a, "Tank ID")).length) +
+        n("target ranges", (state.data.waterParameters || []).filter(a => isId(a, "Tank ID")).length) +
+        n("water test sessions (and their readings)", state.waterSessions.filter(a => isId(a, "Tank ID")).length) +
+        n("water changes", state.waterChanges.filter(a => isId(a, "Tank ID")).length) +
+        n("receipt links", state.receiptLinks.filter(a => isId(a, "Item ID")).length) +
+        n("users' tank lists (the tank is taken off)", (state.users || []).filter(u => u.tanks.indexOf(id) !== -1).length);
+    } else {
+      const ph = state.photos.filter(p => p["Item ID"] === id).length;
+      also = n("tank assignment rows (current and past)", state.data.assignments.filter(a => isId(a, "Item ID")).length) +
+        n("receipt links", state.receiptLinks.filter(a => isId(a, "Item ID")).length) +
+        n("wishes (and their compatibility checks)", state.wishes.filter(w => w["Item ID"] === id).length) +
+        n("photos (files moved to Drive trash)", ph) +
+        (driveId(r["Thumbnail URL"]) && !ph ? "<li>its uploaded list picture (moved to Drive trash)</li>" : "");
+    }
+    openSheet({
+      title: "Delete " + TYPES[type].one.toLowerCase(),
+      submitLabel: "Delete permanently",
+      danger: true,
+      body: '<p>Permanently delete <b>' + esc(TYPES[type].title(r)) + '</b> (' + esc(id) + ')? This can’t be undone from the app.</p>' +
+        (also ? '<p>This also deletes:</p><ul>' + also + '</ul>' : '<p>Nothing else refers to it.</p>') +
+        '<p class="hint">Use Retire instead to hide it but keep its history. The delete is noted in the Change Log.</p>',
+      onSubmit: async () => {
+        const ok = await write("deleteRecord", { table: type, id: id }, TYPES[type].one + " deleted");
+        location.hash = type === "tanks" ? "#/tanks" : "#/browse";
+        return ok;
+      }
+    });
+  }
+
+  function deleteReceiptForm(id) {
+    const r = findReceipt(id);
+    if (!r) return;
+    const links = receiptLinksFor(id).length;
+    openSheet({
+      title: "Delete receipt",
+      submitLabel: "Delete permanently",
+      danger: true,
+      body: '<p>Permanently delete <b>' + esc(receiptTitle(r)) + '</b> (' + esc(id) + ')? This can’t be undone from the app.</p>' +
+        '<ul><li>The photo moves to the Drive trash (Google keeps it 30 days).</li>' +
+        (links ? '<li>Its ' + links + ' link' + (links === 1 ? "" : "s") + ' to records ' + (links === 1 ? "is" : "are") + ' deleted.</li>' : "") + '</ul>' +
+        '<p class="hint">Use Retire instead to hide it but keep it. The delete is noted in the Change Log.</p>',
+      onSubmit: async () => {
+        const ok = await write("deleteReceipt", { id: id }, "Receipt deleted");
+        location.hash = "#/receipts";
+        return ok;
+      }
+    });
+  }
+
   function userForm(id) {
     const editing = !!id;
     const u = editing ? state.users.find(x => x.id === id) : { id: "", email: "", name: "", role: "Viewer", tanks: [], active: true };
@@ -1202,6 +1261,7 @@
         '<button class="btn" data-act="edit-receipt" data-id="' + esc(id) + '">Edit</button>' +
         (isRetired(r) ? '<button class="btn" data-act="restore-receipt" data-id="' + esc(id) + '">Restore</button>'
                       : '<button class="btn danger" data-act="retire-receipt" data-id="' + esc(id) + '">Retire</button>') +
+        '<button class="btn danger" data-act="delete-receipt" data-id="' + esc(id) + '">Delete</button>' +
         '</div>' : "") + '</div>';
     const linked = '<div class="section"><div class="section-head"><h3>Linked to (' + links.length + ')</h3></div><div class="card list">' +
       (links.map(l => {
@@ -1356,6 +1416,7 @@
               (isList ? '<span class="pill good">List picture</span>' : '<button type="button" class="btn small" data-photo-list>Use as list picture</button>') +
               (type === "equipment" ? '<button type="button" class="btn small ai-btn" data-photo-read>' + ICONS.sparkle + '<span>Read label</span></button>' : "") +
               '<button type="button" class="btn small danger" data-photo-remove>Remove</button>' +
+              '<button type="button" class="btn small danger" data-photo-delete>Delete</button>' +
             '</div><div class="ai-result" hidden></div>'
           : (p["Caption"] ? '<p>' + esc(p["Caption"]) + '</p>' : "")),
       onReady: form => {
@@ -1375,6 +1436,16 @@
             body: '<p>Remove this photo' + (p["Caption"] ? ' (<b>' + esc(p["Caption"]) + '</b>)' : "") + ' from ' + esc(itemId) + '? It’s hidden in the app and marked Removed on the Item Photos tab; the file stays in Drive.' +
               (isList ? ' It’s the list picture, so the item will go back to having no list picture.' : "") + '</p>',
             onSubmit: () => write("removeItemPhoto", { photoId: photoId }, "Photo removed")
+          });
+        });
+        $("[data-photo-delete]", form).addEventListener("click", () => {
+          close();
+          openSheet({
+            title: "Delete photo", submitLabel: "Delete permanently", danger: true,
+            body: '<p>Permanently delete this photo' + (p["Caption"] ? ' (<b>' + esc(p["Caption"]) + '</b>)' : "") + ' from ' + esc(itemId) + '? Its row is deleted from the Item Photos tab and the file moves to the Drive trash (Google keeps it 30 days).' +
+              (isList ? ' It’s the list picture, so the item will go back to having no list picture.' : "") + '</p>' +
+              '<p class="hint">Use Remove instead to hide it but keep the file.</p>',
+            onSubmit: () => write("deletePhoto", { photoId: photoId }, "Photo deleted")
           });
         });
         const readBtn = $("[data-photo-read]", form);
@@ -2879,6 +2950,8 @@
       case "edit-record": recordForm(d.type, d.id); break;
       case "retire": retireForm(d.type, d.id); break;
       case "add-photo": addPhotoForm(d.type, d.id); break;
+      case "delete-record": deleteRecordForm(d.type, d.id); break;
+      case "delete-receipt": deleteReceiptForm(d.id); break;
       case "open-photo": photoViewer(d.id); break;
       case "add-assignment": assignmentForm(d.tank); break;
       case "remove-assignment":
@@ -2963,7 +3036,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "28";
+  const APP_VERSION = "29";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

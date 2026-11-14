@@ -130,6 +130,10 @@ function apiRoute_(req, user) {
       case "setListPhoto":        return apiWrite_(() => apiSetListPhoto_(req, user));
       case "removeItemPhoto":     return apiWrite_(() => apiRemoveItemPhoto_(req, user));
       case "aiReadLabel":         return apiAiReadLabel_(req, user);
+      // Permanent delete, admins only (Delete.gs)
+      case "deleteRecord":        return apiWrite_(() => apiDeleteRecord_(req, user));
+      case "deleteReceipt":       return apiWrite_(() => apiDeleteReceipt_(req, user));
+      case "deletePhoto":         return apiWrite_(() => apiDeletePhoto_(req, user));
       default: throw apiError_("BAD_REQUEST", "Unknown action.");
    }
 }
