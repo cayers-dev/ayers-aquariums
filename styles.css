@@ -484,3 +484,9 @@ input.ai-corrected, select.ai-corrected, textarea.ai-corrected { border-color: #
 .ai-fixes { border-top: 1px solid var(--border); padding-top: 6px; margin-top: 2px; }
 .ai-fixes .src { color: var(--muted); }
 @media (prefers-color-scheme: dark) { input.ai-corrected, select.ai-corrected, textarea.ai-corrected { border-color: #e48bbd; box-shadow: 0 0 0 2px #3b1a2c; } }
+
+/* Background refresh after a save: thin moving bar at the top of the screen */
+body.syncing::before { content: ""; position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 90;
+  background: linear-gradient(90deg, transparent, var(--primary), transparent); background-size: 50% 100%; background-repeat: no-repeat;
+  animation: syncbar 1.1s linear infinite; }
+@keyframes syncbar { from { background-position: -50% 0; } to { background-position: 150% 0; } }

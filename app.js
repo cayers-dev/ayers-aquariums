@@ -328,19 +328,40 @@
   }
 
   // Runs a write, then reloads data.
+  // Saves, then reloads the data in the background: the form closes as soon as the save
+  // succeeds, and the screen updates a few seconds later (thin bar at the top meanwhile).
   async function write(action, payload, successMsg) {
     busy(true);
     try {
       await api(action, payload);
-      applyBootstrap(await api("bootstrap"));
-      render();
-      toast(successMsg || "Saved");
-      return true;
     } catch (err) {
       if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) { handleError(err); return true; }
       throw err;
     } finally {
       busy(false);
+    }
+    toast(successMsg || "Saved");
+    refreshInBackground();
+    return true;
+  }
+
+  // Reloads all data without blocking the screen. If several saves happen quickly,
+  // only the newest reload is applied.
+  let syncSeq = 0;
+  async function refreshInBackground() {
+    const mine = ++syncSeq;
+    document.body.classList.add("syncing");
+    try {
+      const data = await api("bootstrap");
+      if (mine !== syncSeq) return;
+      applyBootstrap(data);
+      render();
+    } catch (err) {
+      if (mine !== syncSeq) return;
+      if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) handleError(err);
+      else toast("Saved, but the screen couldn’t refresh. Tap refresh to update.", true);
+    } finally {
+      if (mine === syncSeq) document.body.classList.remove("syncing");
     }
   }
 
@@ -1068,9 +1089,8 @@
         busy(true);
         try {
           for (const rid of ids) await api("linkReceipt", { id: rid, itemIds: [id] });
-          applyBootstrap(await api("bootstrap"));
-          render();
           toast(ids.length === 1 ? "Receipt linked" : ids.length + " receipts linked");
+          refreshInBackground();
           return true;
         } catch (err) {
           if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) { handleError(err); return true; }
@@ -2389,9 +2409,8 @@
     busy(true, () => chk.cancel(), "Checking compatibility…");
     try {
       const res = await chk.run("checkWish", { wishId: id });
-      applyBootstrap(await api("bootstrap"));
-      render();
       toast(res.summary ? "Checked: " + res.summary : "Compatibility checked");
+      refreshInBackground();
     } catch (err) {
       if (err.code === "CANCELLED") toast("Compatibility check cancelled");
       else if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) handleError(err); else toast(err.message, true);
@@ -2730,9 +2749,9 @@
         try {
           const res = await api("logWaterTest", { tankId: tank, testedAt: $("#f_wtime", form).value, method: methodNow,
                                                    notes: $("#f_wnotes", form).value, readings: readingsOut });
-          applyBootstrap(await api("bootstrap"));
           state.waterTank = tank; try { localStorage.setItem("aa_water_tank", tank); } catch (e) { /* ignore */ }
           render();
+          refreshInBackground();
           if (res.outOfRange && res.outOfRange.length) setTimeout(() => waterAlertSheet(tank, res.outOfRange, readingsOut.length), 50);
           else {
             const none = readingsOut.filter(r => { const t = findType(r.testTypeId); const rg = rangeFor(tank, t); return rg.min === null && rg.max === null; }).length;
@@ -3232,7 +3251,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "32";
+  const APP_VERSION = "33";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

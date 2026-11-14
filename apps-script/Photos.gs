@@ -46,9 +46,8 @@ function apiPhotosSheet_() {
 function apiReadPhotos_() {
    const sheet = apiSs_().getSheetByName(PHOTO_CONFIG.sheetName);
    if (!sheet) return [];
-   const last = apiLastDataRow_(sheet);
-   if (last < 2) return [];
-   const values = sheet.getRange(1, 1, last, sheet.getLastColumn()).getValues();
+   const values = apiGrid_(sheet).values;
+   if (values.length < 2) return [];
    const headers = values[0].map(h => String(h).trim());
    const tz = apiSs_().getSpreadsheetTimeZone();
    return values.slice(1).map((row, i) => {

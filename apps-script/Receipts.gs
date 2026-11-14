@@ -81,11 +81,10 @@ function apiEnsureReceiptTabs_() {
 
 // Reads a support tab into row objects (same shape as apiReadTable_).
 function apiReadSheetRows_(sheet, keyField) {
-   const lastRow = sheet.getLastRow(), lastCol = sheet.getLastColumn();
-   if (lastRow < 2 || lastCol < 1) return [];
-   const range = sheet.getRange(1, 1, lastRow, lastCol);
-   const values = range.getValues();
-   const shown = range.getDisplayValues();
+   // apiGrid_ (Speed.gs) reads the tab, or takes it from bootstrap's one-request snapshot.
+   const grid = apiGrid_(sheet);
+   const values = grid.values, shown = grid.shown;
+   if (values.length < 2) return [];
    const headers = values[0].map(h => String(h).trim());
    const tz = apiSs_().getSpreadsheetTimeZone();
    const rows = [];

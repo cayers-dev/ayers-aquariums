@@ -196,6 +196,8 @@ function apiRequireAdmin_(user) {
 // Everything the app needs on load: the person, form layouts (schema), all tables,
 // plus receipts, water tests, maintenance and wishlist data.
 function apiBootstrap_(user) {
+   // Read every tab in one request first (Speed.gs); the readers below use that snapshot.
+   apiPrefetchGrids_();
    const ss = apiSs_();
    const data = {};
    Object.keys(API_TABLES).forEach(t => data[t] = apiReadTable_(t).rows);
@@ -221,6 +223,7 @@ function apiBootstrap_(user) {
    Object.assign(out, apiWishBootstrap_(user, out.data.assignments));
    Object.assign(out, apiPhotosBootstrap_());
    if (user.role !== "Admin") apiLimitToAssignedTanks_(out, user);
+   API_GRID = null;
    return out;
 }
 
@@ -253,14 +256,11 @@ function apiLimitToAssignedTanks_(out, user) {
 function apiReadTable_(table) {
    const def = API_TABLES[table];
    const sheet = apiSheet_(def.sheetKey);
-   const lastRow = sheet.getLastRow();
-   const lastCol = sheet.getLastColumn();
-   if (lastRow < 1 || lastCol < 1) return { headers: [], rows: [] };
-
    // Raw values plus displayed text (so numbers keep formatting like $ or decimals).
-   const range = sheet.getRange(1, 1, lastRow, lastCol);
-   const values = range.getValues();
-   const shown = range.getDisplayValues();
+   // apiGrid_ (Speed.gs) reads them, or takes them from bootstrap's one-request snapshot.
+   const grid = apiGrid_(sheet);
+   const values = grid.values, shown = grid.shown;
+   if (!values.length) return { headers: [], rows: [] };
    const headers = values[0].map(h => String(h).trim());
    const tz = apiSs_().getSpreadsheetTimeZone();
    const rows = [];
@@ -287,7 +287,8 @@ function apiReadLists_(ss) {
    const sheet = ss.getSheetByName("DropDownOptions");
    const lists = {};
    if (!sheet) return lists;
-   const values = sheet.getDataRange().getValues();
+   const values = apiGrid_(sheet).values;
+   if (!values.length) return lists;
    const headers = values[0];
    headers.forEach((h, c) => {
       const name = String(h).trim();
@@ -516,9 +517,16 @@ function apiRemoveAssignment_(req, user) {
 // ============================================================
 
 // Reads the App Users tab into { id, email, name, role, tanks, active }.
-function apiGetUsers_() {
+// Kept in a 5-minute cache (Speed.gs) because every request checks who is signed in;
+// pass fresh = true when the result is used to change the tab (row numbers must be current).
+function apiGetUsers_(fresh) {
+   const cache = CacheService.getScriptCache();
+   if (!fresh) {
+      const hit = cache.get(API_USERS_CACHE_KEY);
+      if (hit) { try { return JSON.parse(hit); } catch (e) { /* read the tab */ } }
+   }
    const sheet = apiEnsureSupportTabs_().users;
-   const values = sheet.getDataRange().getValues();
+   const values = apiGrid_(sheet).values;
    const h = values[0].map(x => String(x).trim());
    const col = name => h.indexOf(name);
    const tanksCol = col("Assigned Tanks");
@@ -544,6 +552,7 @@ function apiGetUsers_() {
          sheet.getRange(u.row, col("User ID") + 1).setValue(u.id);
       });
    }
+   try { cache.put(API_USERS_CACHE_KEY, JSON.stringify(users), 300); } catch (e) { /* too big to cache */ }
    return users;
 }
 
@@ -571,7 +580,7 @@ function apiSaveUser_(req, user) {
    if (!role) throw apiError_("INVALID", "Choose a role.");
    const active = u.active !== false;
 
-   const all = apiGetUsers_();
+   const all = apiGetUsers_(true);
    // Existing users are matched by User ID (so their email can be changed).
    const existing = u.id ? all.find(x => x.id === u.id) : null;
    if (u.id && !existing) throw apiError_("STALE", "That user no longer exists. Refresh and try again.");
@@ -602,7 +611,8 @@ function apiSaveUser_(req, user) {
       apiAppendRow_(sheet, record);
       apiLog_(user, "Add", "App Users", record["User ID"], apiDescribe_(record));
    }
-   return { users: apiGetUsers_() };
+   apiClearUsersCache_();
+   return { users: apiGetUsers_(true) };
 }
 
 
@@ -611,8 +621,9 @@ function apiSaveUser_(req, user) {
 // ============================================================
 
 // The spreadsheet this script is bound to.
+let API_SS = null;
 function apiSs_() {
-   return SpreadsheetApp.getActiveSpreadsheet();
+   return API_SS || (API_SS = SpreadsheetApp.getActiveSpreadsheet());
 }
 
 // A data tab by its key in SHEET_IDS (Entry Forms.gs), found by tab ID so renaming is safe.

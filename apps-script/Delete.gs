@@ -109,13 +109,14 @@ function apiDeleteRecord_(req, user) {
       const col = apiHeaderMap_(usersSheet).map["assigned tanks"];
       let users = 0;
       if (col) {
-         apiGetUsers_().forEach(u => {
+         apiGetUsers_(true).forEach(u => {
             if (u.tanks.indexOf(id) === -1) return;
             usersSheet.getRange(u.row, col).setValue(u.tanks.filter(t => t !== id).join(", "));
             users++;
          });
       }
       counts["user tank lists updated"] = users;
+      apiClearUsersCache_();
    } else {
       counts["tank assignment rows"] = apiDeleteRowsWhere_(apiSheet_("tankAssignments"), "Item ID", is).count;
       counts["receipt links"] = apiDeleteRowsWhere_(apiTabOrNull_(RECEIPTS_CONFIG.linksSheetName), "Item ID", is).count;
