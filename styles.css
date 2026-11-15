@@ -524,3 +524,11 @@ body.syncing::before { content: ""; position: fixed; top: 0; left: 0; right: 0; 
 .home-label { font-weight: 650; font-size: 16px; }
 .home-info { font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 480px) { .home-link { flex-direction: column; align-items: flex-start; gap: 8px; } }
+
+/* ---------- Tank status on the Tanks list ---------- */
+.tank-card .row1 { align-items: flex-start; }
+.tank-side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: none; }
+.pill.tank-status.active { background: var(--good-soft); color: var(--good); }
+.pill.tank-status.storage { background: #fff1d6; color: #8a5a00; }
+.pill.tank-status.retired { background: var(--surface-2); color: var(--muted); }
+@media (prefers-color-scheme: dark) { .pill.tank-status.storage { background: #3d2e10; color: #f3c56b; } }

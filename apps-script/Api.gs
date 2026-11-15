@@ -45,8 +45,9 @@ const API_FORMULA_COLUMNS = ["Species Info", "Tank Info", "Equipment Info", "Pla
 // Dropdown lists (from the DropDownOptions tab) per table field.
 // strict = value must come from the list.
 const API_FIELD_LISTS = {
+   // Tanks have their own status list (Active, Storage, Retired); the shared Status list is the fallback.
    tanks:           { "Aquarium Type": ["Aquarium Type", true], "Manufacturer": ["Manufacturer", false],
-                      "Status": ["Status", true], "Vendor": ["Vendor", false] },
+                      "Status": ["Tank Status", true, "Status"], "Vendor": ["Vendor", false] },
    species:         { "Category": ["Fish Category", true], "Water Zone": ["Water Zone", true],
                       "Group Type": ["Group Type", true], "Difficulty": ["Difficulty", true],
                       "Status": ["Status", true] },
@@ -365,7 +366,7 @@ function apiSchema_(table, lists) {
          const f = { name: h, type: "text" };
          if (h === def.id || h === "Test Type ID") f.readOnly = true;
          if (listDefs[h]) {
-            f.type = "list"; f.options = lists[listDefs[h][0]] || []; f.strict = listDefs[h][1];
+            f.type = "list"; f.options = lists[listDefs[h][0]] || (listDefs[h][2] && lists[listDefs[h][2]]) || []; f.strict = listDefs[h][1];
             // "Wishlist" is only for species, plants and equipment.
             if (h === "Status" && ["species", "plants", "equipment"].indexOf(table) === -1) f.options = f.options.filter(o => o !== "Wishlist");
          }

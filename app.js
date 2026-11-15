@@ -665,7 +665,7 @@
     const unassigned = state.receipts.filter(r => !isRetired(r) && receiptLinksFor(r["Receipt ID"]).length === 0).length;
     const html =
       group("Tanks", [
-        link("#/tanks", "tanks", "Tanks", n(active(state.data.tanks).length, "active")),
+        link("#/tanks", "tanks", "Tanks", n(state.data.tanks.filter(t => tankStatus(t) === "Active").length, "active")),
         link("#/water", "water", "Water tests", lastTest ? "Last test " + daysAgo(lastTest) : "No tests logged"),
         link("#/maint", "maint", "Maintenance", lastChange ? "Last water change " + daysAgo(lastChange) : "No water changes logged")
       ]) +
@@ -684,8 +684,12 @@
 
   // ---------- Tanks ----------
   // The Tanks list, in the order it's shown (also used by Previous / Next).
+  // Tank status: Active (or blank), Storage, Retired. The list shows Active, then Storage, then Retired.
+  const tankStatus = t => String(t["Status"] || "").trim() || "Active";
+  const TANK_STATUS_ORDER = { Active: 0, Storage: 1, Retired: 2 };
   const tankRows = () => state.data.tanks.slice().sort((a, b) =>
-    (isRetired(a) - isRetired(b)) || String(a["Tank Name"]).localeCompare(String(b["Tank Name"])));
+    ((TANK_STATUS_ORDER[tankStatus(a)] ?? 1) - (TANK_STATUS_ORDER[tankStatus(b)] ?? 1)) ||
+    String(a["Tank Name"]).localeCompare(String(b["Tank Name"])));
   function viewTanks() {
     const tanks = tankRows();
     const cards = tanks.map(t => {
@@ -695,15 +699,14 @@
       assigned.forEach(a => { const ty = itemType(a["Item ID"]); if (ty) counts[ty]++; });
       return '<a class="card tank-card ' + (isRetired(t) ? "dim" : "") + '" href="#/tank/' + encodeURIComponent(id) + '">' +
         '<div class="row1"><h2>' + esc(t["Tank Name"]) + '</h2>' +
-        (t["Volume (gal)"] ? '<span class="vol">' + esc(t["Volume (gal)"]) + ' gal</span>' : "") + '</div>' +
+          '<div class="tank-side">' + (t["Volume (gal)"] ? '<span class="vol">' + esc(t["Volume (gal)"]) + ' gal</span>' : "") +
+          '<span class="pill tank-status ' + esc(tankStatus(t).toLowerCase()) + '">' + esc(tankStatus(t)) + '</span></div></div>' +
         '<div class="meta">' + esc([id, t["Aquarium Type"], t["Manufacturer"]].filter(Boolean).join(" · ")) + '</div>' +
         (isRetired(t) ? "" : '<div class="meta wc-line">' + ICONS.water + esc(lastWaterChangeText(id)) + '</div>') +
         '<div class="counts">' +
           '<span class="pill">' + counts.species + ' livestock</span>' +
           '<span class="pill">' + counts.equipment + ' equipment</span>' +
           (counts.plants ? '<span class="pill">' + counts.plants + ' plants</span>' : "") +
-          (isRetired(t) ? '<span class="pill retired">Retired</span>' : "") +
-          "" +
         '</div></a>';
     }).join("");
     const addBtn = isAdmin() ? '<div class="actions" style="margin:0 0 12px"><button class="btn primary" data-act="add-record" data-type="tanks">' + ICONS.plus + 'Add tank</button></div>' : "";
@@ -3475,7 +3478,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "37";
+  const APP_VERSION = "38";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
