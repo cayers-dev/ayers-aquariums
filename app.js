@@ -1167,7 +1167,7 @@
         const label = id + " " + T.title(r);
         const where = other.map(o => o.id + " " + o.name).join(", ");
         if (!other.every(o => canEditTank(o.id))) throw new Error(label + " is in " + where + ", which you don’t manage. Ask an admin to move it.");
-        confirmMoveSheet(label, where, tankId, payload);
+        confirmMoveSheet([{ label: label, where: where }], tankId, payload);
         return false;
       }
     });
@@ -1226,34 +1226,53 @@
       title: "Add to " + tankName(tankId),
       submitLabel: "Add",
       body:
-        comboHtml({ name: "Item ID", label: "Item", required: true, placeholder: "Tap to choose, or type to search" }, items) +
+        comboHtml({ name: "Item IDs", label: "Items", mode: "multi", required: true, placeholder: "Tap to choose, or type to search. Pick as many as you like" }, items) +
         fieldHtml({ name: "Date Added", type: "date" }, today()) +
         fieldHtml({ name: "Notes", type: "longtext" }, "") +
-        '<p class="hint">Only admins can add new species, equipment or plants to the lists. Ask Chris if something is missing.</p>',
+        '<p class="hint">The date and notes are saved on every item you pick. Only admins can add new species, equipment or plants to the lists. Ask Chris if something is missing.</p>',
       onReady: form => $$("[data-combo]", form).forEach(wireCombo),
       onSubmit: vals => {
-        const payload = { table: "assignments", values: { "Tank ID": tankId, "Item ID": vals["Item ID"], "Date Added": vals["Date Added"], "Notes": vals["Notes"] } };
+        const ids = String(vals["Item IDs"] || "").split(",").map(x => x.trim()).filter(Boolean);
+        if (!ids.length) throw new Error("Choose at least one item.");
+        const payload = { tankId: tankId, itemIds: ids, dateAdded: vals["Date Added"], notes: vals["Notes"] };
+        const done = (n, moved) => (n === 1 ? "1 item added to " : n + " items added to ") + tankName(tankId) + (moved ? " (" + moved + " moved)" : "");
         // Only equipment is limited to one tank; species and plants can be in several tanks.
-        const other = itemType(vals["Item ID"]) === "equipment" ? equipmentElsewhere(vals["Item ID"], tankId) : [];
-        if (!other.length) return write("add", payload, "Added to tank");
-        const label = vals["Item ID"] + " " + TYPES.equipment.title(findRec("equipment", vals["Item ID"]) || {});
-        const where = other.map(o => o.id + " " + o.name).join(", ");
-        if (!other.every(o => canEditTank(o.id))) throw new Error(label + " is in " + where + ", which you don’t manage. Ask an admin to move it.");
-        confirmMoveSheet(label, where, tankId, payload);
+        const moves = [], blocked = [];
+        ids.forEach(id => {
+          if (itemType(id) !== "equipment") return;
+          const other = equipmentElsewhere(id, tankId);
+          if (!other.length) return;
+          const label = id + " " + TYPES.equipment.title(findRec("equipment", id) || {});
+          const where = other.map(o => o.id + " " + o.name).join(", ");
+          if (!other.every(o => canEditTank(o.id))) blocked.push(label + " is in " + where + ", which you don’t manage. Ask an admin to move it.");
+          else moves.push({ label: label, where: where });
+        });
+        // Nothing is added if any item can't be.
+        if (blocked.length) throw new Error("Nothing was added. " + blocked.join(" "));
+        if (!moves.length) return write("addAssignments", payload, done(ids.length, 0));
+        confirmMoveSheet(moves, tankId, payload, done(ids.length, moves.length));
         return false;   // keep the form open underneath until the move is confirmed
       }
     });
   }
 
   // Equipment can only be in one tank: confirm taking it out of the other tank first.
-  function confirmMoveSheet(label, where, tankId, payload) {
+  // moves: [{ label, where }]. payload is an "addAssignments" request (tank page) or an "add" request (item page).
+  function confirmMoveSheet(moves, tankId, payload, successMsg) {
+    const many = payload.itemIds !== undefined;
+    const date = fmtDate(many ? payload.dateAdded : payload.values["Date Added"]) || "today";
+    const list = moves.length === 1
+      ? '<p><b>' + esc(moves[0].label) + '</b> is currently in <b>' + esc(moves[0].where) + '</b>.</p>'
+      : '<p>This equipment is currently in another tank:</p><ul class="move-list">' +
+        moves.map(m => '<li><b>' + esc(m.label) + '</b>, in ' + esc(m.where) + '</li>').join("") + '</ul>';
     openSheet({
       title: "Move equipment?",
-      submitLabel: "Yes, move it",
-      body: '<p><b>' + esc(label) + '</b> is currently in <b>' + esc(where) + '</b>.</p>' +
-        '<p>Remove it from ' + esc(where) + ' (marked inactive, Date Removed ' + esc(fmtDate(payload.values["Date Added"]) || "today") + ') and add it to <b>' + esc(tankId + " " + tankName(tankId)) + '</b>?</p>',
+      submitLabel: moves.length === 1 ? "Yes, move it" : "Yes, move them",
+      body: list +
+        '<p>Remove ' + (moves.length === 1 ? "it" : "them") + ' from ' + (moves.length === 1 ? esc(moves[0].where) : "those tanks") +
+        ' (marked inactive, Date Removed ' + esc(date) + ') and add ' + (many ? "everything you picked" : "it") + ' to <b>' + esc(tankId + " " + tankName(tankId)) + '</b>?</p>',
       onSubmit: async () => {
-        const ok = await write("add", Object.assign({ confirmMove: true }, payload), "Moved to " + tankName(tankId));
+        const ok = await write(many ? "addAssignments" : "add", Object.assign({ confirmMove: true }, payload), successMsg || "Moved to " + tankName(tankId));
         $$(".sheet-backdrop").forEach(b => b.remove()); document.body.style.overflow = "";
         return ok;
       }
@@ -3360,7 +3379,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "35";
+  const APP_VERSION = "36";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

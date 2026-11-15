@@ -500,3 +500,4 @@ body.syncing::before { content: ""; position: fixed; top: 0; left: 0; right: 0; 
 
 /* Pop-ups take keyboard focus; no focus ring on the pop-up box itself */
 .sheet:focus, .reauth-box:focus, .photo-viewer:focus, .busy:focus { outline: none; }
+.move-list { margin: 0 0 12px; padding-left: 20px; } .move-list li { margin: 4px 0; }

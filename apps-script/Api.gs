@@ -96,6 +96,7 @@ function apiRoute_(req, user) {
    switch (req.action) {
       case "bootstrap":         return apiBootstrap_(user);
       case "add":               return apiWrite_(() => apiAdd_(req, user));
+      case "addAssignments":    return apiWrite_(() => apiAddAssignments_(req, user));
       case "update":            return apiWrite_(() => apiUpdate_(req, user));
       case "retire":            return apiWrite_(() => apiRetire_(req, user));
       case "removeAssignment":  return apiWrite_(() => apiRemoveAssignment_(req, user));
@@ -453,6 +454,73 @@ function apiAdd_(req, user) {
    apiAppendRow_(sheet, values);
    apiLog_(user, "Add", def.label, id, apiDescribe_(values));
    return { added: { table: table, id: id } };
+}
+
+// Adds several items to one tank with the same Date Added and Notes.
+// Every item is checked first; if any can't be added, nothing is saved and
+// all the problems are listed. Equipment in another tank needs req.confirmMove.
+function apiAddAssignments_(req, user) {
+   const tankId = String(req.tankId || "").trim();
+   const itemIds = (Array.isArray(req.itemIds) ? req.itemIds : []).map(x => String(x).trim()).filter(Boolean)
+      .filter((x, i, a) => a.indexOf(x) === i);
+   if (!tankId) throw apiError_("INVALID", "Choose a tank.");
+   if (!itemIds.length) throw apiError_("INVALID", "Choose at least one item.");
+   if (!apiCanEditTank_(user, tankId)) throw apiError_("FORBIDDEN", "You can't change that tank.");
+   if (!apiFindById_("tanks", tankId)) throw apiError_("INVALID", "Tank " + tankId + " doesn't exist.");
+   const shared = apiCleanValues_("assignments", { "Date Added": req.dateAdded || "", "Notes": req.notes || "" });
+   const dateAdded = shared["Date Added"] || new Date();
+
+   // Read each list once.
+   const recs = {};
+   ["species", "equipment", "plants"].forEach(t => {
+      const idCol = API_TABLES[t].id;
+      apiReadTable_(t).rows.forEach(r => { if (r[idCol]) recs[r[idCol]] = { table: t, rec: r }; });
+   });
+   const assignments = apiReadTable_("assignments").rows;
+   const isActive = r => r["Active"] === true && !r["Date Removed"];
+   const label = id => {
+      const h = recs[id];
+      if (!h) return id;
+      const r = h.rec;
+      const name = h.table === "equipment" ? ([r["Manufacturer"], r["Filter Model"]].filter(Boolean).join(" ") || r["Category"]) : r["Common Name"];
+      return id + (name ? " " + name : "");
+   };
+
+   const problems = [], moves = [], needConfirm = [];
+   itemIds.forEach(id => {
+      const hit = recs[id];
+      if (!hit) { problems.push(id + " doesn't exist."); return; }
+      if (String(hit.rec["Status"]) === "Wishlist") { problems.push(label(id) + " is on the wishlist. Use Mark purchased on its wish."); return; }
+      if (assignments.some(r => r["Tank ID"] === tankId && r["Item ID"] === id && isActive(r))) { problems.push(label(id) + " is already in this tank."); return; }
+      if (hit.table !== "equipment") return;
+      const others = assignments.filter(r => r["Item ID"] === id && r["Tank ID"] !== tankId && isActive(r));
+      if (!others.length) return;
+      const where = others.map(r => r["Tank ID"] + " " + apiTankName_(r["Tank ID"])).join(", ");
+      if (!others.every(r => apiCanEditTank_(user, r["Tank ID"]))) {
+         problems.push(label(id) + " is in " + where + ", which you don't manage. Ask an admin to move it.");
+         return;
+      }
+      needConfirm.push(label(id) + " (in " + where + ")");
+      others.forEach(r => moves.push({ row: r, itemId: id }));
+   });
+   if (problems.length) throw apiError_("INVALID", "Nothing was added. " + problems.join(" "));
+   if (needConfirm.length && req.confirmMove !== true) {
+      throw apiError_("IN_OTHER_TANK", "These are in another tank: " + needConfirm.join(", ") + ".");
+   }
+
+   // All checks passed: take moved equipment out of its old tank, then add every item.
+   const sheet = apiSheet_("tankAssignments");
+   moves.forEach(m => {
+      const changes = apiWriteChanges_(sheet, m.row._row, m.row, { "Date Removed": dateAdded, "Active": false });
+      apiLog_(user, "Move (removed from tank)", "Tank Assignments", m.row["Tank ID"] + " / " + m.itemId,
+              changes.join("; ") + " — moved to " + tankId + " " + apiTankName_(tankId));
+   });
+   itemIds.forEach(id => {
+      const values = { "Tank ID": tankId, "Item ID": id, "Date Added": dateAdded, "Notes": shared["Notes"] || "", "Active": true };
+      apiAppendRow_(sheet, values);
+      apiLog_(user, "Add", "Tank Assignments", tankId + " / " + id, apiDescribe_(values));
+   });
+   return { added: itemIds.length, moved: moves.length };
 }
 
 // Edits a record. Only the fields that changed are written, and each change is logged.
