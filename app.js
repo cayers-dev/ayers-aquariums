@@ -84,19 +84,63 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { el.className = ""; }, isError ? 4500 : 2200);
   }
+  // ------------------------------------------------------------------
+  // Pop-ups (forms, confirmations, photo viewer, sign-in, spinner): while one is open,
+  // everything behind it is made inert (no clicks, no keyboard, Tab can't reach it), Tab
+  // cycles inside the pop-up, and focus goes back where it was when the pop-up closes.
+  // Closing happens however the pop-up is removed (Cancel, X, after saving...).
+  // ------------------------------------------------------------------
+  const modals = [];   // open pop-ups, newest last: { el, inerted, prev }
+  function modalOpen(el, focusEl) {
+    const inerted = [];
+    Array.from(document.body.children).forEach(c => {
+      if (c === el || c.id === "toast" || c.tagName === "SCRIPT" || c.inert) return;
+      c.inert = true; inerted.push(c);
+    });
+    modals.push({ el: el, inerted: inerted, prev: document.activeElement });
+    const target = focusEl || el;
+    if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
+    try { target.focus({ preventScroll: true }); } catch (e) { target.focus(); }
+    // Tab / Shift+Tab wrap around inside the pop-up.
+    el.addEventListener("keydown", e => {
+      if (e.key !== "Tab") return;
+      const items = $$('a[href], button:not([disabled]), input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])', el)
+        .filter(x => x.offsetParent !== null && !x.closest("[hidden]"));
+      if (!items.length) { e.preventDefault(); return; }
+      const first = items[0], last = items[items.length - 1];
+      if (e.shiftKey && (document.activeElement === first || !el.contains(document.activeElement) || document.activeElement === target)) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    });
+  }
+  // When a pop-up leaves the page, un-lock what it locked and return focus.
+  new MutationObserver(() => {
+    for (let i = modals.length - 1; i >= 0; i--) {
+      const m = modals[i];
+      if (document.body.contains(m.el)) continue;
+      m.inerted.forEach(c => { c.inert = false; });
+      modals.splice(i, 1);
+      if (i === modals.length && m.prev && document.body.contains(m.prev) && !m.prev.closest("[inert]")) {
+        try { m.prev.focus({ preventScroll: true }); } catch (e) { /* gone */ }
+      }
+    }
+  }).observe(document.body, { childList: true });
+
   // Full-screen spinner. onCancel (optional): shows a Cancel button with a label (for AI steps).
   function busy(on, onCancel, label) {
     let el = $(".busy");
     if (on && !el) {
       el = document.createElement("div");
       el.className = "busy";
+      el.setAttribute("role", "alert"); el.setAttribute("aria-busy", "true");
       el.innerHTML = '<div class="spinner"></div>';
       document.body.appendChild(el);
+      modalOpen(el);
     } else if (!on && el) { el.remove(); return; }
     if (on && el && onCancel) {
       el.innerHTML = '<div class="busy-box"><div class="spinner"></div>' + (label ? '<div class="busy-label">' + esc(label) + '</div>' : "") +
         '<button type="button" class="btn" data-busy-cancel>Cancel</button></div>';
       $("[data-busy-cancel]", el).addEventListener("click", () => { $("[data-busy-cancel]", el).disabled = true; onCancel(); });
+      $("[data-busy-cancel]", el).focus();
     }
   }
   function thumbUrl(url, width) {
@@ -319,6 +363,8 @@
       '<p class="hint">What you entered is kept. After signing in, tap Save again.</p><div class="reauth-btn"></div>' +
       '<button type="button" class="btn" data-reauth-close>Not now</button></div>';
     document.body.appendChild(el);
+    el.setAttribute("role", "dialog"); el.setAttribute("aria-modal", "true");
+    modalOpen(el, $(".reauth-box", el));
     $("[data-reauth-close]", el).addEventListener("click", () => el.remove());
     if (window.google && google.accounts && state.gisReady) {
       google.accounts.id.renderButton($(".reauth-btn", el), { theme: "filled_blue", size: "large", text: "signin_with", shape: "pill" });
@@ -842,6 +888,8 @@
     document.body.style.overflow = "hidden";
     hydratePhotos(back);
     const form = $("form", back);
+    form.setAttribute("role", "dialog"); form.setAttribute("aria-modal", "true"); form.setAttribute("aria-label", opts.title || "Form");
+    modalOpen(back, form);
     const close = () => { back.remove(); document.body.style.overflow = ""; };
     $$("[data-close]", back).forEach(b => b.addEventListener("click", close));
     back.addEventListener("click", e => { if (e.target === back) close(); });
@@ -1525,6 +1573,8 @@
     v.innerHTML = '<button type="button" class="icon-btn" aria-label="Close">' + ICONS.close + '</button><div class="pv-scroll"><img alt="Receipt photo" src="' + c.url + '"></div>';
     document.body.appendChild(v);
     document.body.style.overflow = "hidden";
+    v.setAttribute("role", "dialog"); v.setAttribute("aria-modal", "true"); v.setAttribute("aria-label", "Receipt photo");
+    modalOpen(v);
     const img = $("img", v);
     img.addEventListener("click", () => v.classList.toggle("full"));
     $("button", v).addEventListener("click", () => { v.remove(); document.body.style.overflow = ""; });
@@ -3310,7 +3360,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "34";
+  const APP_VERSION = "35";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

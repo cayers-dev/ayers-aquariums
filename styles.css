@@ -497,3 +497,6 @@ body.syncing::before { content: ""; position: fixed; top: 0; left: 0; right: 0; 
 .reauth-box h3 { margin: 0; }
 .reauth-box p { margin: 0; }
 .reauth-btn { min-height: 44px; display: flex; justify-content: center; }
+
+/* Pop-ups take keyboard focus; no focus ring on the pop-up box itself */
+.sheet:focus, .reauth-box:focus, .photo-viewer:focus, .busy:focus { outline: none; }
