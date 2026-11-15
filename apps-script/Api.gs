@@ -144,6 +144,7 @@ function apiRoute_(req, user) {
       case "deletePrice":         return apiWrite_(() => apiDeletePrice_(req, user));
       case "updatePriceItem":     return apiWrite_(() => apiUpdatePriceItem_(req, user));
       case "deletePriceItem":     return apiWrite_(() => apiDeletePriceItem_(req, user));
+      case "setPriceItemPicture": return apiWrite_(() => apiSetPriceItemPicture_(req, user));
       case "deleteRecord":        return apiWrite_(() => apiDeleteRecord_(req, user));
       case "deleteReceipt":       return apiWrite_(() => apiDeleteReceipt_(req, user));
       case "deletePhoto":         return apiWrite_(() => apiDeletePhoto_(req, user));

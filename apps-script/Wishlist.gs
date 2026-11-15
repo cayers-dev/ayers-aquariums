@@ -291,6 +291,11 @@ function apiItemPhoto_(req, user) {
          const m = String(r["Photo URL"] || "").match(/drive\.google\.com\/file\/d\/([A-Za-z0-9_-]+)/);
          if (m) found.push(m[1]);
       });
+      // Price tracker pictures (Prices.gs).
+      apiReadPriceItems_().forEach(r => {
+         const m = String(r["Picture URL"] || "").match(/drive\.google\.com\/file\/d\/([A-Za-z0-9_-]+)/);
+         if (m) found.push(m[1]);
+      });
       ids = found.join(",");
       cache.put("item_photo_ids", ids, 300);
    }

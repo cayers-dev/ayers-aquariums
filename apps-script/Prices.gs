@@ -11,7 +11,7 @@
 const PRICE_CONFIG = {
    itemsSheet: "Price Items",
    itemPrefix: "PI-",
-   itemHeaders: ["Price Item ID", "Record ID", "Item Name", "Added By", "Added At"],
+   itemHeaders: ["Price Item ID", "Record ID", "Item Name", "Added By", "Added At", "Picture URL"],
    pricesSheet: "Prices",
    pricePrefix: "PR-",
    priceHeaders: ["Price ID", "Price Item ID", "Location", "Price", "Size", "Unit", "Date Gathered", "Added By", "Added At"],
@@ -39,7 +39,13 @@ function apiPriceTab_(name, headers, widths, formats) {
    return sheet;
 }
 function apiPriceItemsSheet_() {
-   return apiPriceTab_(PRICE_CONFIG.itemsSheet, PRICE_CONFIG.itemHeaders, { 3: 260 }, { "E2:E": "m/d/yyyy h:mm am/pm" });
+   const sheet = apiPriceTab_(PRICE_CONFIG.itemsSheet, PRICE_CONFIG.itemHeaders, { 3: 260, 6: 320 }, { "E2:E": "m/d/yyyy h:mm am/pm" });
+   // Tabs made before a column existed get it added at the end.
+   const have = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1)).getValues()[0].map(h => String(h).trim());
+   PRICE_CONFIG.itemHeaders.forEach(h => {
+      if (have.indexOf(h) === -1) { sheet.getRange(1, have.length + 1).setValue(h).setFontWeight("bold").setBackground("#d9d9d9"); have.push(h); }
+   });
+   return sheet;
 }
 function apiPricesSheet_() {
    return apiPriceTab_(PRICE_CONFIG.pricesSheet, PRICE_CONFIG.priceHeaders, { 3: 160 },
@@ -202,9 +208,37 @@ function apiDeletePriceItem_(req, user) {
    if (!rec) throw apiError_("NOT_FOUND", "That item is no longer in the price tracker.");
    const gone = apiDeleteRowsWhere_(apiSs_().getSheetByName(PRICE_CONFIG.pricesSheet), "Price Item ID", v => String(v) === rec["Price Item ID"]);
    apiPriceItemsSheet_().deleteRow(rec._row);
+   const pic = apiDriveFileId_(rec["Picture URL"]);
+   if (pic && apiIsItemPhotoFile_(pic)) apiTrashDriveFile_(pic);
    apiLog_(user, "Delete", "Price Items", rec["Price Item ID"],
            (rec["Record ID"] || rec["Item Name"]) + " — also deleted " + gone.count + " price" + (gone.count === 1 ? "" : "s"));
    return { deleted: 1, prices: gone.count };
+}
+
+// Picture for a typed price item (linked items use their record's list picture).
+// req: { priceItemId, photo: { data, mimeType } } to add or replace, or { priceItemId, remove: true }.
+// A replaced or removed picture's file goes to the Drive trash.
+function apiSetPriceItemPicture_(req, user) {
+   apiRequirePrices_(user);
+   const sheet = apiPriceItemsSheet_();
+   const rec = apiReadPriceItems_().find(r => r["Price Item ID"] === req.priceItemId);
+   if (!rec) throw apiError_("NOT_FOUND", "That item is no longer in the price tracker.");
+   if (rec["Record ID"]) throw apiError_("INVALID", "This item uses the picture of " + rec["Record ID"] + "; change it on that record.");
+   const old = String(rec["Picture URL"] || "");
+   let url = "";
+   if (!req.remove) {
+      const fileId = apiSaveItemPhoto_(req.photo || {}, rec["Price Item ID"], rec["Item Name"], user);
+      url = apiDrivePhotoUrl_(fileId);
+   } else if (!old) {
+      return { updated: 0 };
+   }
+   const changes = apiWriteChanges_(sheet, rec._row, rec, { "Picture URL": url });
+   const oldId = apiDriveFileId_(old);
+   const trashed = oldId && apiIsItemPhotoFile_(oldId) && apiTrashDriveFile_(oldId);
+   apiLog_(user, req.remove ? "Remove picture" : (old ? "Replace picture" : "Add picture"), "Price Items", rec["Price Item ID"],
+           (rec["Item Name"] || "") + (trashed ? " — old picture moved to Drive trash" : ""));
+   CacheService.getScriptCache().remove("item_photo_ids");
+   return { url: url, updated: changes.length };
 }
 
 // When a species, equipment, plant or medication is permanently deleted, its price item goes too.

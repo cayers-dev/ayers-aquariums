@@ -672,10 +672,12 @@
   const ONE_LABEL = { species: "Species", equipment: "Equipment", plants: "Plant", medications: "Medication" };
   function priceItemInfo(pi) {
     const rid = pi["Record ID"];
-    if (!rid) return { name: String(pi["Item Name"] || pi["Price Item ID"]), linked: false, pill: "Other item" };
+    if (!rid) return { name: String(pi["Item Name"] || pi["Price Item ID"]), linked: false, pill: "Other item", img: String(pi["Picture URL"] || "") };
     const x = recordOf(rid);
-    if (!x) return { name: rid + " (record deleted)", linked: true, pill: rid, rid: rid };
-    return { name: String(TYPES[x.type].title(x.rec)), linked: true, pill: rid + " · " + (ONE_LABEL[x.type] || TYPES[x.type].label), rid: rid, type: x.type };
+    if (!x) return { name: rid + " (record deleted)", linked: true, pill: rid, rid: rid, img: "" };
+    // Linked items show their record's list picture.
+    return { name: String(TYPES[x.type].title(x.rec)), linked: true, pill: rid + " · " + (ONE_LABEL[x.type] || TYPES[x.type].label), rid: rid, type: x.type,
+             img: x.type === "medications" ? "" : String(TYPES[x.type].img(x.rec) || "") };
   }
   const byPriceName = (a, b) => priceItemInfo(a).name.localeCompare(priceItemInfo(b).name);
   const gatheredKey = p => String(p["Date Gathered"] || "") + " " + String(p["Added At"] || "");
@@ -738,9 +740,10 @@
 
   function priceLabelHtml(pi, sum) {
     const info = priceItemInfo(pi);
-    return '<div class="price-item"><a href="#/price/' + encodeURIComponent(pi["Price Item ID"]) + '" class="price-name">' + esc(info.name) + '</a>' +
+    return '<div class="price-item-row">' + (info.img ? photoHtml(info.img, "thumb price-thumb", 160, "") : '<span class="thumb price-thumb">' + ICONS.tag + '</span>') +
+      '<div class="price-item"><a href="#/price/' + encodeURIComponent(pi["Price Item ID"]) + '" class="price-name">' + esc(info.name) + '</a>' +
       '<div class="price-tags"><span class="pill' + (info.linked ? " edit" : "") + '">' + esc(info.pill) + '</span>' +
-      (sum.unit ? '<span class="price-per">per ' + esc(unitShort(sum.unit)) + '</span>' : "") + '</div></div>';
+      (sum.unit ? '<span class="price-per">per ' + esc(unitShort(sum.unit)) + '</span>' : "") + '</div></div></div>';
   }
   function priceCellHtml(s, best, unit) {
     const p = s.latest;
@@ -821,7 +824,14 @@
           '</tbody></table></div>' : "") +
         '</div>';
     }).join("");
-    const head = '<div class="card price-head"><h2>' + esc(info.name) + '</h2>' +
+    // Typed items: a small picture slot to add, replace or remove the picture shown in the Prices list.
+    const picSlot = !info.linked && (info.img || canPrices())
+      ? '<div class="price-pic">' + (info.img ? photoHtml(info.img, "thumb price-pic-img", 300, "") : '<span class="thumb price-pic-img">' + ICONS.tag + '</span>') +
+        (canPrices() ? '<div class="price-pic-btns"><button class="btn small" data-act="price-picture" data-id="' + esc(id) + '">' + (info.img ? "Replace picture" : ICONS.plus + "Add picture") + '</button>' +
+          (info.img ? '<button class="btn small danger" data-act="price-picture-remove" data-id="' + esc(id) + '">Remove picture</button>' : "") + '</div>' : "") +
+        '</div>'
+      : "";
+    const head = '<div class="card price-head">' + picSlot + '<h2>' + esc(info.name) + '</h2>' +
       '<div class="price-tags"><span class="pill' + (info.linked ? " edit" : "") + '">' + esc(info.pill) + '</span><span class="meta">' + esc(summary) + '</span></div>' +
       '<div class="actions">' +
         (canPrices() ? '<button class="btn primary" data-act="add-price" data-item="' + esc(id) + '">' + ICONS.plus + 'Add price</button>' : "") +
@@ -991,6 +1001,41 @@
       submitLabel: "Save",
       body: '<p class="meta">' + esc(id) + '</p>' + fieldHtml({ name: "Item Name", label: "Name", required: true }, pi["Item Name"]),
       onSubmit: vals => write("updatePriceItem", { priceItemId: id, name: vals["Item Name"] }, "Item renamed")
+    });
+  }
+
+  function pricePictureForm(id) {
+    const pi = findPriceItem(id);
+    if (!pi || pi["Record ID"] || !canPrices()) return;
+    let image = null;
+    const had = !!pi["Picture URL"];
+    openSheet({
+      title: had ? "Replace picture" : "Add picture",
+      submitLabel: had ? "Replace" : "Add picture",
+      body: '<p class="meta">' + esc(id + " " + priceItemInfo(pi).name) + '</p>' +
+        '<div class="field"><label>Picture <span class="req">*</span></label>' + photoPickerHtml("f_ppic") + '</div>' +
+        (had ? '<p class="hint">The current picture’s file moves to the Drive trash.</p>' : ""),
+      onReady: form => {
+        const pick = wirePhotoPicker(form, "f_ppic", async f => {
+          pick.status("Preparing picture…");
+          try { image = await prepareImage(f, 1200, 0.85); pick.preview(image.preview); pick.status(""); }
+          catch (err) { image = null; pick.preview(""); pick.status(""); toast(err.message, true); }
+        });
+      },
+      onSubmit: async () => {
+        if (!image) throw new Error("Take or choose a picture first.");
+        return write("setPriceItemPicture", { priceItemId: id, photo: { data: image.data, mimeType: image.mimeType } }, had ? "Picture replaced" : "Picture added");
+      }
+    });
+  }
+
+  function pricePictureRemoveForm(id) {
+    const pi = findPriceItem(id);
+    if (!pi || !pi["Picture URL"] || !canPrices()) return;
+    openSheet({
+      title: "Remove picture?", submitLabel: "Remove", danger: true,
+      body: '<p>Remove the picture from <b>' + esc(priceItemInfo(pi).name) + '</b>? Its file moves to the Drive trash (Google keeps it 30 days).</p>',
+      onSubmit: () => write("setPriceItemPicture", { priceItemId: id, remove: true }, "Picture removed")
     });
   }
 
@@ -3800,6 +3845,8 @@
       case "price-history": { const k = d.item + "|" + d.loc; state.priceOpen[k] = !state.priceOpen[k]; render(); break; }
       case "edit-price-item": editPriceItemForm(d.id); break;
       case "delete-price-item": deletePriceItemForm(d.id); break;
+      case "price-picture": pricePictureForm(d.id); break;
+      case "price-picture-remove": pricePictureRemoveForm(d.id); break;
     }
   });
 
@@ -3858,7 +3905,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "39";
+  const APP_VERSION = "40";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
