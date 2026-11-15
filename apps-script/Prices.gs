@@ -208,8 +208,7 @@ function apiDeletePriceItem_(req, user) {
    if (!rec) throw apiError_("NOT_FOUND", "That item is no longer in the price tracker.");
    const gone = apiDeleteRowsWhere_(apiSs_().getSheetByName(PRICE_CONFIG.pricesSheet), "Price Item ID", v => String(v) === rec["Price Item ID"]);
    apiPriceItemsSheet_().deleteRow(rec._row);
-   const pic = apiDriveFileId_(rec["Picture URL"]);
-   if (pic && apiIsItemPhotoFile_(pic)) apiTrashDriveFile_(pic);
+   apiTrashPricePicture_(rec, rec["Picture URL"]);
    apiLog_(user, "Delete", "Price Items", rec["Price Item ID"],
            (rec["Record ID"] || rec["Item Name"]) + " — also deleted " + gone.count + " price" + (gone.count === 1 ? "" : "s"));
    return { deleted: 1, prices: gone.count };
@@ -233,12 +232,27 @@ function apiSetPriceItemPicture_(req, user) {
       return { updated: 0 };
    }
    const changes = apiWriteChanges_(sheet, rec._row, rec, { "Picture URL": url });
-   const oldId = apiDriveFileId_(old);
-   const trashed = oldId && apiIsItemPhotoFile_(oldId) && apiTrashDriveFile_(oldId);
+   const trashed = apiTrashPricePicture_(rec, old);
    apiLog_(user, req.remove ? "Remove picture" : (old ? "Replace picture" : "Add picture"), "Price Items", rec["Price Item ID"],
            (rec["Item Name"] || "") + (trashed ? " — old picture moved to Drive trash" : ""));
    CacheService.getScriptCache().remove("item_photo_ids");
    return { url: url, updated: changes.length };
+}
+
+// Moves a price item's old picture file to the Drive trash, but only when it's safe:
+// the item is a typed item (never one linked to a record), the file is in the Item Photos
+// folder, and no record's list picture, record photo or other price item still uses it.
+function apiTrashPricePicture_(rec, url) {
+   if (rec["Record ID"]) return false;
+   const fileId = apiDriveFileId_(url);
+   if (!fileId || !apiIsItemPhotoFile_(fileId)) return false;
+   const uses = u => apiDriveFileId_(u) === fileId;
+   for (const t of ["species", "equipment", "plants", "medications"]) {
+      if (apiReadTable_(t).rows.some(r => uses(r["Thumbnail URL"]))) return false;
+   }
+   if (apiActivePhotos_().some(r => uses(r["Photo URL"]))) return false;
+   if (apiReadPriceItems_().some(r => r["Price Item ID"] !== rec["Price Item ID"] && uses(r["Picture URL"]))) return false;
+   return apiTrashDriveFile_(fileId);
 }
 
 // When a species, equipment, plant or medication is permanently deleted, its price item goes too.
