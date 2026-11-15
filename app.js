@@ -189,6 +189,14 @@
   }
 
   const ICONS = {
+    home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 11L12 4l8.5 7"/><path d="M5.5 9.5V20h13V9.5"/><path d="M10 20v-5.5h4V20"/></svg>',
+    next: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>',
+    fish: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12c3-5 9-6.5 13-3l4-3v12l-4-3c-4 3.5-10 2-13-3z"/><circle cx="8" cy="11" r=".6" fill="currentColor"/></svg>',
+    gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="3" width="12" height="18" rx="2"/><path d="M9 7h6M9 11h6"/><circle cx="12" cy="16" r="1.6"/></svg>',
+    leaf: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19c0-8 5-14 15-15-1 10-7 15-15 15z"/><path d="M5 19l8-8"/></svg>',
+    pill: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8.5" width="18" height="7" rx="3.5" transform="rotate(-40 12 12)"/><path d="M9.6 9.1l5.3 5.3" transform="rotate(0)"/></svg>',
+    users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.5 3.3-5.5 6.5-5.5s5.7 2 6.5 5.5"/><path d="M15.5 4.8a3.4 3.4 0 0 1 0 6.4M17.5 14.8c2 .7 3.4 2.4 4 5.2"/></svg>',
+    flask: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6M10 3v6l-5.5 9.5A1.7 1.7 0 0 0 6 21h12a1.7 1.7 0 0 0 1.5-2.5L14 9V3"/><path d="M7.5 15h9"/></svg>',
     back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
     refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>',
     close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
@@ -562,13 +570,15 @@
   function parseRoute() {
     const h = location.hash.replace(/^#\/?/, "");
     const parts = h.split("/").filter(Boolean).map(decodeURIComponent);
-    return { name: parts[0] || "tanks", args: parts.slice(1) };
+    return { name: parts[0] || "home", args: parts.slice(1) };
   }
 
   function renderShell() {
     const route = parseRoute();
     let view;
     switch (route.name) {
+      case "home": view = viewHome(); break;
+      case "tanks": view = viewTanks(); break;
       case "tank": view = viewTank(route.args[0]); break;
       case "browse": view = viewBrowse(); break;
       case "item": view = viewItem(route.args[0], route.args[1]); break;
@@ -580,18 +590,23 @@
       case "testtypes": view = isAdmin() ? viewTestTypes() : viewWater(); break;
       case "maint": view = viewMaintenance(route.args[0]); break;
       case "receipt": view = canReceipts() ? viewReceipt(route.args[0]) : viewTanks(); break;
-      default: view = viewTanks();
+      default: view = viewHome();
     }
+    const nav = stepNav(route);
     const tab = route.name === "tank" ? "tanks" : route.name === "item" ? "browse" : route.name === "receipt" ? "receipts" :
-                route.name === "testtypes" ? "water" : route.name === "users" ? "account" : route.name;
-    const tabs = [["tanks", "Tanks"], ["water", "Test"], ["maint", "Maint."], ["browse", "Browse"], ["wish", "Wishlist"]]
-      .concat(canReceipts() ? [["receipts", "Receipts"]] : [])
-      .concat([["account", "Account"]]);
+                route.name === "testtypes" ? "water" : (route.name === "users" || route.name === "account") ? "home" : route.name;
+    const tabs = [["home", "Home"], ["tanks", "Tanks"], ["water", "Test"], ["maint", "Maint."], ["browse", "Browse"], ["wish", "Wishlist"]]
+      .concat(canReceipts() ? [["receipts", "Receipts"]] : []);
 
     $("#app").innerHTML =
       '<header class="topbar">' +
         (view.back ? '<button class="icon-btn" data-act="back" aria-label="Back">' + ICONS.back + '</button>' : '<span style="width:6px"></span>') +
         '<h1>' + esc(view.title) + '</h1>' +
+        (nav ? '<div class="step-nav">' +
+          '<button class="icon-btn" data-act="step" data-href="' + esc(nav.prev || "") + '" aria-label="Previous"' + (nav.prev ? "" : " disabled") + '>' + ICONS.back + '</button>' +
+          '<span class="step-pos" aria-live="polite">' + nav.pos + ' of ' + nav.total + '</span>' +
+          '<button class="icon-btn" data-act="step" data-href="' + esc(nav.next || "") + '" aria-label="Next"' + (nav.next ? "" : " disabled") + '>' + ICONS.next + '</button>' +
+        '</div>' : "") +
         '<button class="icon-btn" data-act="refresh" aria-label="Refresh">' + ICONS.refresh + '</button>' +
       '</header>' +
       '<main class="view">' + view.html + '</main>' +
@@ -604,10 +619,75 @@
     window.scrollTo(0, view.keepScroll ? window.scrollY : 0);
   }
 
-  // ---------- Tanks (home) ----------
+  // ---------- Previous / Next on detail pages ----------
+  // Steps through the list as it was left (search, filters, Show retired). If the record isn't in
+  // that list (opened from somewhere else), the whole list of that kind is used instead.
+  function stepNav(route) {
+    const id = route.args[route.name === "item" ? 1 : 0];
+    if (!id) return null;
+    let lists;   // [ids in order, ...fallbacks]
+    if (route.name === "tank") {
+      lists = [tankRows().map(t => t["Tank ID"])];
+    } else if (route.name === "item") {
+      const type = route.args[0], T = TYPES[type];
+      if (!T || !state.data[type]) return null;
+      const all = state.data[type].filter(r => !isWishItem(r))
+        .sort((a, b) => String(T.title(a)).localeCompare(String(T.title(b)))).map(r => r[T.id]);
+      lists = [browseRows(type, state.browseType === type).map(r => r[T.id]), all];
+    } else if (route.name === "receipt") {
+      if (!canReceipts()) return null;
+      lists = [receiptRows().map(r => r["Receipt ID"]),
+               state.receipts.slice().sort((x, y) => receiptSortKey(y).localeCompare(receiptSortKey(x))).map(r => r["Receipt ID"])];
+    } else if (route.name === "wish") {
+      lists = [wishRows().map(w => w["Wish ID"]),
+               state.wishes.slice().sort((a, b) => String(b["Added At"] || "").localeCompare(String(a["Added At"] || ""))).map(w => w["Wish ID"])];
+    } else return null;
+    const ids = lists.find(l => l.indexOf(id) !== -1);
+    if (!ids) return null;
+    const i = ids.indexOf(id);
+    const href = x => route.name === "item" ? "#/item/" + route.args[0] + "/" + encodeURIComponent(x) : "#/" + route.name + "/" + encodeURIComponent(x);
+    return { pos: i + 1, total: ids.length, prev: i > 0 ? href(ids[i - 1]) : "", next: i < ids.length - 1 ? href(ids[i + 1]) : "" };
+  }
+
+  // ---------- Home ----------
+  function viewHome() {
+    const active = list => list.filter(r => !isRetired(r));
+    const latest = (rows, field) => rows.filter(isLive).map(r => r[field]).filter(Boolean)
+      .sort((a, b) => (parseDT(b) || 0) - (parseDT(a) || 0))[0];
+    const lastTest = latest(state.waterSessions || [], "Tested At");
+    const lastChange = latest(state.waterChanges || [], "Performed At");
+    const link = (href, icon, label, info, act) => '<a class="home-link" href="' + href + '"' + (act ? ' data-act="home-browse" data-type="' + act + '"' : "") + '>' +
+      '<span class="home-icon">' + ICONS[icon] + '</span><span class="home-text"><span class="home-label">' + esc(label) + '</span>' +
+      (info ? '<span class="home-info">' + esc(info) + '</span>' : "") + '</span></a>';
+    const group = (title, links) => '<div class="section"><div class="section-head"><h3>' + esc(title) + '</h3></div><div class="home-grid">' + links.join("") + '</div></div>';
+    const n = (k, word) => k + " " + word;
+    const openWishes = state.wishes.filter(wishIsOpen).length;
+    const unassigned = state.receipts.filter(r => !isRetired(r) && receiptLinksFor(r["Receipt ID"]).length === 0).length;
+    const html =
+      group("Tanks", [
+        link("#/tanks", "tanks", "Tanks", n(active(state.data.tanks).length, "active")),
+        link("#/water", "water", "Water tests", lastTest ? "Last test " + daysAgo(lastTest) : "No tests logged"),
+        link("#/maint", "maint", "Maintenance", lastChange ? "Last water change " + daysAgo(lastChange) : "No water changes logged")
+      ]) +
+      group("Collection", [
+        link("#/browse", "fish", "Species", n(browseCount("species"), "active"), "species"),
+        link("#/browse", "gear", "Equipment", n(browseCount("equipment"), "active"), "equipment"),
+        link("#/browse", "leaf", "Plants", n(browseCount("plants"), "active"), "plants"),
+        link("#/browse", "pill", "Medications", n(browseCount("medications"), "active"), "medications"),
+        link("#/wish", "wish", "Wishlist", n(openWishes, "open"))
+      ].concat(canReceipts() ? [link("#/receipts", "receipts", "Receipts", n(unassigned, "unassigned"))] : [])) +
+      group("Account", [link("#/account", "account", "My account", state.me ? state.me.name || state.me.email : "")]
+        .concat(isAdmin() ? [link("#/users", "users", "Users", ""), link("#/testtypes", "flask", "Test types", "")] : []));
+    return { title: "Ayers Aquariums", html: html };
+  }
+  const browseCount = type => state.data[type].filter(r => !isWishItem(r) && !isRetired(r)).length;
+
+  // ---------- Tanks ----------
+  // The Tanks list, in the order it's shown (also used by Previous / Next).
+  const tankRows = () => state.data.tanks.slice().sort((a, b) =>
+    (isRetired(a) - isRetired(b)) || String(a["Tank Name"]).localeCompare(String(b["Tank Name"])));
   function viewTanks() {
-    const tanks = state.data.tanks.slice().sort((a, b) =>
-      (isRetired(a) - isRetired(b)) || String(a["Tank Name"]).localeCompare(String(b["Tank Name"])));
+    const tanks = tankRows();
     const cards = tanks.map(t => {
       const id = t["Tank ID"];
       const assigned = tankAssignments(id, true);
@@ -627,7 +707,7 @@
         '</div></a>';
     }).join("");
     const addBtn = isAdmin() ? '<div class="actions" style="margin:0 0 12px"><button class="btn primary" data-act="add-record" data-type="tanks">' + ICONS.plus + 'Add tank</button></div>' : "";
-    return { title: "Ayers Aquariums", html: addBtn + (cards || '<div class="empty">' + (isAdmin() ? "No tanks yet." : "No tanks are assigned to you yet. Ask Chris to add you to a tank.") + '</div>') };
+    return { title: "Tanks", html: addBtn + (cards || '<div class="empty">' + (isAdmin() ? "No tanks yet." : "No tanks are assigned to you yet. Ask Chris to add you to a tank.") + '</div>') };
   }
 
   // ---------- Tank detail ----------
@@ -714,15 +794,20 @@
   }
 
   // ---------- Browse ----------
-  function viewBrowse() {
-    const type = state.browseType;
+  // A Browse list with the current search (when it's the type on screen) and Show retired setting.
+  function browseRows(type, useSearch) {
     const T = TYPES[type];
-    const q = state.query.trim().toLowerCase();
-    const rows = state.data[type]
+    const q = useSearch ? state.query.trim().toLowerCase() : "";
+    return state.data[type]
       .filter(r => !isWishItem(r))
       .filter(r => state.showRetired || !isRetired(r))
       .filter(r => !q || Object.keys(r).some(k => k !== "_row" && String(r[k]).toLowerCase().indexOf(q) !== -1))
       .sort((a, b) => String(T.title(a)).localeCompare(String(T.title(b))));
+  }
+  function viewBrowse() {
+    const type = state.browseType;
+    const T = TYPES[type];
+    const rows = browseRows(type, true);
     const segs = ["species", "equipment", "plants", "medications"].map(t =>
       '<button class="' + (t === type ? "on" : "") + '" data-act="browse-type" data-type="' + t + '">' + TYPES[t].label + '</button>').join("");
     const list = rows.map(r => {
@@ -1481,10 +1566,10 @@
       '<div class="card list">' + (list.map(receiptRow).join("") || '<div class="empty">None</div>') + '</div></div>';
   }
 
-  function viewReceipts() {
+  function receiptRows() {
     const q = state.receiptQuery.trim().toLowerCase();
     const words = q.split(/\s+/).filter(Boolean);
-    const rows = state.receipts
+    return state.receipts
       .filter(r => state.showRetiredReceipts || !isRetired(r))
       .filter(r => state.receiptFilter !== "unassigned" || receiptLinksFor(r["Receipt ID"]).length === 0)
       .filter(r => {
@@ -1494,6 +1579,9 @@
         return words.every(w => hay.indexOf(w) !== -1);
       })
       .sort((x, y) => receiptSortKey(y).localeCompare(receiptSortKey(x)));
+  }
+  function viewReceipts() {
+    const rows = receiptRows();
     const unassigned = state.receipts.filter(r => !isRetired(r) && receiptLinksFor(r["Receipt ID"]).length === 0).length;
     return {
       title: "Receipts",
@@ -2167,16 +2255,21 @@
       '<div class="card list">' + (list.map(w => wishRow(w, tankId)).join("") || '<div class="empty">None</div>') + '</div></div>';
   }
 
-  function viewWishlist() {
+  function wishRows() {
     const f = state.wishFilter;
-    const visibleTanks = state.data.tanks.filter(t => !isRetired(t)).sort((a, b) => String(a["Tank Name"]).localeCompare(String(b["Tank Name"])));
+    const visibleTanks = state.data.tanks.filter(t => !isRetired(t));
     if (state.wishTank && !visibleTanks.some(t => t["Tank ID"] === state.wishTank)) state.wishTank = "";
-    const rows = state.wishes
+    return state.wishes
       .filter(w => f === "open" ? wishIsOpen(w) : String(w["Wish Status"]) === (f === "purchased" ? "Purchased" : "Not getting"))
       .filter(w => !state.wishTank || state.data.assignments.some(a => a["Wish ID"] === w["Wish ID"] && a["Tank ID"] === state.wishTank &&
                                                                          (f === "open" ? isPendingWishRow(a) : true)))
       .sort((a, b) => ((PRIORITY_ORDER[a["Priority"]] ?? 1) - (PRIORITY_ORDER[b["Priority"]] ?? 1)) ||
                       String(b["Added At"] || "").localeCompare(String(a["Added At"] || "")));
+  }
+  function viewWishlist() {
+    const f = state.wishFilter;
+    const visibleTanks = state.data.tanks.filter(t => !isRetired(t)).sort((a, b) => String(a["Tank Name"]).localeCompare(String(b["Tank Name"])));
+    const rows = wishRows();
     const count = k => state.wishes.filter(w => k === "open" ? wishIsOpen(w) : String(w["Wish Status"]) === (k === "purchased" ? "Purchased" : "Not getting")).length;
     return {
       title: "Wishlist",
@@ -3276,15 +3369,18 @@
     const d = el.dataset;
     switch (act) {
       case "back":
-        if (history.length > 1) history.back(); else location.hash = "#/tanks";
+        if (history.length > 1) history.back(); else location.hash = "#/home";
         break;
       case "refresh": refresh(false); break;
+      // Previous / Next on a detail page: replace, so Back still returns to the list.
+      case "step": if (d.href) location.replace(d.href); break;
       case "sign-out": signOut(); break;
       case "open-item":
         if (e.target.closest("button") && e.target.closest("button") !== el) return;
         location.hash = "#/item/" + d.type + "/" + encodeURIComponent(d.id);
         break;
       case "browse-type": state.browseType = d.type; state.query = ""; render(); break;
+      case "home-browse": state.browseType = d.type; state.query = ""; break;   // the link then opens Browse
       case "toggle-removed": state.showRemoved = !state.showRemoved; render(); break;
       case "add-record": recordForm(d.type); break;
       case "edit-record": recordForm(d.type, d.id); break;
@@ -3379,7 +3475,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "36";
+  const APP_VERSION = "37";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
