@@ -136,6 +136,8 @@ function apiDeleteRecord_(req, user) {
       counts["photos"] = photos.count;
       counts["photo files moved to Drive trash"] = Object.keys(trashed).length;
       counts["image credits"] = apiDeleteRowsWhere_(apiTabOrNull_("Image Credits"), "Species ID", is).count;
+      // Price tracker (Prices.gs): its price item and every price gathered for it.
+      counts["price tracker rows"] = apiDeletePricesForRecord_(id, user);
    }
 
    // The record itself (found again by ID, since rows above may be on other tabs only).

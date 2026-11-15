@@ -42,6 +42,7 @@
     wishes: [],
     compat: [],
     photos: [],
+    priceItems: [], prices: [], priceUnits: [], priceQuery: "", priceFilter: "all", priceOpen: {},
     wishOptions: { priorities: ["High", "Medium", "Low"], statuses: ["Researching", "Want", "Purchased", "Not getting"] },
     wishFilter: "open",
     wishTank: "",
@@ -197,6 +198,7 @@
     pill: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8.5" width="18" height="7" rx="3.5" transform="rotate(-40 12 12)"/><path d="M9.6 9.1l5.3 5.3" transform="rotate(0)"/></svg>',
     users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.5 3.3-5.5 6.5-5.5s5.7 2 6.5 5.5"/><path d="M15.5 4.8a3.4 3.4 0 0 1 0 6.4M17.5 14.8c2 .7 3.4 2.4 4 5.2"/></svg>',
     flask: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6M10 3v6l-5.5 9.5A1.7 1.7 0 0 0 6 21h12a1.7 1.7 0 0 0 1.5-2.5L14 9V3"/><path d="M7.5 15h9"/></svg>',
+    tag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8" r="1.3"/></svg>',
     back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
     refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>',
     close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
@@ -400,6 +402,9 @@
     state.wishes = r.wishes || [];
     state.compat = r.compat || [];
     state.photos = r.photos || [];
+    state.priceItems = r.priceItems || [];
+    state.prices = r.prices || [];
+    state.priceUnits = r.priceUnits || ["oz", "lb", "g", "kg", "mL", "L", "fl oz", "gal", "count", "each"];
     state.photosOn = Array.isArray(r.photos);   // false until the server has Photos.gs
     if (r.wishOptions) state.wishOptions = r.wishOptions;
   }
@@ -590,11 +595,13 @@
       case "testtypes": view = isAdmin() ? viewTestTypes() : viewWater(); break;
       case "maint": view = viewMaintenance(route.args[0]); break;
       case "receipt": view = canReceipts() ? viewReceipt(route.args[0]) : viewTanks(); break;
+      case "prices": view = viewPrices(); break;
+      case "price": view = viewPriceItem(route.args[0]); break;
       default: view = viewHome();
     }
     const nav = stepNav(route);
     const tab = route.name === "tank" ? "tanks" : route.name === "item" ? "browse" : route.name === "receipt" ? "receipts" :
-                route.name === "testtypes" ? "water" : (route.name === "users" || route.name === "account") ? "home" : route.name;
+                route.name === "testtypes" ? "water" : (route.name === "users" || route.name === "account" || route.name === "prices" || route.name === "price") ? "home" : route.name;
     const tabs = [["home", "Home"], ["tanks", "Tanks"], ["water", "Test"], ["maint", "Maint."], ["browse", "Browse"], ["wish", "Wishlist"]]
       .concat(canReceipts() ? [["receipts", "Receipts"]] : []);
 
@@ -609,7 +616,7 @@
         '</div>' : "") +
         '<button class="icon-btn" data-act="refresh" aria-label="Refresh">' + ICONS.refresh + '</button>' +
       '</header>' +
-      '<main class="view">' + view.html + '</main>' +
+      '<main class="view' + (view.wide ? " wide" : "") + '">' + view.html + '</main>' +
       '<nav class="tabbar">' +
         tabs.map(t => '<a href="#/' + t[0] + '" class="' + (tab === t[0] ? "active" : "") + '">' + ICONS[t[0]] + '<span>' + t[1] + '</span></a>').join("") +
       '</nav>';
@@ -638,6 +645,8 @@
       if (!canReceipts()) return null;
       lists = [receiptRows().map(r => r["Receipt ID"]),
                state.receipts.slice().sort((x, y) => receiptSortKey(y).localeCompare(receiptSortKey(x))).map(r => r["Receipt ID"])];
+    } else if (route.name === "price") {
+      lists = [priceRows().map(p => p["Price Item ID"]), state.priceItems.slice().sort(byPriceName).map(p => p["Price Item ID"])];
     } else if (route.name === "wish") {
       lists = [wishRows().map(w => w["Wish ID"]),
                state.wishes.slice().sort((a, b) => String(b["Added At"] || "").localeCompare(String(a["Added At"] || ""))).map(w => w["Wish ID"])];
@@ -647,6 +656,359 @@
     const i = ids.indexOf(id);
     const href = x => route.name === "item" ? "#/item/" + route.args[0] + "/" + encodeURIComponent(x) : "#/" + route.name + "/" + encodeURIComponent(x);
     return { pos: i + 1, total: ids.length, prev: i > 0 ? href(ids[i - 1]) : "", next: i < ids.length - 1 ? href(ids[i + 1]) : "" };
+  }
+
+  // ---------- Price tracker ----------
+  // Price Items: one per item (linked to a record, or a typed name). Prices: every price gathered.
+  // The list shows the latest price at each store; Best = lowest price per unit.
+  const canPrices = () => state.me && (state.me.role === "Admin" || state.me.role === "Editor");
+  const UNIT_INFO = { oz: ["weight", 28.3495], lb: ["weight", 453.592], g: ["weight", 1], kg: ["weight", 1000],
+                      mL: ["volume", 1], L: ["volume", 1000], "fl oz": ["volume", 29.5735], gal: ["volume", 3785.41],
+                      count: ["count", 1], each: ["count", 1] };
+  const unitKind = u => (UNIT_INFO[u] || ["other", 1])[0];
+  const unitShort = u => u === "count" ? "ct" : u;
+  const findPriceItem = id => state.priceItems.find(p => p["Price Item ID"] === id);
+  const pricesFor = id => state.prices.filter(p => p["Price Item ID"] === id);
+  const ONE_LABEL = { species: "Species", equipment: "Equipment", plants: "Plant", medications: "Medication" };
+  function priceItemInfo(pi) {
+    const rid = pi["Record ID"];
+    if (!rid) return { name: String(pi["Item Name"] || pi["Price Item ID"]), linked: false, pill: "Other item" };
+    const x = recordOf(rid);
+    if (!x) return { name: rid + " (record deleted)", linked: true, pill: rid, rid: rid };
+    return { name: String(TYPES[x.type].title(x.rec)), linked: true, pill: rid + " · " + (ONE_LABEL[x.type] || TYPES[x.type].label), rid: rid, type: x.type };
+  }
+  const byPriceName = (a, b) => priceItemInfo(a).name.localeCompare(priceItemInfo(b).name);
+  const gatheredKey = p => String(p["Date Gathered"] || "") + " " + String(p["Added At"] || "");
+  function fmtPerUnit(v, unit) {
+    if (v === null || v === undefined || !isFinite(v)) return "";
+    const amt = "$" + v.toFixed(v < 0.1 ? 3 : 2);
+    return unit === "each" ? amt + " each" : amt + "/" + unitShort(unit);
+  }
+  const fmtSize = (n, u) => (Number(n) || n) + " " + unitShort(u);
+  // "250 mL · $0.052/mL"; a single item ("1 each") needs no per-unit price.
+  const sizePer = (p, per, unit) => fmtSize(p["Size"], p["Unit"]) + (p["Unit"] === "each" && Number(p["Size"]) === 1 && unit === "each" ? "" :
+    " · " + (per === null ? "different unit" : fmtPerUnit(per, unit)));
+
+  // Latest price per store, price per unit, and the best store, for one price item.
+  function priceSummary(id) {
+    const groups = {};
+    pricesFor(id).forEach(p => {
+      const k = String(p["Location"]).trim().toLowerCase();
+      (groups[k] = groups[k] || []).push(p);
+    });
+    const stores = Object.keys(groups).map(k => {
+      const hist = groups[k].slice().sort((a, b) => gatheredKey(b).localeCompare(gatheredKey(a)));
+      return { loc: String(hist[0]["Location"]).trim(), latest: hist[0], history: hist };
+    });
+    // Compare in the kind of unit most stores use (weight, volume or count), shown in its most used unit.
+    const tally = (list, key) => { const t = {}; list.forEach(s => { const v = key(s); t[v] = (t[v] || 0) + 1; }); return t; };
+    const newestFirst = stores.slice().sort((a, b) => gatheredKey(b.latest).localeCompare(gatheredKey(a.latest)));
+    const pick = (t, key) => { const max = Math.max.apply(null, Object.values(t)); return newestFirst.map(key).find(v => t[v] === max); };
+    let kind = "", unit = "";
+    if (stores.length) {
+      kind = pick(tally(stores, s => unitKind(s.latest["Unit"])), s => unitKind(s.latest["Unit"]));
+      const same = stores.filter(s => unitKind(s.latest["Unit"]) === kind);
+      unit = pick(tally(same, s => s.latest["Unit"]), s => s.latest["Unit"]);
+    }
+    const perUnit = p => {
+      const u = p["Unit"], size = Number(p["Size"]), price = Number(p["Price"]);
+      if (unitKind(u) !== kind || !size || isNaN(price) || !UNIT_INFO[u] || !UNIT_INFO[unit]) return null;
+      return price / (size * UNIT_INFO[u][1] / UNIT_INFO[unit][1]);
+    };
+    stores.forEach(s => { s.perUnit = perUnit(s.latest); s.history.forEach(h => { h._perUnit = perUnit(h); }); });
+    stores.sort((a, b) => (a.perUnit === null) - (b.perUnit === null) || (a.perUnit || 0) - (b.perUnit || 0) || a.loc.localeCompare(b.loc));
+    const best = stores.length && stores[0].perUnit !== null ? stores[0].loc : "";
+    return { stores: stores, unit: unit, kind: kind, best: best, perUnit: perUnit };
+  }
+
+  // The Prices list as shown (search and filter), also used by Previous / Next.
+  function priceRows() {
+    const q = state.priceQuery.trim().toLowerCase();
+    const words = q.split(/\s+/).filter(Boolean);
+    return state.priceItems
+      .filter(pi => state.priceFilter === "all" || (state.priceFilter === "linked") === !!pi["Record ID"])
+      .filter(pi => {
+        if (!words.length) return true;
+        const info = priceItemInfo(pi);
+        const hay = [info.name, pi["Record ID"], pi["Price Item ID"]].concat(pricesFor(pi["Price Item ID"]).map(p => p["Location"])).join(" ").toLowerCase();
+        return words.every(w => hay.indexOf(w) !== -1);
+      })
+      .sort(byPriceName);
+  }
+
+  function priceLabelHtml(pi, sum) {
+    const info = priceItemInfo(pi);
+    return '<div class="price-item"><a href="#/price/' + encodeURIComponent(pi["Price Item ID"]) + '" class="price-name">' + esc(info.name) + '</a>' +
+      '<div class="price-tags"><span class="pill' + (info.linked ? " edit" : "") + '">' + esc(info.pill) + '</span>' +
+      (sum.unit ? '<span class="price-per">per ' + esc(unitShort(sum.unit)) + '</span>' : "") + '</div></div>';
+  }
+  function priceCellHtml(s, best, unit) {
+    const p = s.latest;
+    return '<div class="price-cell' + (best ? " best" : "") + '">' +
+      '<div class="price-top"><span class="price-amt">' + esc(money(p["Price"])) + '</span>' + (best ? '<span class="pill best-pill">Best</span>' : "") + '</div>' +
+      '<span class="price-size">' + esc(sizePer(p, s.perUnit, unit)) + '</span>' +
+      '<span class="price-date">' + esc(fmtDate(p["Date Gathered"])) + '</span></div>';
+  }
+
+  function viewPrices() {
+    const rows = priceRows();
+    const sums = {};
+    rows.forEach(pi => { sums[pi["Price Item ID"]] = priceSummary(pi["Price Item ID"]); });
+    // One column per store that has a price in the rows shown.
+    const storeSet = {};
+    rows.forEach(pi => sums[pi["Price Item ID"]].stores.forEach(s => { const k = s.loc.toLowerCase(); if (!storeSet[k]) storeSet[k] = s.loc; }));
+    const stores = Object.keys(storeSet).map(k => storeSet[k]).sort((a, b) => a.localeCompare(b));
+    const count = f => state.priceItems.filter(pi => f === "all" || (f === "linked") === !!pi["Record ID"]).length;
+    const addCell = (pi, loc) => canPrices()
+      ? '<button type="button" class="price-add" data-act="add-price" data-item="' + esc(pi["Price Item ID"]) + '" data-loc="' + esc(loc) + '" aria-label="Add ' + esc(loc) + ' price for ' + esc(priceItemInfo(pi).name) + '">' + ICONS.plus + '<span>Add</span></button>'
+      : '<span class="price-none">—</span>';
+    const table = '<div class="price-table-wrap card"><table class="price-table"><thead><tr><th scope="col">Item</th>' +
+      stores.map(st => '<th scope="col">' + esc(st) + '</th>').join("") + '</tr></thead><tbody>' +
+      rows.map(pi => {
+        const sum = sums[pi["Price Item ID"]];
+        return '<tr><th scope="row">' + priceLabelHtml(pi, sum) + '</th>' + stores.map(st => {
+          const s = sum.stores.find(x => x.loc.toLowerCase() === st.toLowerCase());
+          return '<td>' + (s ? priceCellHtml(s, s.loc === sum.best, sum.unit) : addCell(pi, st)) + '</td>';
+        }).join("") + '</tr>';
+      }).join("") + '</tbody></table></div>';
+    const cards = '<div class="price-cards">' + rows.map(pi => {
+      const sum = sums[pi["Price Item ID"]];
+      return '<div class="card price-card">' + priceLabelHtml(pi, sum) +
+        sum.stores.map(s => '<div class="price-row' + (s.loc === sum.best ? " best" : "") + '"><div class="price-row-l"><span class="price-store">' + esc(s.loc) +
+          (s.loc === sum.best ? ' <span class="pill best-pill">Best</span>' : "") + '</span><span class="price-date">' + esc(fmtDate(s.latest["Date Gathered"])) + '</span></div>' +
+          '<div class="price-row-r"><span class="price-amt">' + esc(money(s.latest["Price"])) + '</span><span class="price-size">' + esc(sizePer(s.latest, s.perUnit, sum.unit)) + '</span></div></div>').join("") +
+        (sum.stores.length ? "" : '<div class="hint">No prices yet.</div>') + '</div>';
+    }).join("") + '</div>';
+    const empty = '<div class="empty">' + (state.priceItems.length ? "Nothing matches." : (canPrices() ? "No prices yet. Tap Add price to start." : "No prices yet.")) + '</div>';
+    return {
+      title: "Prices", back: true, keepScroll: true, wide: true,
+      html:
+        '<div class="price-tools">' +
+          '<input class="search" type="search" placeholder="Search items or stores…" aria-label="Search prices" value="' + esc(state.priceQuery) + '" data-act="price-search">' +
+          '<div class="segmented">' + [["all", "All"], ["linked", "Linked records"], ["other", "Other items"]].map(x =>
+            '<button class="' + (state.priceFilter === x[0] ? "on" : "") + '" data-act="price-filter" data-f="' + x[0] + '">' + x[1] + ' (' + count(x[0]) + ')</button>').join("") + '</div>' +
+          (canPrices() ? '<button class="btn primary" data-act="add-price">' + ICONS.plus + 'Add price</button>' : "") +
+        '</div>' +
+        '<p class="hint">Each row is one item; each column is a store. <b class="best-word">Best</b> = lowest price per unit, so different sizes compare fairly. Tap an item for its price history.</p>' +
+        (rows.length ? table + cards : empty)
+    };
+  }
+
+  function viewPriceItem(id) {
+    const pi = findPriceItem(id);
+    if (!pi) return { title: "Prices", back: true, html: '<div class="empty">That item isn’t in the price tracker any more.</div>' };
+    const info = priceItemInfo(pi);
+    const sum = priceSummary(id);
+    const bestStore = sum.stores.find(s => s.loc === sum.best);
+    const summary = [sum.stores.length + (sum.stores.length === 1 ? " store" : " stores"), sum.unit ? "compared per " + unitShort(sum.unit) : "",
+                     bestStore ? "best now " + bestStore.loc + " at " + fmtPerUnit(bestStore.perUnit, sum.unit) : ""].filter(Boolean).join(" · ");
+    const cards = sum.stores.map(s => {
+      const best = s.loc === sum.best;
+      const key = id + "|" + s.loc;
+      const open = !!state.priceOpen[key];
+      const p = s.latest;
+      return '<div class="card price-store-card' + (best ? " best" : "") + '">' +
+        '<div class="price-store-head"><div class="price-store-l"><div class="price-store-name">' + esc(s.loc) + (best ? ' <span class="pill best-pill">Best</span>' : "") + '</div>' +
+          '<div class="meta">Gathered ' + esc(fmtDate(p["Date Gathered"])) + ' · ' + esc(daysAgo(p["Date Gathered"])) + (p["Added By"] ? ' · by ' + esc(personName(p["Added By"])) : "") + '</div></div>' +
+          '<div class="price-store-r"><span class="price-big">' + esc(money(p["Price"])) + '</span><span class="price-size">' + esc(sizePer(p, s.perUnit, sum.unit)) + '</span></div></div>' +
+        '<div class="actions"><button class="btn small" data-act="price-history" data-item="' + esc(id) + '" data-loc="' + esc(s.loc) + '" aria-expanded="' + open + '">History (' + s.history.length + ')</button>' +
+          (canPrices() ? '<button class="btn small" data-act="add-price" data-item="' + esc(id) + '" data-loc="' + esc(s.loc) + '">' + ICONS.plus + 'New price</button>' : "") + '</div>' +
+        (open ? '<div class="price-hist"><table><thead><tr><th scope="col">Date gathered</th><th scope="col">Price</th><th scope="col">Size</th><th scope="col">Per unit</th>' +
+          (canPrices() ? '<th scope="col"><span class="sr-only">Actions</span></th>' : "") + '</tr></thead><tbody>' +
+          s.history.map(h => '<tr><td>' + esc(fmtDate(h["Date Gathered"])) + '</td><td><b>' + esc(money(h["Price"])) + '</b></td><td>' + esc(fmtSize(h["Size"], h["Unit"])) + '</td><td>' +
+            esc(h._perUnit === null ? "—" : fmtPerUnit(h._perUnit, sum.unit)) + '</td>' +
+            (canPrices() ? '<td class="r"><button class="btn small" data-act="edit-price" data-id="' + esc(h["Price ID"]) + '">Edit</button></td>' : "") + '</tr>').join("") +
+          '</tbody></table></div>' : "") +
+        '</div>';
+    }).join("");
+    const head = '<div class="card price-head"><h2>' + esc(info.name) + '</h2>' +
+      '<div class="price-tags"><span class="pill' + (info.linked ? " edit" : "") + '">' + esc(info.pill) + '</span><span class="meta">' + esc(summary) + '</span></div>' +
+      '<div class="actions">' +
+        (canPrices() ? '<button class="btn primary" data-act="add-price" data-item="' + esc(id) + '">' + ICONS.plus + 'Add price</button>' : "") +
+        (info.linked && info.type ? '<a class="btn" href="#/item/' + info.type + '/' + encodeURIComponent(info.rid) + '">Open ' + esc(info.rid) + '</a>' : "") +
+        (canPrices() && !info.linked ? '<button class="btn" data-act="edit-price-item" data-id="' + esc(id) + '">Edit item</button>' : "") +
+        (canPrices() ? '<button class="btn danger" data-act="delete-price-item" data-id="' + esc(id) + '">Delete</button>' : "") +
+      '</div></div>';
+    return {
+      title: info.name, back: true, keepScroll: true,
+      html: head + '<div class="section"><div class="section-head"><h3>Latest price at each store (' + sum.stores.length + ')</h3><span class="meta">Cheapest per unit first</span></div>' +
+        (cards || '<div class="card"><div class="empty">No prices yet.</div></div>') + '</div>'
+    };
+  }
+
+  // Choices for the Item picker: items already priced, then records not priced yet.
+  // Labels are unique; records carry their ID ("EQ-5 Fluval AC30").
+  function priceItemChoices() {
+    const items = [], map = {};
+    const add = (label, sub, group, ref) => { if (map[label.toLowerCase()]) return; map[label.toLowerCase()] = ref; items.push({ value: label, label: label, sub: sub, group: group }); };
+    state.priceItems.slice().sort(byPriceName).forEach(pi => {
+      const info = priceItemInfo(pi);
+      add(info.linked ? info.rid + " " + info.name : info.name, info.linked ? info.pill : "Other item", "Already priced", { priceItemId: pi["Price Item ID"] });
+    });
+    const priced = {};
+    state.priceItems.forEach(pi => { if (pi["Record ID"]) priced[pi["Record ID"]] = true; });
+    ["species", "equipment", "plants", "medications"].forEach(ty => {
+      const T = TYPES[ty];
+      (state.data[ty] || []).filter(r => !isWishItem(r) && !isRetired(r) && !priced[r[T.id]])
+        .sort((a, b) => String(T.title(a)).localeCompare(String(T.title(b))))
+        .forEach(r => add(r[T.id] + " " + T.title(r), T.sub(r), T.label, { recordId: r[T.id] }));
+    });
+    return { items: items, map: map };
+  }
+  function storeChoices() {
+    const seen = {}, out = [];
+    (state.vendors || []).concat(state.prices.map(p => String(p["Location"]).trim())).forEach(v => {
+      if (v && !seen[v.toLowerCase()]) { seen[v.toLowerCase()] = true; out.push(v); }
+    });
+    return out.sort((a, b) => a.localeCompare(b)).map(v => ({ value: v, label: v }));
+  }
+  const unitSelectHtml = (name, v) => '<select id="f_' + name + '" name="' + name + '" required data-label="Unit"><option value="">Unit</option>' +
+    state.priceUnits.map(u => '<option value="' + esc(u) + '"' + (u === v ? " selected" : "") + '>' + esc(unitShort(u)) + '</option>').join("") + '</select>';
+  function priceFieldsHtml(vals) {
+    return comboHtml({ name: "Location", label: "Location", mode: "free", required: true, noThumbs: true, value: vals.loc || "",
+                       placeholder: "Choose or type a store", newLabel: "will be added to your Vendor list" }, storeChoices()) +
+      '<div class="price-grid">' +
+        fieldHtml({ name: "Price", label: "Price ($)", type: "number", required: true }, vals.price) +
+        '<div class="field"><label for="f_Size">Size <span class="req">*</span></label><div class="size-row">' +
+          '<input type="number" step="any" inputmode="decimal" id="f_Size" name="Size" required data-label="Size" value="' + esc(vals.size === undefined ? "" : vals.size) + '">' +
+          unitSelectHtml("Unit", vals.unit || "") + '</div></div>' +
+      '</div>' +
+      '<div class="price-live" hidden></div>' +
+      fieldHtml({ name: "Date Gathered", label: "Date price gathered", type: "date", required: true }, vals.date || today());
+  }
+  // Shows the price per unit as it's typed, and how it compares with the other stores' latest prices.
+  function wirePriceLive(form, itemIdFor, editingId) {
+    const live = $(".price-live", form);
+    const update = () => {
+      const priceRaw = $("[name=Price]", form).value, price = Number(priceRaw), size = Number($("[name=Size]", form).value), unit = $("[name=Unit]", form).value;
+      const loc = String($("input[name=Location]", form).value || "").trim().toLowerCase();
+      if (priceRaw === "" || isNaN(price) || !size || !unit || !UNIT_INFO[unit]) { live.hidden = true; return; }
+      const pid = itemIdFor();
+      const sum = pid ? priceSummary(pid) : null;
+      const showUnit = sum && sum.unit && unitKind(sum.unit) === unitKind(unit) ? sum.unit : unit;
+      const per = price / (size * UNIT_INFO[unit][1] / UNIT_INFO[showUnit][1]);
+      let note = "";
+      if (sum) {
+        const others = sum.stores.filter(s => s.loc.toLowerCase() !== loc && s.perUnit !== null && unitKind(sum.unit) === unitKind(unit) &&
+                                         !(editingId && s.latest["Price ID"] === editingId));
+        const cheaper = others.filter(s => s.perUnit < per).sort((a, b) => a.perUnit - b.perUnit)[0];
+        if (others.length) note = cheaper ? " · " + cheaper.loc + " is cheaper at " + fmtPerUnit(cheaper.perUnit, showUnit) : " · cheapest of " + (others.length + 1) + " stores";
+        if (sum.unit && unitKind(sum.unit) !== unitKind(unit)) note = " · other stores use " + unitKind(sum.unit) + ", so this can't be compared";
+      }
+      live.hidden = false;
+      live.className = "price-live" + (note.indexOf("cheapest") !== -1 ? " good" : "");
+      live.innerHTML = ICONS.tag + '<span>' + esc(fmtPerUnit(per, showUnit).replace("/", " per ") + note) + '</span>';
+    };
+    form.addEventListener("input", update);
+    form.addEventListener("change", update);
+    update();
+    return update;
+  }
+
+  // presetItem: a Price Item ID; presetLoc: a store name.
+  function addPriceForm(presetItem, presetLoc) {
+    if (!canPrices()) return;
+    const ch = priceItemChoices();
+    const pre = presetItem ? findPriceItem(presetItem) : null;
+    const preLabel = pre ? (priceItemInfo(pre).linked ? priceItemInfo(pre).rid + " " + priceItemInfo(pre).name : priceItemInfo(pre).name) : "";
+    const preUnit = pre ? priceSummary(presetItem).unit : "";
+    // Matches the picker's labels, then a record ID typed on its own ("EQ-7"), then an exact name.
+    const refFor = label => {
+      const t = String(label || "").trim().toLowerCase();
+      if (!t) return null;
+      if (ch.map[t]) return ch.map[t];
+      const byId = state.priceItems.find(pi => String(pi["Record ID"]).toLowerCase() === t);
+      if (byId) return { priceItemId: byId["Price Item ID"] };
+      const rec = recordOf(t.toUpperCase());
+      if (rec && rec.type !== "tanks") return { recordId: t.toUpperCase() };
+      const named = Object.keys(ch.map).filter(k => k === t || k.replace(/^[a-z]+-\d+ /, "") === t);
+      return named.length === 1 ? ch.map[named[0]] : null;
+    };
+    openSheet({
+      title: "Add price",
+      submitLabel: "Save price",
+      body:
+        comboHtml({ name: "Item", label: "Item", mode: "free", required: true, noThumbs: true, value: preLabel,
+                    placeholder: "Choose or type an item", newLabel: "will be added as a new item" }, ch.items) +
+        '<p class="hint" style="margin-top:-6px">Pick a species, equipment, plant or medication, an item already priced, or type a new one.</p>' +
+        priceFieldsHtml({ loc: presetLoc, unit: preUnit }),
+      onReady: form => {
+        $$("[data-combo]", form).forEach(wireCombo);
+        const itemIdFor = () => { const r = refFor($("input[name=Item]", form).value); return r && r.priceItemId ? r.priceItemId : ""; };
+        wirePriceLive(form, itemIdFor);
+        // Choosing an item that's already priced fills in the unit it's compared in.
+        $("input[name=Item]", form).addEventListener("change", () => {
+          const pid = itemIdFor(), unitSel = $("[name=Unit]", form);
+          if (pid && !unitSel.value) { unitSel.value = priceSummary(pid).unit || ""; unitSel.dispatchEvent(new Event("change", { bubbles: true })); }
+        });
+        if (!presetItem) setTimeout(() => { const i = $(".combo-input", form); if (i) i.focus(); }, 50);
+      },
+      onSubmit: vals => {
+        const label = String(vals.Item || "").trim();
+        if (!label) throw new Error("Choose or type an item.");
+        const ref = refFor(label);
+        const item = ref ? ref : { name: label };
+        return write("addPrice", { item: item, location: vals.Location, price: vals.Price, size: vals.Size, unit: vals.Unit, date: vals["Date Gathered"] }, "Price saved");
+      }
+    });
+  }
+
+  function editPriceForm(priceId) {
+    const p = state.prices.find(x => x["Price ID"] === priceId);
+    if (!p || !canPrices()) return;
+    const pi = findPriceItem(p["Price Item ID"]);
+    openSheet({
+      title: "Edit price",
+      submitLabel: "Save",
+      body: '<p class="meta">' + esc(priceId + " · " + (pi ? priceItemInfo(pi).name : p["Price Item ID"])) + '</p>' +
+        priceFieldsHtml({ loc: p["Location"], price: p["Price"], size: p["Size"], unit: p["Unit"], date: p["Date Gathered"] }) +
+        '<div class="actions" style="margin-top:8px"><button type="button" class="btn danger" data-del-price>Delete this price</button></div>',
+      onReady: form => {
+        $$("[data-combo]", form).forEach(wireCombo);
+        wirePriceLive(form, () => p["Price Item ID"], priceId);
+        $("[data-del-price]", form).addEventListener("click", () => {
+          openSheet({
+            title: "Delete price?", submitLabel: "Delete", danger: true,
+            body: '<p>Permanently delete the <b>' + esc(p["Location"]) + '</b> price of <b>' + esc(money(p["Price"])) + '</b> (' + esc(fmtSize(p["Size"], p["Unit"])) +
+              ', gathered ' + esc(fmtDate(p["Date Gathered"])) + ')? This can’t be undone.</p>',
+            onSubmit: async () => {
+              const ok = await write("deletePrice", { priceId: priceId }, "Price deleted");
+              $$(".sheet-backdrop").forEach(b => b.remove()); document.body.style.overflow = "";
+              return ok;
+            }
+          });
+        });
+      },
+      onSubmit: vals => write("updatePrice", { priceId: priceId, location: vals.Location, price: vals.Price, size: vals.Size, unit: vals.Unit, date: vals["Date Gathered"] }, "Price updated")
+    });
+  }
+
+  function editPriceItemForm(id) {
+    const pi = findPriceItem(id);
+    if (!pi || pi["Record ID"] || !canPrices()) return;
+    openSheet({
+      title: "Edit item",
+      submitLabel: "Save",
+      body: '<p class="meta">' + esc(id) + '</p>' + fieldHtml({ name: "Item Name", label: "Name", required: true }, pi["Item Name"]),
+      onSubmit: vals => write("updatePriceItem", { priceItemId: id, name: vals["Item Name"] }, "Item renamed")
+    });
+  }
+
+  function deletePriceItemForm(id) {
+    const pi = findPriceItem(id);
+    if (!pi || !canPrices()) return;
+    const n = pricesFor(id).length;
+    const info = priceItemInfo(pi);
+    openSheet({
+      title: "Delete from price tracker?", submitLabel: "Delete", danger: true,
+      body: '<p>Permanently delete <b>' + esc(info.name) + '</b> from the price tracker, with its <b>' + n + ' price' + (n === 1 ? "" : "s") + '</b>? This can’t be undone.</p>' +
+        (info.linked ? '<p class="hint">' + esc(info.rid) + ' itself is not deleted; only its prices.</p>' : ""),
+      onSubmit: async () => {
+        const ok = await write("deletePriceItem", { priceItemId: id }, "Deleted from price tracker");
+        if (ok) location.hash = "#/prices";
+        return ok;
+      }
+    });
   }
 
   // ---------- Home ----------
@@ -675,7 +1037,8 @@
         link("#/browse", "leaf", "Plants", n(browseCount("plants"), "active"), "plants"),
         link("#/browse", "pill", "Medications", n(browseCount("medications"), "active"), "medications"),
         link("#/wish", "wish", "Wishlist", n(openWishes, "open"))
-      ].concat(canReceipts() ? [link("#/receipts", "receipts", "Receipts", n(unassigned, "unassigned"))] : [])) +
+      ].concat(canReceipts() ? [link("#/receipts", "receipts", "Receipts", n(unassigned, "unassigned"))] : [])
+       .concat([link("#/prices", "tag", "Prices", n(state.priceItems.length, state.priceItems.length === 1 ? "item" : "items") + " · " + n(state.prices.length, state.prices.length === 1 ? "price" : "prices"))])) +
       group("Account", [link("#/account", "account", "My account", state.me ? state.me.name || state.me.email : "")]
         .concat(isAdmin() ? [link("#/users", "users", "Users", ""), link("#/testtypes", "flask", "Test types", "")] : []));
     return { title: "Ayers Aquariums", html: html };
@@ -1434,6 +1797,7 @@
         n("receipt links", state.receiptLinks.filter(a => isId(a, "Item ID")).length) +
         n("wishes (and their compatibility checks)", state.wishes.filter(w => w["Item ID"] === id).length) +
         n("photos (files moved to Drive trash)", ph) +
+        n("price tracker prices (and its price item)", (() => { const pi = state.priceItems.find(x => x["Record ID"] === id); return pi ? state.prices.filter(x => x["Price Item ID"] === pi["Price Item ID"]).length || 1 : 0; })()) +
         (driveId(r["Thumbnail URL"]) && !ph ? "<li>its uploaded list picture (moved to Drive trash)</li>" : "");
     }
     openSheet({
@@ -3429,6 +3793,13 @@
       case "close-wish": closeWishForm(d.id); break;
       case "purchase-wish": purchaseWishForm(d.id); break;
       case "check-wish": checkWishNow(d.id); break;
+      // Price tracker
+      case "price-filter": state.priceFilter = d.f; render(); break;
+      case "add-price": addPriceForm(d.item || "", d.loc || ""); break;
+      case "edit-price": editPriceForm(d.id); break;
+      case "price-history": { const k = d.item + "|" + d.loc; state.priceOpen[k] = !state.priceOpen[k]; render(); break; }
+      case "edit-price-item": editPriceItemForm(d.id); break;
+      case "delete-price-item": deletePriceItemForm(d.id); break;
     }
   });
 
@@ -3438,6 +3809,15 @@
       const pos = e.target.selectionStart;
       render();
       const s = $("[data-act='search']");
+      if (s) { s.focus(); try { s.setSelectionRange(pos, pos); } catch (err) { /* ignore */ } }
+    }
+  });
+  document.addEventListener("input", e => {
+    if (e.target.matches("[data-act='price-search']")) {
+      state.priceQuery = e.target.value;
+      const pos = e.target.selectionStart;
+      render();
+      const s = $("[data-act='price-search']");
       if (s) { s.focus(); try { s.setSelectionRange(pos, pos); } catch (err) { /* ignore */ } }
     }
   });
@@ -3478,7 +3858,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "38";
+  const APP_VERSION = "39";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

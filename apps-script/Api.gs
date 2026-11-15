@@ -138,6 +138,12 @@ function apiRoute_(req, user) {
       case "removeItemPhoto":     return apiWrite_(() => apiRemoveItemPhoto_(req, user));
       case "aiReadLabel":         aiSetCancelId_(req); return apiAiReadLabel_(req, user);
       // Permanent delete, admins only (Delete.gs)
+      // Price tracker (Prices.gs)
+      case "addPrice":            return apiWrite_(() => apiAddPrice_(req, user));
+      case "updatePrice":         return apiWrite_(() => apiUpdatePrice_(req, user));
+      case "deletePrice":         return apiWrite_(() => apiDeletePrice_(req, user));
+      case "updatePriceItem":     return apiWrite_(() => apiUpdatePriceItem_(req, user));
+      case "deletePriceItem":     return apiWrite_(() => apiDeletePriceItem_(req, user));
       case "deleteRecord":        return apiWrite_(() => apiDeleteRecord_(req, user));
       case "deleteReceipt":       return apiWrite_(() => apiDeleteReceipt_(req, user));
       case "deletePhoto":         return apiWrite_(() => apiDeletePhoto_(req, user));
@@ -273,6 +279,7 @@ function apiBootstrap_(user) {
    Object.assign(out, apiMaintBootstrap_(user));
    Object.assign(out, apiWishBootstrap_(user, out.data.assignments));
    Object.assign(out, apiPhotosBootstrap_());
+   Object.assign(out, apiPricesBootstrap_());
    if (user.role !== "Admin") apiLimitToAssignedTanks_(out, user);
    API_GRID = null;
    return out;

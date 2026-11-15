@@ -22,5 +22,6 @@ All of these live in the sheet's Apps Script project ("Aquarium Database"); GitH
 | `Wishlist.gs` | Wishlist, Mark purchased, AI compatibility checks, private item photos. |
 | `Delete.gs` | Permanent delete for admins: records (with everything linked to them), receipts and item photos; Drive files go to the Drive trash. |
 | `Photos.gs` | Item Photos tab: several photos per species, equipment or plant (admins add, caption, remove, pick the list picture; everyone can view). |
+| `Prices.gs` | Price tracker: Price Items and Prices tabs. One row per item, the latest price at each store, history kept; admins and editors add, edit and delete. |
 
 `apps-script/archive/` holds old code that is no longer in the project (kept for reference only).

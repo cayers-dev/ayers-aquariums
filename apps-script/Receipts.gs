@@ -363,6 +363,8 @@ function apiEnsureVendor_(vendor, user) {
    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => String(h).trim());
    const col = headers.indexOf("Vendor") + 1;
    if (!col) return vendor;
+   // The list is built by a formula from the Lookups tab: add the vendor there, never under the formula.
+   if (/Lookups!/i.test(sheet.getRange(1, col).getFormula())) return apiEnsureLookupValue_("Vendor", vendor, user);
    const lastRow = Math.max(sheet.getLastRow(), 1);
    const values = sheet.getRange(1, col, lastRow, 1).getValues().map(r => String(r[0]).trim());
    for (let i = 1; i < values.length; i++) {
@@ -375,4 +377,24 @@ function apiEnsureVendor_(vendor, user) {
    sheet.getRange(target, col).setValue(vendor);
    apiLog_(user, "Add", "DropDownOptions", "Vendor", "New vendor: " + vendor);
    return vendor;
+}
+
+// Adds a value to a Lookups-tab list (Lookup Type, Value, Description, Inactive) unless it's there;
+// a matching inactive value is switched back on. Returns the value as stored.
+function apiEnsureLookupValue_(type, value, user) {
+   const lk = apiSs_().getSheetByName("Lookups");
+   if (!lk) return value;
+   const values = lk.getDataRange().getValues();
+   for (let i = 1; i < values.length; i++) {
+      if (String(values[i][0]).trim() === type && String(values[i][1]).trim().toLowerCase() === value.toLowerCase()) {
+         if (values[i][3] === true) { lk.getRange(i + 1, 4).setValue(false); apiLog_(user, "Edit", "Lookups", type, "Turned back on: " + values[i][1]); }
+         return String(values[i][1]).trim();
+      }
+   }
+   let last = values.length;
+   while (last > 1 && String(values[last - 1][0]).trim() === "") last--;
+   if (last + 1 > lk.getMaxRows()) lk.insertRowAfter(lk.getMaxRows());
+   lk.getRange(last + 1, 1, 1, 4).setValues([[type, value, "", false]]);
+   apiLog_(user, "Add", "Lookups", type, "New " + type.toLowerCase() + ": " + value);
+   return value;
 }
