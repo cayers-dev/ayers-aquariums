@@ -350,7 +350,7 @@ function apiAddWishLocked_(req, user, type, commons) {
       const open = apiReadWishes_().find(w => w["Item ID"] === itemId && apiWishIsOpen_(w));
       if (open) throw apiError_("INVALID", itemId + " " + apiItemTitle_(type, rec) + " is already on the wishlist (" + open["Wish ID"] + "). Edit that wish to add tanks.");
    } else {
-      const vals = apiCleanValues_(type, req.values || {});
+      const vals = apiCleanValues_(type, req.values || {}, user);
       delete vals[def.id];
       apiCheckRequired_(def, vals);
       if (type !== "equipment") {

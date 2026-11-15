@@ -138,6 +138,9 @@ function apiRoute_(req, user) {
       case "removeItemPhoto":     return apiWrite_(() => apiRemoveItemPhoto_(req, user));
       case "aiReadLabel":         aiSetCancelId_(req); return apiAiReadLabel_(req, user);
       // Permanent delete, admins only (Delete.gs)
+      // Dropdown lists (Lists.gs)
+      case "addLookup":           return apiWrite_(() => apiAddLookup_(req, user));
+      case "updateLookup":        return apiWrite_(() => apiUpdateLookup_(req, user));
       // Price tracker (Prices.gs)
       case "addPrice":            return apiWrite_(() => apiAddPrice_(req, user));
       case "updatePrice":         return apiWrite_(() => apiUpdatePrice_(req, user));
@@ -281,6 +284,7 @@ function apiBootstrap_(user) {
    Object.assign(out, apiWishBootstrap_(user, out.data.assignments));
    Object.assign(out, apiPhotosBootstrap_());
    Object.assign(out, apiPricesBootstrap_());
+   Object.assign(out, apiLookupsBootstrap_(user));
    if (user.role !== "Admin") apiLimitToAssignedTanks_(out, user);
    API_GRID = null;
    return out;
@@ -375,6 +379,8 @@ function apiSchema_(table, lists) {
          if (h === def.id || h === "Test Type ID") f.readOnly = true;
          if (listDefs[h]) {
             f.type = "list"; f.options = lists[listDefs[h][0]] || (listDefs[h][2] && lists[listDefs[h][2]]) || []; f.strict = listDefs[h][1];
+            // The Lookups list this field draws from (Admins can add to it from the form).
+            f.lookup = lists[listDefs[h][0]] || !listDefs[h][2] ? listDefs[h][0] : listDefs[h][2];
             // "Wishlist" is only for species, plants and equipment.
             if (h === "Status" && ["species", "plants", "equipment"].indexOf(table) === -1) f.options = f.options.filter(o => o !== "Wishlist");
          }
@@ -413,7 +419,7 @@ function apiAdd_(req, user) {
    const table = req.table;
    const def = API_TABLES[table];
    if (!def) throw apiError_("BAD_REQUEST", "Unknown table.");
-   const values = apiCleanValues_(table, req.values || {});
+   const values = apiCleanValues_(table, req.values || {}, user);
 
    if (table === "assignments") {
       const tankId = values["Tank ID"], itemId = values["Item ID"];
@@ -537,7 +543,7 @@ function apiUpdate_(req, user) {
    const table = req.table;
    const def = API_TABLES[table];
    if (!def) throw apiError_("BAD_REQUEST", "Unknown table.");
-   const values = apiCleanValues_(table, req.values || {});
+   const values = apiCleanValues_(table, req.values || {}, user);
    let record, recordLabel;
 
    // Records with an ID: tanks need tank rights; other lists are admin-only (or a wishlist item's creator).
@@ -853,7 +859,7 @@ function apiNextId_(table) {
 
 // Validates and converts values sent by the app using the table's schema
 // (numbers, dates, checkboxes, strict dropdown lists). Unknown fields are dropped.
-function apiCleanValues_(table, raw) {
+function apiCleanValues_(table, raw, user) {
    const schema = apiSchema_(table, apiReadLists_(apiSs_()));
    const byName = {};
    schema.forEach(f => byName[f.name] = f);
@@ -870,9 +876,8 @@ function apiCleanValues_(table, raw) {
          v = Number(v);
       }
       if (v !== "" && f.type === "date") v = apiParseDate_(v);
-      if (v !== "" && f.type === "list" && f.strict && f.options.indexOf(v) === -1) {
-         throw apiError_("INVALID", name + " must be one of: " + f.options.join(", "));
-      }
+      // List values: the list's spelling; a new value is added for Admins, refused on strict lists otherwise (Lists.gs).
+      if (v !== "" && f.type === "list" && f.options.indexOf(v) === -1) v = apiLookupValueFor_(f, v, user);
       out[name] = v;
    });
    return out;

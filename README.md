@@ -23,5 +23,6 @@ All of these live in the sheet's Apps Script project ("Aquarium Database"); GitH
 | `Delete.gs` | Permanent delete for admins: records (with everything linked to them), receipts and item photos; Drive files go to the Drive trash. |
 | `Photos.gs` | Item Photos tab: several photos per species, equipment or plant (admins add, caption, remove, pick the list picture; everyone can view). |
 | `Prices.gs` | Price tracker: Price Items and Prices tabs. One row per item, the latest price at each store, history kept; admins and editors add, edit and delete. |
+| `Lists.gs` | Dropdown lists (Lookups tab): admins add, rename (records using the value are updated), turn off/on and describe values; admins can also type new values into form dropdowns. |
 
 `apps-script/archive/` holds old code that is no longer in the project (kept for reference only).

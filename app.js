@@ -43,6 +43,7 @@
     compat: [],
     photos: [],
     priceItems: [], prices: [], priceUnits: [], priceQuery: "", priceFilter: "all", priceOpen: {},
+    lookups: [], lookupTypes: [], listQuery: "",
     wishOptions: { priorities: ["High", "Medium", "Low"], statuses: ["Researching", "Want", "Purchased", "Not getting"] },
     wishFilter: "open",
     wishTank: "",
@@ -199,6 +200,7 @@
     users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.5 3.3-5.5 6.5-5.5s5.7 2 6.5 5.5"/><path d="M15.5 4.8a3.4 3.4 0 0 1 0 6.4M17.5 14.8c2 .7 3.4 2.4 4 5.2"/></svg>',
     flask: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6M10 3v6l-5.5 9.5A1.7 1.7 0 0 0 6 21h12a1.7 1.7 0 0 0 1.5-2.5L14 9V3"/><path d="M7.5 15h9"/></svg>',
     tag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8" r="1.3"/></svg>',
+    list: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6h.01M4 12h.01M4 18h.01"/></svg>',
     back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
     refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>',
     close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
@@ -403,6 +405,8 @@
     state.compat = r.compat || [];
     state.photos = r.photos || [];
     state.priceItems = r.priceItems || [];
+    state.lookups = r.lookups || [];
+    state.lookupTypes = r.lookupTypes || [];
     state.prices = r.prices || [];
     state.priceUnits = r.priceUnits || ["oz", "lb", "g", "kg", "mL", "L", "fl oz", "gal", "count", "each"];
     state.photosOn = Array.isArray(r.photos);   // false until the server has Photos.gs
@@ -588,6 +592,7 @@
       case "browse": view = viewBrowse(); break;
       case "item": view = viewItem(route.args[0], route.args[1]); break;
       case "users": view = isAdmin() ? viewUsers() : viewTanks(); break;
+      case "lists": view = isAdmin() ? viewLists() : viewHome(); break;
       case "wish": view = route.args[0] ? viewWish(route.args[0]) : viewWishlist(); break;
       case "account": view = viewAccount(); break;
       case "receipts": view = canReceipts() ? viewReceipts() : viewTanks(); break;
@@ -601,7 +606,7 @@
     }
     const nav = stepNav(route);
     const tab = route.name === "tank" ? "tanks" : route.name === "item" ? "browse" : route.name === "receipt" ? "receipts" :
-                route.name === "testtypes" ? "water" : (route.name === "users" || route.name === "account" || route.name === "prices" || route.name === "price") ? "home" : route.name;
+                route.name === "testtypes" ? "water" : (route.name === "users" || route.name === "account" || route.name === "prices" || route.name === "price" || route.name === "lists") ? "home" : route.name;
     const tabs = [["home", "Home"], ["tanks", "Tanks"], ["water", "Test"], ["maint", "Maint."], ["browse", "Browse"], ["wish", "Wishlist"]]
       .concat(canReceipts() ? [["receipts", "Receipts"]] : []);
 
@@ -715,6 +720,18 @@
     return match ? askDidYouMean(String(value).trim(), match, kind) : value;
   }
   const knownVendors = () => storeChoices().map(x => x.value);
+  // Admin forms: a typed list value close to an existing one ("Hang on Back") asks first. False = stay on the form.
+  async function checkListFields(vals, form, fields) {
+    for (const f of fields) {
+      if (!adminListField(f, f.readOnly) || !vals[f.name]) continue;
+      const opts = f.lookup === "Vendor" ? knownVendors() : (f.options || []);
+      const v = await confirmName(vals[f.name], opts, f.lookup + " value");
+      if (v === null) return false;
+      vals[f.name] = v;
+      setComboValue(form, f.name, v);
+    }
+    return true;
+  }
   // Sets a free-text picker's value (hidden field and the text shown).
   function setComboValue(form, name, v) {
     const h = $("input[type=hidden][name='" + name + "']", form);
@@ -1144,6 +1161,122 @@
     });
   }
 
+  // ---------- Dropdown lists (Admins) ----------
+  // The lists live on the Lookups tab. Admins add, rename, turn off / on and describe values.
+  const STATUS_LISTS = ["Status", "Tank Status"];
+  // How many records use a value (fields drawing from that list, plus vendor columns elsewhere).
+  function lookupUseCount(type, value) {
+    const key = s => String(s === undefined || s === null ? "" : s).replace(/\s+/g, " ").trim().toLowerCase();
+    const k = key(value);
+    let n = 0;
+    Object.keys(state.schema || {}).forEach(table => {
+      const fields = (state.schema[table] || []).filter(f => f.lookup === type);
+      if (!fields.length) return;
+      (state.data[table] || []).forEach(r => fields.forEach(f => { if (key(r[f.name]) === k) n++; }));
+    });
+    if (type === "Vendor") {
+      n += state.receipts.filter(r => key(r["Vendor"]) === k).length +
+           state.wishes.filter(w => key(w["Vendor"]) === k).length +
+           state.prices.filter(p => key(p["Location"]) === k).length;
+    }
+    return n;
+  }
+
+  function viewLists() {
+    const types = state.lookupTypes || [];
+    const q = String(state.listQuery || "").trim().toLowerCase();
+    const cards = types.map(type => {
+      const rows = (state.lookups || []).filter(r => r.type === type)
+        .sort((a, b) => (a.inactive - b.inactive) || a.value.localeCompare(b.value));
+      const shown = q ? rows.filter(r => (type + " " + r.value + " " + r.description).toLowerCase().indexOf(q) !== -1) : rows;
+      if (q && !shown.length) return "";
+      const on = rows.filter(r => !r.inactive).length;
+      return '<div class="section"><div class="section-head"><h3>' + esc(type) + ' <span class="list-count">' + on + ' on' + (rows.length - on ? ' · ' + (rows.length - on) + ' off' : "") + '</span></h3>' +
+        '<button class="btn small" data-act="lookup-add" data-type="' + esc(type) + '">' + ICONS.plus + 'Add value</button></div>' +
+        (STATUS_LISTS.indexOf(type) !== -1 ? '<p class="hint">The app knows Active, Retired' + (type === "Tank Status" ? ", Storage" : ", Wishlist") +
+          '. Any other status shows as-is and counts as not retired. Status can’t be typed in from forms.</p>' : "") +
+        '<div class="card list">' + shown.map(r => {
+          const used = lookupUseCount(type, r.value);
+          return '<div class="list-item' + (r.inactive ? " dim" : "") + '"><div class="body"><div class="title">' + esc(r.value) + '</div>' +
+            '<div class="sub">' + esc([r.description, used ? "used by " + used : "not used"].filter(Boolean).join(" · ")) + '</div></div>' +
+            (r.inactive ? '<span class="pill retired">Off</span>' : "") +
+            '<button class="btn small" data-act="lookup-edit" data-row="' + r.row + '">Edit</button></div>';
+        }).join("") + '</div></div>';
+    }).join("");
+    return {
+      title: "Dropdown lists", back: true, keepScroll: true,
+      html: '<input class="search" type="search" placeholder="Search lists and values…" aria-label="Search dropdown lists" value="' + esc(state.listQuery || "") + '" data-act="list-search">' +
+        '<p class="hint">These are the choices in the app’s dropdowns, kept on the sheet’s Lookups tab. Turned-off values are hidden from dropdowns but kept, so old records still show them.</p>' +
+        (cards || '<div class="empty">' + (types.length ? "Nothing matches." : "No lists found on the Lookups tab.") + '</div>')
+    };
+  }
+
+  function lookupAddForm(type) {
+    const rows = (state.lookups || []).filter(r => r.type === type);
+    openSheet({
+      title: "Add to " + type,
+      submitLabel: "Add",
+      body: fieldHtml({ name: "value", label: "Value", required: true }, "") +
+        fieldHtml({ name: "description", label: "Description", type: "longtext" }, "") +
+        (STATUS_LISTS.indexOf(type) !== -1 ? '<p class="hint">The app only acts on Active, Retired' + (type === "Tank Status" ? ", Storage" : ", Wishlist") + '. A new status shows as-is and counts as not retired.</p>' : ""),
+      onSubmit: async (vals, form) => {
+        const typed = String(vals.value || "").replace(/\s+/g, " ").trim();
+        const exact = rows.find(r => r.value.toLowerCase() === typed.toLowerCase());
+        if (exact) throw new Error(exact.value + " is already on this list" + (exact.inactive ? " (turned off; use Edit to turn it back on)." : "."));
+        const v = await confirmName(typed, rows.map(r => r.value), "value");
+        if (v === null) return false;
+        const hit = rows.find(r => r.value === v);
+        if (hit) {
+          if (hit.inactive) return write("updateLookup", { row: hit.row, type: type, value: hit.value, inactive: false }, hit.value + " turned back on");
+          toast(hit.value + " is already on the list");
+          return true;
+        }
+        return write("addLookup", { type: type, value: v, description: vals.description }, "Added to " + type);
+      }
+    });
+  }
+
+  function lookupEditForm(row) {
+    const r = (state.lookups || []).find(x => x.row === Number(row));
+    if (!r) return;
+    const used = lookupUseCount(r.type, r.value);
+    const others = (state.lookups || []).filter(x => x.type === r.type && x.row !== r.row);
+    openSheet({
+      title: "Edit " + r.type + " value",
+      submitLabel: "Save",
+      body: fieldHtml({ name: "value", label: "Value", required: true }, r.value) +
+        '<p class="hint" data-rename-note hidden>Renaming also updates the ' + used + ' record' + (used === 1 ? "" : "s") + ' using “' + esc(r.value) + '”.</p>' +
+        fieldHtml({ name: "description", label: "Description", type: "longtext" }, r.description) +
+        '<div class="field"><label class="check"><input type="checkbox" name="inactive"' + (r.inactive ? " checked" : "") + '> Turned off (hidden from dropdowns; records keep it)</label></div>' +
+        '<p class="meta">Used by ' + used + ' record' + (used === 1 ? "" : "s") + ' · Lookups row ' + r.row + '</p>',
+      onReady: form => {
+        const note = $("[data-rename-note]", form), inp = $("[name=value]", form);
+        if (used) inp.addEventListener("input", () => { note.hidden = inp.value.replace(/\s+/g, " ").trim() === r.value; });
+      },
+      onSubmit: async vals => {
+        const nv = String(vals.value || "").replace(/\s+/g, " ").trim();
+        const payload = { row: r.row, type: r.type, value: r.value };
+        if (nv !== r.value) {
+          const clash = others.find(x => x.value.toLowerCase() === nv.toLowerCase());
+          if (clash) throw new Error(clash.value + " is already on this list.");
+          if (nv.toLowerCase() !== r.value.toLowerCase()) {
+            const close = closeName(nv, others.map(x => x.value));
+            if (close) {
+              const pick = await askDidYouMean(nv, close, "value");
+              if (pick === null) return false;
+              if (pick === close) throw new Error(close + " is already on this list. Turn this value off instead, or pick a different name.");
+            }
+          }
+          payload.newValue = nv;
+        }
+        if (String(vals.description || "").trim() !== r.description) payload.description = vals.description;
+        if (!!vals.inactive !== r.inactive) payload.inactive = !!vals.inactive;
+        if (Object.keys(payload).length === 3) { toast("No changes"); return true; }
+        return write("updateLookup", payload, payload.newValue && used ? "Renamed; " + used + " record" + (used === 1 ? "" : "s") + " updated" : "Saved");
+      }
+    });
+  }
+
   // ---------- Home ----------
   function viewHome() {
     const active = list => list.filter(r => !isRetired(r));
@@ -1173,7 +1306,8 @@
       ].concat(canReceipts() ? [link("#/receipts", "receipts", "Receipts", n(unassigned, "unassigned"))] : [])
        .concat([link("#/prices", "tag", "Prices", n(state.priceItems.length, state.priceItems.length === 1 ? "item" : "items") + " · " + n(state.prices.length, state.prices.length === 1 ? "price" : "prices"))])) +
       group("Account", [link("#/account", "account", "My account", state.me ? state.me.name || state.me.email : "")]
-        .concat(isAdmin() ? [link("#/users", "users", "Users", ""), link("#/testtypes", "flask", "Test types", "")] : []));
+        .concat(isAdmin() ? [link("#/users", "users", "Users", ""), link("#/testtypes", "flask", "Test types", ""),
+                          link("#/lists", "list", "Dropdown lists", (state.lookupTypes || []).length + " lists")] : []));
     return { title: "Ayers Aquariums", html: html };
   }
   const browseCount = type => state.data[type].filter(r => !isWishItem(r) && !isRetired(r)).length;
@@ -1404,10 +1538,17 @@
   // ------------------------------------------------------------------
   // Forms
   // ------------------------------------------------------------------
+  // Admins can type a new value into a dropdown that comes from the Lookups tab (never Status).
+  const adminListField = (f, ro) => f.type === "list" && !!f.lookup && f.name !== "Status" && !ro && isAdmin();
   function fieldHtml(f, value, opts) {
     opts = opts || {};
     const id = "f_" + f.name.replace(/\W+/g, "_");
     const v = value === undefined || value === null ? "" : value;
+    if (adminListField(f, f.readOnly || opts.readOnly)) {
+      const items = (f.options || []).map(o => ({ value: o, label: o }));
+      return comboHtml({ name: f.name, label: f.label || f.name, mode: "free", required: f.required, noThumbs: true, value: String(v),
+                         placeholder: "Choose or type a new value", newLabel: "will be added to the " + f.lookup + " list" }, items);
+    }
     const req = f.required ? ' required' : "";
     const ro = (f.readOnly || opts.readOnly) ? " readonly" : "";
     const label = '<label for="' + id + '">' + esc(f.label || f.name) + (f.required ? ' <span class="req">*</span>' : "") + '</label>';
@@ -1537,6 +1678,7 @@
       submitLabel: editing ? "Save" : "Add",
       body: (ai ? aiBarHtml() : "") + fields.map(f => fieldHtml(f, values[f.name])).join(""),
       onReady: form => {
+        $$("[data-combo]", form).forEach(wireCombo);
         if (prefill) applyPrefill(form, prefill);
         if (!ai) return;
         const thumb = $('[name="Thumbnail URL"]', form);
@@ -1547,7 +1689,8 @@
         } : null;
         wireAiFill(form, type, () => { const l = $('[name="Vendor Link"], [name="Product Page"]', form); return l ? l.value.trim() : ""; }, { onPhoto: onPhoto });
       },
-      onSubmit: async vals => {
+      onSubmit: async (vals, form) => {
+        if (!(await checkListFields(vals, form, fields))) return false;
         if (editing) {
           const changed = {};
           Object.keys(vals).forEach(k => {
@@ -1886,7 +2029,9 @@
       submitLabel: editing ? "Save" : "Add",
       body: '<p class="meta">' + esc(tankName(rec["Tank ID"])) + '</p>' +
         fields.map(f => fieldHtml(f, rec[f.name], { readOnly: editing && f.name === "Parameter" })).join(""),
-      onSubmit: vals => {
+      onReady: form => $$("[data-combo]", form).forEach(wireCombo),
+      onSubmit: async (vals, form) => {
+        if (!editing && !(await checkListFields(vals, form, fields))) return false;
         if (editing) {
           const changed = {};
           Object.keys(vals).forEach(k => { if (String(vals[k]) !== String(rec[k] === undefined ? "" : rec[k])) changed[k] = vals[k]; });
@@ -2888,6 +3033,7 @@
         const details = $(".wish-details", form), matches = $(".matches", form), reuse = $(".reuse", form);
         const renderDetails = () => {
           details.innerHTML = wishItemFields(type).map(f => fieldHtml(f, "")).join("");
+          $$("[data-combo]", details).forEach(wireCombo);
           matches.hidden = true; matches.dataset.key = ""; commons = null;
           $(".ai-result", form).hidden = true;
         };
@@ -2970,6 +3116,7 @@
         const picked = $$("input[name^='tank:']", form).filter(el => el.checked).map(el => el.name.slice(5));
         if (!isAdmin() && !picked.length) throw new Error("Check at least one of your tanks.");
         if (!(await checkVendorField(vals, form, "w_vendor"))) return false;
+        if (!reuseId && !(await checkListFields(vals, form, wishItemFields(type)))) return false;
         const price = String(vals.w_price || "").replace(/[$,\s]/g, "");
         if (price && isNaN(Number(price))) throw new Error("Estimated price must be an amount like 24.99.");
         const values = {};
@@ -3939,6 +4086,8 @@
       case "edit-price-item": editPriceItemForm(d.id); break;
       case "delete-price-item": deletePriceItemForm(d.id); break;
       case "price-picture": pricePictureForm(d.id); break;
+      case "lookup-add": lookupAddForm(d.type); break;
+      case "lookup-edit": lookupEditForm(d.row); break;
       case "price-picture-remove": pricePictureRemoveForm(d.id); break;
     }
   });
@@ -3949,6 +4098,15 @@
       const pos = e.target.selectionStart;
       render();
       const s = $("[data-act='search']");
+      if (s) { s.focus(); try { s.setSelectionRange(pos, pos); } catch (err) { /* ignore */ } }
+    }
+  });
+  document.addEventListener("input", e => {
+    if (e.target.matches("[data-act='list-search']")) {
+      state.listQuery = e.target.value;
+      const pos = e.target.selectionStart;
+      render();
+      const s = $("[data-act='list-search']");
       if (s) { s.focus(); try { s.setSelectionRange(pos, pos); } catch (err) { /* ignore */ } }
     }
   });
@@ -3998,7 +4156,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "41";
+  const APP_VERSION = "42";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
