@@ -6,7 +6,8 @@
   "use strict";
 
   const CFG = window.AA_CONFIG || {};
-  const TOKEN_KEY = "aa_id_token";
+  const TOKEN_KEY = "aa_id_token";        // Google sign-in pass (only until the server gives a session)
+  const SESSION_KEY = "aa_session";       // the app's own session: { token, exp }
 
   const state = {
     token: null,
@@ -222,8 +223,10 @@
   // ------------------------------------------------------------------
   // signal (optional): an AbortController signal; aborting stops waiting (error code CANCELLED).
   async function api(action, payload, signal) {
-    if (!state.token || !tokenValid(state.token)) {
-      const e = new Error("Your sign-in has expired. Please sign in again.");
+    // Use the app session while it's fresh; otherwise a Google sign-in pass from signing in.
+    const useSession = !!(state.session && state.sessionExp > Date.now() + 30 * 1000);
+    if (!useSession && !(state.token && tokenValid(state.token))) {
+      const e = new Error("You were signed out after an hour without using the app. Please sign in again.");
       e.code = "AUTH";
       throw e;
     }
@@ -231,7 +234,7 @@
     try {
       res = await fetch(CFG.apiUrl, {
         method: "POST",
-        body: JSON.stringify(Object.assign({ action: action, idToken: state.token }, payload || {})),
+        body: JSON.stringify(Object.assign({ action: action }, useSession ? { session: state.session } : { idToken: state.token }, payload || {})),
         signal: signal
       });
     } catch (err) {
@@ -247,6 +250,7 @@
       e.code = "ERROR";
       throw e;
     }
+    if (json && json.session) setSession(json.session);   // each request renews the session
     if (signal && signal.aborted) { const c = new Error("Cancelled."); c.code = "CANCELLED"; throw c; }
     if (!json.ok) {
       const e = new Error(json.message || "Something went wrong.");
@@ -276,6 +280,12 @@
   }
 
   function handleError(err) {
+    // Sign-in lapsed while a form is open: keep the form and ask to sign in on top of it.
+    if (err.code === "AUTH" && state.me && $(".sheet-backdrop")) {
+      clearToken();
+      showReauth(err.message);
+      return;
+    }
     if (err.code === "AUTH" || err.code === "SETUP") {
       clearToken();
       state.me = null;
@@ -289,6 +299,32 @@
       render();
     } else {
       toast(err.message, true);
+    }
+  }
+
+  // For form submit handlers: an expired sign-in keeps the form open (with the sign-in pop-up
+  // on top) instead of closing it; other sign-in problems close it as before.
+  function authStop(err) {
+    handleError(err);
+    if (err.code === "AUTH" && state.me) throw new Error("Your sign-in expired. Sign in again (your entries are kept), then tap Save.");
+    return true;
+  }
+
+  // Sign-in pop-up over an open form (nothing typed is lost).
+  function showReauth(msg) {
+    if ($(".reauth")) return;
+    const el = document.createElement("div");
+    el.className = "reauth";
+    el.innerHTML = '<div class="reauth-box"><h3>Sign in to continue</h3><p>' + esc(msg || "Your sign-in expired.") + '</p>' +
+      '<p class="hint">What you entered is kept. After signing in, tap Save again.</p><div class="reauth-btn"></div>' +
+      '<button type="button" class="btn" data-reauth-close>Not now</button></div>';
+    document.body.appendChild(el);
+    $("[data-reauth-close]", el).addEventListener("click", () => el.remove());
+    if (window.google && google.accounts && state.gisReady) {
+      google.accounts.id.renderButton($(".reauth-btn", el), { theme: "filled_blue", size: "large", text: "signin_with", shape: "pill" });
+      google.accounts.id.prompt();
+    } else {
+      $(".reauth-btn", el).innerHTML = '<p class="form-error-inline">Google sign-in didn’t load. Check your connection.</p>';
     }
   }
 
@@ -335,7 +371,7 @@
     try {
       await api(action, payload);
     } catch (err) {
-      if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) { handleError(err); return true; }
+      if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) return authStop(err);
       throw err;
     } finally {
       busy(false);
@@ -369,7 +405,22 @@
   // Auth
   // ------------------------------------------------------------------
   function setToken(t) { state.token = t; try { localStorage.setItem(TOKEN_KEY, t); } catch (e) { /* storage off */ } }
-  function clearToken() { state.token = null; try { localStorage.removeItem(TOKEN_KEY); } catch (e) { /* ignore */ } }
+  // Signing out (or an expired sign-in) clears both the Google pass and the app session.
+  function clearToken() {
+    state.token = null; state.session = null; state.sessionExp = 0;
+    try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(SESSION_KEY); } catch (e) { /* ignore */ }
+  }
+  // The server's session lasts an hour from the last request; the app keeps a slightly shorter estimate.
+  function setSession(token) {
+    state.session = token; state.sessionExp = Date.now() + 59 * 60 * 1000;
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify({ token: token, exp: state.sessionExp })); } catch (e) { /* storage off */ }
+  }
+  function loadSession() {
+    try {
+      const s = JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
+      if (s && s.token && s.exp > Date.now()) { state.session = s.token; state.sessionExp = s.exp; }
+    } catch (e) { /* ignore */ }
+  }
 
   function gisLoaded() {
     if (!window.google || !google.accounts || !CFG.clientId || CFG.clientId.indexOf("PASTE_") === 0) return;
@@ -390,6 +441,14 @@
     setToken(resp.credential);
     state.authMessage = "";
     state.notAllowedEmail = "";
+    // Signed in again from the pop-up over an open form: keep everything and carry on.
+    const re = $(".reauth");
+    if (re && state.me) {
+      re.remove();
+      toast("Signed in again. Tap Save to finish.");
+      refreshInBackground();
+      return;
+    }
     boot();
   }
 
@@ -1093,7 +1152,7 @@
           refreshInBackground();
           return true;
         } catch (err) {
-          if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) { handleError(err); return true; }
+          if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) return authStop(err);
           throw err;
         } finally { busy(false); }
       }
@@ -1295,7 +1354,7 @@
           toast("User saved");
           return true;
         } catch (err) {
-          if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) { handleError(err); return true; }
+          if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) return authStop(err);
           throw err;
         } finally {
           busy(false);
@@ -2266,7 +2325,7 @@
           res = await api("addWish", payload);
         } catch (err) {
           busy(false);
-          if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) { handleError(err); return true; }
+          if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) return authStop(err);
           throw err;
         }
         let note = "Added to the wishlist";
@@ -2761,7 +2820,7 @@
           }
           return true;
         } catch (err) {
-          if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) { handleError(err); return true; }
+          if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) return authStop(err);
           throw err;
         } finally { busy(false); }
       }
@@ -3251,7 +3310,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "33";
+  const APP_VERSION = "34";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
@@ -3276,7 +3335,8 @@
   }
 
   try { state.token = localStorage.getItem(TOKEN_KEY); } catch (e) { state.token = null; }
-  if (state.token && tokenValid(state.token)) boot();
+  loadSession();
+  if (state.session || (state.token && tokenValid(state.token))) boot();
   else { clearToken(); render(); }
   if (window.google && google.accounts && google.accounts.id) gisLoaded();
 })();

@@ -490,3 +490,10 @@ body.syncing::before { content: ""; position: fixed; top: 0; left: 0; right: 0; 
   background: linear-gradient(90deg, transparent, var(--primary), transparent); background-size: 50% 100%; background-repeat: no-repeat;
   animation: syncbar 1.1s linear infinite; }
 @keyframes syncbar { from { background-position: -50% 0; } to { background-position: 150% 0; } }
+
+/* Sign-in pop-up over an open form */
+.reauth { position: fixed; inset: 0; z-index: 95; display: grid; place-items: center; background: rgba(0,0,0,.35); padding: 20px; }
+.reauth-box { background: var(--surface); border-radius: 16px; padding: 20px; max-width: 360px; width: 100%; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 10px 40px rgba(0,0,0,.25); }
+.reauth-box h3 { margin: 0; }
+.reauth-box p { margin: 0; }
+.reauth-btn { min-height: 44px; display: flex; justify-content: center; }

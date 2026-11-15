@@ -20,7 +20,9 @@ const API_CONFIG = {
    clientId: "53317218551-r9sk421q1ndrvb0hmivv20n4jt376to5.apps.googleusercontent.com",
    usersSheetName: "App Users",
    logSheetName: "Change Log",
-   appName: "Ayers Aquariums"
+   appName: "Ayers Aquariums",
+   // Signed out after this many minutes without using the app (each request renews it).
+   sessionMinutes: 60
 };
 
 // Roles a person can have on the App Users tab.
@@ -76,9 +78,11 @@ function doGet() {
 function doPost(e) {
    try {
       const req = JSON.parse((e && e.postData && e.postData.contents) || "{}");
-      const user = apiVerifyUser_(req.idToken);
+      // Signed in either with the app's session (normal) or a fresh Google sign-in (first time / after it lapsed).
+      const user = req.session ? apiVerifySession_(req.session) : apiVerifyUser_(req.idToken);
       const result = apiRoute_(req, user);
-      return apiJson_(Object.assign({ ok: true }, result));
+      // Every successful request renews the session for another hour of use.
+      return apiJson_(Object.assign({ ok: true }, result, { session: apiIssueSession_(user) }));
    } catch (err) {
       const out = { ok: false, code: err.apiCode || "ERROR", message: err.apiCode ? err.message : "Something went wrong: " + err.message };
       if (err.apiExtra) Object.assign(out, err.apiExtra);
@@ -175,6 +179,51 @@ function apiVerifyUser_(idToken) {
    if (!user || !user.active) {
       throw apiError_("NOT_ALLOWED", email + " isn't on the " + API_CONFIG.appName + " user list.", { email: email });
    }
+   return user;
+}
+
+// ------------------------------------------------------------
+// App sessions. Google sign-in passes expire after an hour no matter
+// what, so after signing in with Google the app gets its own signed
+// session instead. It lasts API_CONFIG.sessionMinutes since the last
+// request (each request renews it), and the person is still looked up
+// on App Users every time, so removing or deactivating them takes
+// effect at once. The signing key is the SESSION_SECRET script
+// property (created automatically; delete it to sign everyone out).
+// ------------------------------------------------------------
+
+// The signing key for sessions (made the first time it's needed).
+function apiSessionSecret_() {
+   const props = PropertiesService.getScriptProperties();
+   let secret = props.getProperty("SESSION_SECRET");
+   if (!secret) {
+      secret = Utilities.getUuid() + Utilities.getUuid();
+      props.setProperty("SESSION_SECRET", secret);
+   }
+   return secret;
+}
+
+// HMAC signature of a session's contents.
+function apiSessionSig_(payload) {
+   return Utilities.base64EncodeWebSafe(Utilities.computeHmacSha256Signature(payload, apiSessionSecret_())).replace(/=+$/, "");
+}
+
+// A new session for this person, valid for API_CONFIG.sessionMinutes: "<payload>.<signature>".
+function apiIssueSession_(user) {
+   const payload = Utilities.base64EncodeWebSafe(JSON.stringify({ e: user.email, x: Date.now() + API_CONFIG.sessionMinutes * 60000 }), Utilities.Charset.UTF_8).replace(/=+$/, "");
+   return payload + "." + apiSessionSig_(payload);
+}
+
+// Checks a session and returns the matching active person from App Users, or throws AUTH / NOT_ALLOWED.
+function apiVerifySession_(token) {
+   const parts = String(token || "").split(".");
+   if (parts.length !== 2 || apiSessionSig_(parts[0]) !== parts[1]) throw apiError_("AUTH", "Please sign in again.");
+   let data;
+   try { data = JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(parts[0])).getDataAsString()); } catch (e) { throw apiError_("AUTH", "Please sign in again."); }
+   if (!data || !data.e || !(Number(data.x) > Date.now())) throw apiError_("AUTH", "You were signed out after an hour without using the app. Please sign in again.");
+   const email = String(data.e).toLowerCase();
+   const user = apiGetUsers_().find(u => u.email === email);
+   if (!user || !user.active) throw apiError_("NOT_ALLOWED", email + " isn't on the " + API_CONFIG.appName + " user list.", { email: email });
    return user;
 }
 
