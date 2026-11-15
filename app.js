@@ -658,6 +658,82 @@
     return { pos: i + 1, total: ids.length, prev: i > 0 ? href(ids[i - 1]) : "", next: i < ids.length - 1 ? href(ids[i + 1]) : "" };
   }
 
+  // ---------- "Did you mean…?" for typed names ----------
+  // A typed vendor or item name that nearly matches an existing one (ignoring capitals, spaces,
+  // punctuation and a leading "The", or 1–2 letters off) gets a question before it's saved.
+  const nameKey = s => String(s || "").toLowerCase().replace(/^\s*the\s+/, "").replace(/[^a-z0-9]/g, "");
+  function editDistance(a, b) {
+    const d = [];
+    for (let i = 0; i <= a.length; i++) { d[i] = [i]; }
+    for (let j = 1; j <= b.length; j++) d[0][j] = j;
+    for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++)
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    return d[a.length][b.length];
+  }
+  // The existing name the typed one closely matches, or "" (an exact match needs no question).
+  function closeName(value, existing) {
+    const v = String(value || "").replace(/\s+/g, " ").trim();
+    if (!v) return "";
+    const list = existing.map(e => String(e || "").trim()).filter(Boolean);
+    if (list.some(e => e.replace(/\s+/g, " ").toLowerCase() === v.toLowerCase())) return "";
+    const k = nameKey(v);
+    if (k.length < 3) return "";
+    let best = "", bestD = 99;
+    list.forEach(e => {
+      const ek = nameKey(e);
+      if (!ek) return;
+      const short = Math.min(k.length, ek.length);
+      const allow = short >= 8 ? 2 : short >= 4 ? 1 : 0;
+      const dist = ek === k ? 0 : (Math.abs(ek.length - k.length) > allow ? 99 : editDistance(k, ek));
+      if (dist <= allow && dist < bestD) { best = e; bestD = dist; }
+    });
+    return best;
+  }
+  // Resolves to the name to save: the existing one, the typed one, or null to go back to the form.
+  function askDidYouMean(value, match, kind) {
+    return new Promise(resolve => {
+      let done = false;
+      const finish = v => { if (!done) { done = true; resolve(v); } };
+      openSheet({
+        title: "Did you mean " + match + "?",
+        submitLabel: "Use " + match,
+        body: '<p>“' + esc(value) + '” looks like your existing ' + esc(kind) + ' <b>' + esc(match) + '</b>.</p>' +
+          '<div class="actions"><button type="button" class="btn" data-keep>Keep “' + esc(value) + '” as a new ' + esc(kind) + '</button></div>',
+        onReady: form => {
+          const back = form.parentElement;
+          $("[data-keep]", form).addEventListener("click", () => { finish(String(value).replace(/\s+/g, " ").trim()); back.remove(); document.body.style.overflow = $(".sheet-backdrop") ? "hidden" : ""; });
+          $$("[data-close]", form).forEach(b => b.addEventListener("click", () => finish(null)));
+          back.addEventListener("click", e => { if (e.target === back) finish(null); });
+        },
+        onSubmit: () => { finish(match); return true; }
+      });
+    });
+  }
+  // Checks a typed name; returns the name to use, or null when the person went back to fix it.
+  async function confirmName(value, existing, kind) {
+    const match = closeName(value, existing);
+    return match ? askDidYouMean(String(value).trim(), match, kind) : value;
+  }
+  const knownVendors = () => storeChoices().map(x => x.value);
+  // Sets a free-text picker's value (hidden field and the text shown).
+  function setComboValue(form, name, v) {
+    const h = $("input[type=hidden][name='" + name + "']", form);
+    if (!h) return;
+    h.value = v;
+    const box = h.closest(".combo");
+    const inp = box && $(".combo-input", box);
+    if (inp) inp.value = v;
+  }
+  // For vendor fields: asks when needed and updates vals and the form. Returns false to stay on the form.
+  async function checkVendorField(vals, form, name) {
+    if (!vals[name]) return true;
+    const v = await confirmName(vals[name], knownVendors(), "vendor");
+    if (v === null) return false;
+    vals[name] = v;
+    if (form) setComboValue(form, name, v);
+    return true;
+  }
+
   // ---------- Price tracker ----------
   // Price Items: one per item (linked to a record, or a typed name). Prices: every price gathered.
   // The list shows the latest price at each store; Best = lowest price per unit.
@@ -953,10 +1029,19 @@
         });
         if (!presetItem) setTimeout(() => { const i = $(".combo-input", form); if (i) i.focus(); }, 50);
       },
-      onSubmit: vals => {
-        const label = String(vals.Item || "").trim();
+      onSubmit: async (vals, form) => {
+        let label = String(vals.Item || "").trim();
         if (!label) throw new Error("Choose or type an item.");
-        const ref = refFor(label);
+        let ref = refFor(label);
+        if (!ref) {
+          // A new item name close to an existing one ("Seachem Primes") gets a question first.
+          const names = {};
+          ch.items.forEach(it => { names[it.label.replace(/^[A-Za-z]+-\d+ /, "")] = it.label; });
+          const v = await confirmName(label, Object.keys(names), "item");
+          if (v === null) return false;
+          if (names[v]) { label = names[v]; ref = refFor(label); setComboValue(form, "Item", label); }
+        }
+        if (!(await checkVendorField(vals, form, "Location"))) return false;
         const item = ref ? ref : { name: label };
         return write("addPrice", { item: item, location: vals.Location, price: vals.Price, size: vals.Size, unit: vals.Unit, date: vals["Date Gathered"] }, "Price saved");
       }
@@ -989,7 +1074,10 @@
           });
         });
       },
-      onSubmit: vals => write("updatePrice", { priceId: priceId, location: vals.Location, price: vals.Price, size: vals.Size, unit: vals.Unit, date: vals["Date Gathered"] }, "Price updated")
+      onSubmit: async (vals, form) => {
+        if (vals.Location !== p["Location"] && !(await checkVendorField(vals, form, "Location"))) return false;
+        return write("updatePrice", { priceId: priceId, location: vals.Location, price: vals.Price, size: vals.Size, unit: vals.Unit, date: vals["Date Gathered"] }, "Price updated");
+      }
     });
   }
 
@@ -2371,8 +2459,9 @@
           }
         });
       },
-      onSubmit: async vals => {
+      onSubmit: async (vals, form) => {
         if (!image) throw new Error("Please add a photo or PDF of the receipt.");
+        if (!(await checkVendorField(vals, form, "vendor"))) return false;
         const total = String(vals.total || "").replace(/[$,\s]/g, "");
         if (total && isNaN(Number(total))) throw new Error("Total must be an amount like 24.99.");
         const itemIds = isAdmin() ? String(vals.itemIds || "").split(",").filter(Boolean) : (presetItem ? [presetItem] : []);
@@ -2402,7 +2491,8 @@
         '<div class="field"><label for="f_total">Total</label><input type="text" inputmode="decimal" id="f_total" name="total" value="' + esc(cur.total) + '" autocomplete="off"></div>' +
         fieldHtml({ name: "notes", label: "Notes", type: "longtext" }, cur.notes),
       onReady: form => $$("[data-combo]", form).forEach(wireCombo),
-      onSubmit: vals => {
+      onSubmit: async (vals, form) => {
+        if (vals.vendor !== cur.vendor && !(await checkVendorField(vals, form, "vendor"))) return false;
         const total = String(vals.total || "").replace(/[$,\s]/g, "");
         if (total && isNaN(Number(total))) throw new Error("Total must be an amount like 24.99.");
         vals.total = total;
@@ -2879,6 +2969,7 @@
       onSubmit: async (vals, form) => {
         const picked = $$("input[name^='tank:']", form).filter(el => el.checked).map(el => el.name.slice(5));
         if (!isAdmin() && !picked.length) throw new Error("Check at least one of your tanks.");
+        if (!(await checkVendorField(vals, form, "w_vendor"))) return false;
         const price = String(vals.w_price || "").replace(/[$,\s]/g, "");
         if (price && isNaN(Number(price))) throw new Error("Estimated price must be an amount like 24.99.");
         const values = {};
@@ -2944,7 +3035,8 @@
             esc(t["Tank Name"]) + ' <span class="meta">' + esc(t["Tank ID"]) + (can ? "" : " · not yours to change") + '</span></label>';
         }).join("") + '<p class="hint">After changing tanks, tap Recheck on the wish.</p></div>' : ""),
       onReady: form => $$("[data-combo]", form).forEach(wireCombo),
-      onSubmit: (vals, form) => {
+      onSubmit: async (vals, form) => {
+        if (vals.vendor !== cur.vendor && !(await checkVendorField(vals, form, "vendor"))) return false;
         const price = String(vals.estimatedPrice || "").replace(/[$,\s]/g, "");
         if (price && isNaN(Number(price))) throw new Error("Estimated price must be an amount like 24.99.");
         vals.estimatedPrice = price;
@@ -3024,9 +3116,10 @@
         });
         sync();
       },
-      onSubmit: (vals, form) => {
+      onSubmit: async (vals, form) => {
         const picked = $$("input[name^='tank:']", form).filter(el => el.checked && !el.disabled).map(el => el.name.slice(5));
         if (!picked.length) throw new Error("Choose at least one tank to add it to.");
+        if (!(await checkVendorField(vals, form, "vendor"))) return false;
         const paid = String(vals.pricePaid || "").replace(/[$,\s]/g, "");
         if (paid && isNaN(Number(paid))) throw new Error("Price paid must be an amount like 24.99.");
         return write("purchaseWish", {
@@ -3905,7 +3998,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "40";
+  const APP_VERSION = "41";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
