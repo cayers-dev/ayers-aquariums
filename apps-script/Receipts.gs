@@ -355,27 +355,17 @@ function apiNextReceiptId_() {
    return RECEIPTS_CONFIG.prefix + (max + 1);
 }
 
-// Returns the vendor as spelled on the Vendor list, adding it to the
-// list (DropDownOptions, "Vendor" column) if it's new.
+// Returns the vendor as spelled on the Vendor list, adding it if it's new.
+// Used by every place a vendor can be typed: receipts (upload and edit), wishlist (add,
+// edit, Mark purchased) and the price tracker (add and edit a price).
+// The Vendor list on DropDownOptions is built by a formula from the Lookups tab, so new
+// vendors always go into Lookups. Nothing is ever written into DropDownOptions itself:
+// a value typed under the formula blocks it and the whole list shows #REF!.
 function apiEnsureVendor_(vendor, user) {
-   const sheet = apiSs_().getSheetByName("DropDownOptions");
-   if (!sheet) return vendor;
-   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => String(h).trim());
-   const col = headers.indexOf("Vendor") + 1;
-   if (!col) return vendor;
-   // The list is built by a formula from the Lookups tab: add the vendor there, never under the formula.
-   if (/Lookups!/i.test(sheet.getRange(1, col).getFormula())) return apiEnsureLookupValue_("Vendor", vendor, user);
-   const lastRow = Math.max(sheet.getLastRow(), 1);
-   const values = sheet.getRange(1, col, lastRow, 1).getValues().map(r => String(r[0]).trim());
-   for (let i = 1; i < values.length; i++) {
-      if (values[i].toLowerCase() === vendor.toLowerCase()) return values[i];
-   }
-   let last = 0;
-   values.forEach((v, i) => { if (i > 0 && v !== "") last = i; });
-   const target = last + 2;
-   if (target > sheet.getMaxRows()) sheet.insertRowAfter(sheet.getMaxRows());
-   sheet.getRange(target, col).setValue(vendor);
-   apiLog_(user, "Add", "DropDownOptions", "Vendor", "New vendor: " + vendor);
+   vendor = String(vendor || "").replace(/\s+/g, " ").trim();
+   if (!vendor) return vendor;
+   if (apiSs_().getSheetByName("Lookups")) return apiEnsureLookupValue_("Vendor", vendor, user);
+   // No Lookups tab: leave the list alone rather than risk breaking it.
    return vendor;
 }
 
