@@ -108,6 +108,7 @@ function apiRoute_(req, user) {
       case "updateReceipt":     return apiWrite_(() => apiUpdateReceipt_(req, user));
       case "retireReceipt":     return apiWrite_(() => apiRetireReceipt_(req, user));
       case "linkReceipt":       return apiWrite_(() => apiLinkReceipt_(req, user));
+      case "saveReceiptLines":  return apiWrite_(() => apiSaveReceiptLines_(req, user));
       case "unlinkReceipt":     return apiWrite_(() => apiUnlinkReceipt_(req, user));
       // Water testing (WaterTests.gs)
       case "logWaterTest":        return apiWrite_(() => apiLogWaterTest_(req, user));
@@ -285,6 +286,7 @@ function apiBootstrap_(user) {
    Object.assign(out, apiPhotosBootstrap_());
    Object.assign(out, apiPricesBootstrap_());
    Object.assign(out, apiLookupsBootstrap_(user));
+   Object.assign(out, apiReceiptLinesBootstrap_(user));
    if (user.role !== "Admin") apiLimitToAssignedTanks_(out, user);
    API_GRID = null;
    return out;

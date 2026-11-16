@@ -43,7 +43,7 @@
     compat: [],
     photos: [],
     priceItems: [], prices: [], priceUnits: [], priceQuery: "", priceFilter: "all", priceOpen: {},
-    lookups: [], lookupTypes: [], listQuery: "",
+    lookups: [], lookupTypes: [], listQuery: "", receiptLines: [],
     wishOptions: { priorities: ["High", "Medium", "Low"], statuses: ["Researching", "Want", "Purchased", "Not getting"] },
     wishFilter: "open",
     wishTank: "",
@@ -406,6 +406,9 @@
     state.photos = r.photos || [];
     state.priceItems = r.priceItems || [];
     state.lookups = r.lookups || [];
+    state.receiptLines = r.receiptLines || [];
+    // Item lines need the matching server update; until then the section stays hidden.
+    state.hasReceiptLines = Array.isArray(r.receiptLines);
     state.lookupTypes = r.lookupTypes || [];
     state.prices = r.prices || [];
     state.priceUnits = r.priceUnits || ["oz", "lb", "g", "kg", "mL", "L", "fl oz", "gal", "count", "each"];
@@ -429,17 +432,19 @@
   // Runs a write, then reloads data.
   // Saves, then reloads the data in the background: the form closes as soon as the save
   // succeeds, and the screen updates a few seconds later (thin bar at the top meanwhile).
+  // successMsg may be a function of the server's reply (e.g. to add notes).
   async function write(action, payload, successMsg) {
     busy(true);
+    let res;
     try {
-      await api(action, payload);
+      res = await api(action, payload);
     } catch (err) {
       if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) return authStop(err);
       throw err;
     } finally {
       busy(false);
     }
-    toast(successMsg || "Saved");
+    toast((typeof successMsg === "function" ? successMsg(res) : successMsg) || "Saved");
     refreshInBackground();
     return true;
   }
@@ -1157,6 +1162,172 @@
         const ok = await write("deletePriceItem", { priceItemId: id }, "Deleted from price tracker");
         if (ok) location.hash = "#/prices";
         return ok;
+      }
+    });
+  }
+
+  // ---------- Receipt item lines ----------
+  // Optional lines on a receipt: item, qty, line price, size + unit. A priced line goes into the
+  // price tracker for the receipt's vendor (price ÷ qty each); records on lines get linked.
+  const linesFor = rid => (state.receiptLines || []).filter(l => l["Receipt ID"] === rid)
+    .sort((a, b) => Number(a["Line No"]) - Number(b["Line No"]));
+  // Turns a picked or typed item label into { priceItemId } | { recordId } | null (a new name).
+  function makePriceItemRef(ch) {
+    return label => {
+      const t = String(label || "").trim().toLowerCase();
+      if (!t) return null;
+      if (ch.map[t]) return ch.map[t];
+      const byId = state.priceItems.find(pi => String(pi["Record ID"]).toLowerCase() === t);
+      if (byId) return { priceItemId: byId["Price Item ID"] };
+      const rec = recordOf(t.toUpperCase());
+      if (rec && rec.type !== "tanks") return { recordId: t.toUpperCase() };
+      const named = Object.keys(ch.map).filter(k => k === t || k.replace(/^[a-z]+-\d+ /, "") === t);
+      return named.length === 1 ? ch.map[named[0]] : null;
+    };
+  }
+  // The label the item picker shows for a saved line.
+  function lineItemLabel(l) {
+    const pi = l["Price Item ID"] ? findPriceItem(l["Price Item ID"]) : null;
+    if (pi) { const info = priceItemInfo(pi); return info.linked ? info.rid + " " + info.name : info.name; }
+    if (l["Record ID"]) { const x = recordOf(l["Record ID"]); return l["Record ID"] + " " + (x ? TYPES[x.type].title(x.rec) : (l["Item Name"] || "")); }
+    return String(l["Item Name"] || "");
+  }
+  function rlineRowHtml(i, line, ch) {
+    line = line || {};
+    return '<div class="rline" data-line="' + i + '">' +
+      '<div class="rline-head"><span class="rline-no">Item ' + (i + 1) + '</span>' +
+        '<button type="button" class="icon-btn rline-remove" data-remove-line aria-label="Remove item ' + (i + 1) + '">' + ICONS.close + '</button></div>' +
+      comboHtml({ name: "li_item_" + i, label: "Item", mode: "free", noThumbs: true, value: line.label || "",
+                  placeholder: "Choose or type an item", newLabel: "will be added as a new item" }, ch.items) +
+      '<div class="rline-grid">' +
+        '<div class="field"><label for="f_li_qty_' + i + '">Qty</label><input type="number" step="any" min="0" inputmode="decimal" id="f_li_qty_' + i + '" name="li_qty_' + i + '" value="' + esc(line.qty === undefined ? "" : line.qty) + '" placeholder="1"></div>' +
+        '<div class="field"><label for="f_li_price_' + i + '">Price <span class="opt">for the line</span></label><input type="text" inputmode="decimal" id="f_li_price_' + i + '" name="li_price_' + i + '" value="' + esc(line.price === undefined ? "" : line.price) + '" placeholder="0.00" autocomplete="off"></div>' +
+        '<div class="field"><label for="f_li_size_' + i + '">Size <span class="opt">each</span></label><div class="size-row">' +
+          '<input type="number" step="any" inputmode="decimal" id="f_li_size_' + i + '" name="li_size_' + i + '" value="' + esc(line.size === undefined ? "" : line.size) + '">' +
+          '<select id="f_li_unit_' + i + '" name="li_unit_' + i + '" aria-label="Unit"><option value="">Unit</option>' +
+            state.priceUnits.map(u => '<option value="' + esc(u) + '"' + (u === line.unit ? " selected" : "") + '>' + esc(unitShort(u)) + '</option>').join("") + '</select></div></div>' +
+      '</div><div class="rline-each hint"></div></div>';
+  }
+  function linesEditorHtml(lines, ch) {
+    return '<div class="rlines" data-rlines>' + (lines || []).map((l, i) => rlineRowHtml(i, l, ch)).join("") + '</div>' +
+      '<button type="button" class="btn small" data-add-line>' + ICONS.plus + 'Add item</button>' +
+      '<p class="hint">Optional. A line with a price and size goes into Prices for this receipt’s store, as price ÷ qty each, dated the purchase date. Same price as the latest there just updates its date. Records on lines are linked to the receipt.</p>';
+  }
+  // getVendor() gives the store typed on the form (for filling in sizes).
+  function wireLinesEditor(form, ch, getVendor) {
+    const box = $("[data-rlines]", form);
+    const refFor = makePriceItemRef(ch);
+    let next = $$(".rline", box).length;
+    const refresh = row => {
+      const i = row.dataset.line;
+      const qty = Number($("[name=li_qty_" + i + "]", row).value) || 1;
+      const priceText = String($("[name=li_price_" + i + "]", row).value).replace(/[$,\s]/g, "");
+      const size = Number($("[name=li_size_" + i + "]", row).value), unit = $("[name=li_unit_" + i + "]", row).value;
+      const out = $(".rline-each", row);
+      if (priceText === "" || isNaN(Number(priceText))) { out.textContent = ""; return; }
+      const each = Number(priceText) / qty;
+      out.textContent = money(each) + " each" + (size && unit ? " · " + fmtSize(size, unit) + (unit === "each" && size === 1 ? "" : " · " + fmtPerUnit(each / size, unit)) : " · add a size to put it in Prices");
+    };
+    const wireRow = row => {
+      $$("[data-combo]", row).forEach(wireCombo);
+      const i = row.dataset.line;
+      // Picking an item that's been priced fills in its size: this store's latest, else any store's.
+      $("input[name=li_item_" + i + "]", row).addEventListener("change", e => {
+        const ref = refFor(e.target.value);
+        const sizeEl = $("[name=li_size_" + i + "]", row), unitEl = $("[name=li_unit_" + i + "]", row);
+        if (!ref || !ref.priceItemId || sizeEl.value || unitEl.value) return;
+        const sum = priceSummary(ref.priceItemId);
+        const v = String(getVendor() || "").trim().toLowerCase();
+        const s = sum.stores.find(x => x.loc.toLowerCase() === v) ||
+                  sum.stores.slice().sort((a, b) => gatheredKey(b.latest).localeCompare(gatheredKey(a.latest)))[0];
+        if (s) { sizeEl.value = Number(s.latest["Size"]) || s.latest["Size"]; unitEl.value = s.latest["Unit"]; refresh(row); }
+      });
+      row.addEventListener("input", () => refresh(row));
+      row.addEventListener("change", () => refresh(row));
+      $("[data-remove-line]", row).addEventListener("click", () => {
+        row.remove();
+        $$(".rline", box).forEach((r, n) => { $(".rline-no", r).textContent = "Item " + (n + 1); });
+      });
+      refresh(row);
+    };
+    $$(".rline", box).forEach(wireRow);
+    $("[data-add-line]", form).addEventListener("click", () => {
+      const tmp = document.createElement("div");
+      tmp.innerHTML = rlineRowHtml(next++, {}, ch);
+      const row = tmp.firstElementChild;
+      $(".rline-no", row).textContent = "Item " + ($$(".rline", box).length + 1);
+      box.appendChild(row);
+      wireRow(row);
+      const inp = $(".combo-input", row); if (inp) inp.focus();
+    });
+  }
+  // Reads the lines from the form. Asks "Did you mean…?" for new item names; null = go back to the form.
+  async function collectLines(vals, form, ch) {
+    const refFor = makePriceItemRef(ch);
+    const names = {};
+    ch.items.forEach(it => { names[it.label.replace(/^[A-Za-z]+-\d+ /, "")] = it.label; });
+    const out = [];
+    const rows = $$(".rline", $("[data-rlines]", form));
+    for (let n = 0; n < rows.length; n++) {
+      const i = rows[n].dataset.line;
+      let label = String(vals["li_item_" + i] || "").trim();
+      const qty = vals["li_qty_" + i], price = vals["li_price_" + i], size = vals["li_size_" + i], unit = vals["li_unit_" + i];
+      if (!label && !String(qty || "").trim() && !String(price || "").trim() && !String(size || "").trim()) continue;
+      if (!label) throw new Error("Item " + (n + 1) + " needs an item name.");
+      const p = String(price || "").replace(/[$,\s]/g, "");
+      if (p && isNaN(Number(p))) throw new Error("Item " + (n + 1) + ": the price must be an amount like 24.99.");
+      if (String(size || "").trim() && !unit) throw new Error("Item " + (n + 1) + ": choose a unit for the size.");
+      let ref = refFor(label);
+      if (!ref) {
+        const v = await confirmName(label, Object.keys(names), "item");
+        if (v === null) return null;
+        if (names[v]) { label = names[v]; ref = refFor(label); setComboValue(form, "li_item_" + i, label); }
+      }
+      out.push({ item: ref || { name: label }, qty: qty, price: p, size: size, unit: unit });
+    }
+    return out;
+  }
+  function lineStatusText(l) {
+    switch (String(l["Price Action"] || "")) {
+      case "added": return "Added to prices";
+      case "date": return "Same price, date updated";
+      case "same": return "Same as a newer price";
+      default: return l["Line Price"] === "" ? "" : "Not in prices (needs size, vendor and date)";
+    }
+  }
+  function receiptLinesSection(r) {
+    if (!state.hasReceiptLines) return "";
+    const id = r["Receipt ID"];
+    const lines = linesFor(id);
+    const head = '<div class="section-head"><h3>Items (' + lines.length + ')</h3>' +
+      (isAdmin() ? '<button class="btn small" data-act="edit-receipt-lines" data-id="' + esc(id) + '">' + (lines.length ? "Edit items" : ICONS.plus + "Add items") + '</button>' : "") + '</div>';
+    if (!lines.length) return '<div class="section">' + head + '<div class="card"><div class="empty">No items entered.</div></div></div>';
+    return '<div class="section">' + head + '<div class="card list">' + lines.map(l => {
+      const qty = Number(l["Qty"]) || 1;
+      const price = l["Line Price"] === "" ? "" : Number(l["Line Price"]);
+      const pi = l["Price Item ID"];
+      const name = lineItemLabel(l);
+      const sub = [qty !== 1 ? "Qty " + qty : "", price === "" ? "" : money(price) + (qty !== 1 ? " (" + money(price / qty) + " each)" : ""),
+                   l["Size"] !== "" && l["Unit"] ? fmtSize(l["Size"], l["Unit"]) : "", lineStatusText(l)].filter(Boolean).join(" · ");
+      return (pi ? '<a class="list-item" href="#/price/' + encodeURIComponent(pi) + '">' : '<div class="list-item">') +
+        '<div class="body"><div class="title">' + esc(name) + '</div><div class="sub">' + esc(sub) + '</div></div>' + (pi ? '</a>' : '</div>');
+    }).join("") + '</div></div>';
+  }
+  function editReceiptLinesForm(id) {
+    const r = findReceipt(id);
+    if (!r || !isAdmin()) return;
+    const ch = priceItemChoices();
+    const lines = linesFor(id).map(l => ({ label: lineItemLabel(l), qty: l["Qty"], price: l["Line Price"], size: l["Size"], unit: l["Unit"] }));
+    if (!lines.length) lines.push({});
+    openSheet({
+      title: "Items on " + receiptTitle(r),
+      submitLabel: "Save items",
+      body: '<p class="meta">' + esc([r["Vendor"], fmtDate(r["Purchase Date"])].filter(Boolean).join(" · ") || id) + '</p>' + linesEditorHtml(lines, ch),
+      onReady: form => wireLinesEditor(form, ch, () => r["Vendor"] || ""),
+      onSubmit: async (vals, form) => {
+        const out = await collectLines(vals, form, ch);
+        if (out === null) return false;
+        return write("saveReceiptLines", { id: id, lines: out }, res => "Items saved" + (res && res.notes && res.notes.length ? ". " + res.notes.join(". ") : ""));
       }
     });
   }
@@ -2283,7 +2454,7 @@
         .concat(isAdmin() && r["Photo Link"] ? [["Drive", '<a href="' + esc(r["Photo Link"]) + '" target="_blank" rel="noopener">Open in Drive</a>']] : [])
         .filter(p => p[1] !== "").map(p => '<div class="k">' + p[0] + '</div><div>' + p[1] + '</div>').join("") +
       '</div></div>';
-    return { title: receiptTitle(r), back: true, html: photo + hero + linked + details, after: () => loadReceiptPhoto(id) };
+    return { title: receiptTitle(r), back: true, html: photo + hero + receiptLinesSection(r) + linked + details, after: () => loadReceiptPhoto(id) };
   }
 
   async function loadReceiptPhoto(id) {
@@ -2552,6 +2723,7 @@
   // presetItem (optional): an item ID to link the receipt to (opened from that item's page).
   function uploadReceiptForm(presetItem) {
     let image = null;
+    const lineChoices = priceItemChoices();
     const preRec = presetItem ? recordOf(presetItem) : null;
     openSheet({
       title: "Upload receipt",
@@ -2571,9 +2743,11 @@
         (isAdmin() ? '<div class="form-section"><h3>Assign to records <span class="opt">optional</span></h3>' +
           comboHtml({ name: "itemIds", label: "Records on this receipt", mode: "multi", value: presetItem || "",
                       placeholder: "Search tanks, species, equipment, plants, medications" }, linkableItems(new Set())) +
-          '<p class="hint">Leave empty to assign later from the receipt’s page.</p></div>' : ""),
+          '<p class="hint">Leave empty to assign later from the receipt’s page.</p></div>' : "") +
+        (state.hasReceiptLines ? '<div class="form-section"><h3>Items on this receipt <span class="opt">optional</span></h3>' + linesEditorHtml([], lineChoices) + '</div>' : ""),
       onReady: form => {
         $$("[data-combo]", form).forEach(wireCombo);
+        if (state.hasReceiptLines) wireLinesEditor(form, lineChoices, () => $("input[name=vendor]", form).value);
         const nameEl = $("#f_fileName", form);
         let nameTouched = false;
         nameEl.addEventListener("input", () => { nameTouched = true; });
@@ -2610,11 +2784,15 @@
         const total = String(vals.total || "").replace(/[$,\s]/g, "");
         if (total && isNaN(Number(total))) throw new Error("Total must be an amount like 24.99.");
         const itemIds = isAdmin() ? String(vals.itemIds || "").split(",").filter(Boolean) : (presetItem ? [presetItem] : []);
+        const lines = state.hasReceiptLines ? await collectLines(vals, form, lineChoices) : [];
+        if (lines === null) return false;
         return write("uploadReceipt", {
           receipt: { fileName: vals.fileName, vendor: vals.vendor, purchaseDate: vals.purchaseDate, total: total, notes: vals.notes },
           image: { data: image.data, mimeType: image.mimeType },
-          itemIds: itemIds
-        }, itemIds.length ? "Receipt uploaded and assigned" : "Receipt uploaded");
+          itemIds: itemIds, lines: lines
+        }, res => (itemIds.length || (res && res.linked && res.linked.length) ? "Receipt uploaded and assigned" : "Receipt uploaded") +
+                  (lines.length ? " with " + lines.length + " item" + (lines.length === 1 ? "" : "s") : "") +
+                  (res && res.notes && res.notes.length ? ". " + res.notes.join(". ") : ""));
       }
     });
   }
@@ -4087,6 +4265,7 @@
       case "delete-price-item": deletePriceItemForm(d.id); break;
       case "price-picture": pricePictureForm(d.id); break;
       case "lookup-add": lookupAddForm(d.type); break;
+      case "edit-receipt-lines": editReceiptLinesForm(d.id); break;
       case "lookup-edit": lookupEditForm(d.row); break;
       case "price-picture-remove": pricePictureRemoveForm(d.id); break;
     }
@@ -4156,7 +4335,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "42";
+  const APP_VERSION = "43";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

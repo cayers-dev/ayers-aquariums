@@ -144,6 +144,10 @@ function apiUploadReceipt_(req, user) {
       if (String.fromCharCode.apply(null, bytes.slice(0, 5).map(b => b & 255)) !== "%PDF-") throw apiError_("INVALID", "That file isn't a PDF.");
    } else if (bytes.length > RECEIPTS_CONFIG.maxImageBytes) throw apiError_("INVALID", "That photo is too large.");
 
+   // Item lines (optional, ReceiptLines.gs): checked before anything is saved.
+   const lines = (req.lines || []).map(apiCleanReceiptLine_);
+   lines.forEach(l => apiLineItemInfo_(l.item));
+
    // Records can be assigned at upload time (optional): admins any record, editors items in their tanks.
    const itemIds = (req.itemIds || []).map(s => String(s).trim()).filter(Boolean);
    if (itemIds.length) {
@@ -173,7 +177,8 @@ function apiUploadReceipt_(req, user) {
    apiLog_(user, "Upload", "Receipts", id, apiDescribe_({ "File Name": fileName, "Vendor": r.vendor,
       "Purchase Date": r.purchaseDate, "Total": r.total, "Notes": r.notes }));
    const linked = itemIds.length ? apiAddReceiptLinks_(tabs, id, itemIds, user) : [];
-   return { added: { table: "receipts", id: id }, linked: linked };
+   const lineResult = lines.length ? apiAddReceiptLines_(Object.assign({}, values, { "Purchase Date": r.purchaseDate ? Utilities.formatDate(r.purchaseDate instanceof Date ? r.purchaseDate : apiParseDate_(r.purchaseDate), apiSs_().getSpreadsheetTimeZone(), "yyyy-MM-dd") : "" }), lines, user) : null;
+   return { added: { table: "receipts", id: id }, linked: linked.concat(lineResult ? lineResult.linked : []), notes: lineResult ? lineResult.notes : [] };
 }
 
 
@@ -232,6 +237,11 @@ function apiUpdateReceipt_(req, user) {
       try { DriveApp.getFileById(rec["Drive File ID"]).setName(toWrite["File Name"]); } catch (e) { /* file missing */ }
    }
    if (changes.length) apiLog_(user, "Edit", "Receipts", rec["Receipt ID"], changes.join("; "));
+   // A new vendor or purchase date moves the prices its item lines created (ReceiptLines.gs).
+   if (toWrite["Vendor"] !== undefined || toWrite["Purchase Date"] !== undefined) {
+      const after = apiReadReceipts_().find(x => x["Receipt ID"] === rec["Receipt ID"]);
+      if (after) apiRedoReceiptLines_(rec, after, user);
+   }
    return { updated: changes.length };
 }
 

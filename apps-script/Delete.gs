@@ -163,6 +163,8 @@ function apiDeleteReceipt_(req, user) {
    const is = v => String(v).trim() === id;
    const counts = {};
    counts["record links"] = apiDeleteRowsWhere_(tabs.links, "Receipt ID", is).count;
+   // Item lines: their prices are undone (ReceiptLines.gs), then the lines go.
+   counts["item lines (and the prices they added)"] = apiRemoveReceiptLines_(rec, user);
    counts["photo moved to Drive trash"] = apiTrashDriveFile_(String(rec["Drive File ID"] || "") || apiDriveFileId_(rec["Photo Link"])) ? 1 : 0;
    // Wishes that pointed at this receipt keep everything else; only the receipt reference is cleared.
    const wishSheet = apiTabOrNull_(WISH_CONFIG.sheetName);
