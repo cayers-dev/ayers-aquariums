@@ -105,6 +105,7 @@ function apiDeleteRecord_(req, user) {
       counts["receipt links"] = apiDeleteRowsWhere_(apiTabOrNull_(RECEIPTS_CONFIG.linksSheetName), "Item ID", is).count;
       counts["compatibility checks"] = apiDeleteRowsWhere_(apiTabOrNull_(WISH_CONFIG.compatSheetName), "Tank ID", is).count;
       counts["treatments (and their doses)"] = apiDeleteTreatmentsWhere_("Tank ID", id, user);
+      counts["maintenance notes"] = apiDeleteMaintNotesWhere_("Tank ID", id);
       counts["price tracker rows"] = apiDeletePricesForRecord_(id, user);
       counts["receipt item lines"] = apiRemoveReceiptLinesFor_("Record ID", id);
       // Take the tank off every user's Assigned Tanks list.
@@ -142,6 +143,8 @@ function apiDeleteRecord_(req, user) {
       // Price tracker (Prices.gs): its price item and every price gathered for it.
       counts["price tracker rows"] = apiDeletePricesForRecord_(id, user);
       if (table === "medications") counts["treatments (and their doses)"] = apiDeleteTreatmentsWhere_("Product ID", id, user);
+      // Notes about this item stay as tank history, with the item unlinked.
+      counts["maintenance notes (the item is unlinked)"] = apiDeleteMaintNotesWhere_("Item ID", id);
       counts["receipt item lines"] = apiRemoveReceiptLinesFor_("Record ID", id);
    }
 

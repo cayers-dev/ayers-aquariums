@@ -635,3 +635,7 @@ body.syncing::before { content: ""; position: fixed; top: 0; left: 0; right: 0; 
 .rl-tally { margin-top: 8px; font-size: 13px; color: var(--muted); }
 .rl-tally.warn { color: #8a5a00; font-weight: 600; }
 @media (prefers-color-scheme: dark) { .rl-tally.warn { color: #f3c56b; } }
+
+/* Maintenance notes: the row's "Done again" button sits under the text. */
+.note-row .body .actions { margin: 6px 0 0; }
+.note-row .body .actions .btn { margin: 0; }

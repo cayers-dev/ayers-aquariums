@@ -38,6 +38,9 @@
     waterDays: (function () { try { return Number(localStorage.getItem("aa_water_days")) || 60; } catch (e) { return 60; } })(),
     waterChanges: [],
     showRetiredMaint: false,
+    showRetiredNotes: false,
+    maintNotes: [],
+    maintNoteTypes: [],
     maintTank: (function () { try { return localStorage.getItem("aa_maint_tank") || ""; } catch (e) { return ""; } })(),
     wishes: [],
     compat: [],
@@ -403,6 +406,8 @@
     state.waterAllLoaded = r.waterAllLoaded !== false;
     if (r.methods) state.methods = r.methods;
     state.waterChanges = r.waterChanges || [];
+    state.maintNotes = r.maintNotes || [];
+    state.maintNoteTypes = r.maintNoteTypes || [];
     state.wishes = r.wishes || [];
     state.compat = r.compat || [];
     state.photos = r.photos || [];
@@ -1829,7 +1834,8 @@
       group("Tanks", [
         link("#/tanks", "tanks", "Tanks", n(state.data.tanks.filter(t => tankStatus(t) === "Active").length, "active")),
         link("#/water", "water", "Water tests", lastTest ? "Last test " + daysAgo(lastTest) : "No tests logged"),
-        link("#/maint", "maint", "Maintenance", lastChange ? "Last water change " + daysAgo(lastChange) : "No water changes logged")
+        link("#/maint", "maint", "Maintenance", (lastChange ? "Last water change " + daysAgo(lastChange) : "No water changes logged") +
+          (notesDue().length ? " · " + notesDue().length + " note" + (notesDue().length === 1 ? "" : "s") + " due" : ""))
       ].concat(state.hasTreatments ? [link("#/treatments", "pill", "Treatments",
           (state.treatments || []).filter(trtActive).length + " running" + (dueCount() ? " · " + dueCount() + " due" : ""))] : [])) +
       group("Collection", [
@@ -1941,7 +1947,7 @@
     return {
       title: t["Tank Name"], back: true,
       html: hero + group("species", "Livestock") + group("equipment", "Equipment") + group("plants", "Plants") +
-            wishSection(id) + waterSection(id) + maintSection(id) + (state.hasTreatments ? treatmentSection(id, { showPast: true }) : "") + paramsHtml + receiptsSection(id) + detailsSection("tanks", t, "Tank details") + removedHtml
+            wishSection(id) + waterSection(id) + maintSection(id) + tankNotesSection(id) + (state.hasTreatments ? treatmentSection(id, { showPast: true }) : "") + paramsHtml + receiptsSection(id) + detailsSection("tanks", t, "Tank details") + removedHtml
     };
   }
 
@@ -2035,7 +2041,8 @@
       '</div></div>';
     const wishes = state.wishes.filter(w => w["Item ID"] === id && wishIsOpen(w));
     const wishNote = wishes.length ? '<div class="section"><div class="card list">' + wishes.map(wishRow).join("") + '</div></div>' : "";
-    return { title: T.title(r), back: true, html: hero + photosSection(type, r) + wishNote + inTanks + receiptsSection(id, canItemReceipts(type, r) ? type : "") + detailsSection(type, r, "Details") };
+    return { title: T.title(r), back: true, html: hero + photosSection(type, r) + wishNote + inTanks + itemNotesSection(id) +
+      receiptsSection(id, canItemReceipts(type, r) ? type : "") + detailsSection(type, r, "Details") };
   }
 
   // ---------- Users (admin) ----------
@@ -4416,6 +4423,185 @@
     return defaultWaterTank();
   }
 
+  // ------------------------------------------------------------------
+  // Maintenance notes
+  // Anything done to a tank that isn't a water change: light settings changed,
+  // filter intake moved, UV bulb replaced. A note can carry a date it's due again.
+  // ------------------------------------------------------------------
+  const noteRows = () => state.maintNotes || [];
+  const noteSort = (a, b) => String(b["Done At"] || "").localeCompare(String(a["Done At"] || ""));
+  const notesFor = (tankId, all) => noteRows().filter(n => n["Tank ID"] === tankId && (all || isLive(n))).sort(noteSort);
+  const notesForItem = itemId => noteRows().filter(n => n["Item ID"] === itemId && isLive(n)).sort(noteSort);
+  const noteDueDays = n => n["Due Date"] ? daysUntil(parseDT(String(n["Due Date"]).slice(0, 10) + "T00:00")) : null;
+  const noteIsDue = n => isLive(n) && noteDueDays(n) !== null && noteDueDays(n) <= 0;
+  const notesDue = tankId => noteRows().filter(n => noteIsDue(n) && (!tankId || n["Tank ID"] === tankId));
+  const canLogNote = n => canLogTank(n["Tank ID"]);
+  function noteDueText(n) {
+    const d = noteDueDays(n);
+    if (d === null) return "";
+    if (d < 0) return d === -1 ? "Due since yesterday" : "Due " + (-d) + " days ago";
+    if (d === 0) return "Due today";
+    if (d === 1) return "Due tomorrow";
+    return d < 45 ? "Due in " + d + " days" : "Due " + fmtDate(n["Due Date"]);
+  }
+  function noteDuePill(n) {
+    if (!n["Due Date"] || !isLive(n)) return "";
+    const d = noteDueDays(n);
+    return '<span class="pill ' + (d <= 0 ? "bad" : d <= 14 ? "warn" : "") + '">' + esc(noteDueText(n)) + '</span>';
+  }
+
+  function noteRow(n, showTank) {
+    const item = n["Item ID"] ? (findRec("equipment", n["Item ID"]) ? equipLabel(n["Item ID"]) : n["Item ID"]) : "";
+    const editable = canCorrectBy(n["Logged By"]);
+    return '<div class="list-item note-row' + (isLive(n) ? "" : " dim") + '"' +
+      (editable ? ' data-act="edit-note" data-id="' + esc(n["Note ID"]) + '"' : "") + '><div class="body">' +
+      '<div class="title">' + esc(n["Summary"]) + '</div>' +
+      '<div class="sub">' + esc([showTank ? tankName(n["Tank ID"]) : "", n["Maintenance Type"], fmtDate(n["Done At"]),
+                                 personName(n["Logged By"])].filter(Boolean).join(" · ")) + '</div>' +
+      (item ? '<div class="sub">' + esc(item) + '</div>' : "") +
+      (n["Notes"] ? '<div class="sub">' + esc(n["Notes"]) + '</div>' : "") +
+      (n["Due Date"] && isLive(n) && canLogNote(n) ? '<div class="actions"><button class="btn small' + (noteIsDue(n) ? " primary" : "") + '" data-act="note-again" data-id="' + esc(n["Note ID"]) + '">Done again</button></div>' : "") +
+      '</div>' + (isLive(n) ? noteDuePill(n) : '<span class="pill retired">Retired</span>') + '</div>';
+  }
+
+  // The Maintenance screen's section: every note for the tank, due ones first.
+  function maintNotesSection(tankId, opts) {
+    opts = opts || {};
+    const all = notesFor(tankId, true);
+    const live = all.filter(isLive);
+    const retired = all.length - live.length;
+    const shown = (opts.showRetired ? all : live).slice().sort((a, b) => (noteIsDue(b) - noteIsDue(a)) || noteSort(a, b));
+    const list = opts.limit ? shown.slice(0, opts.limit) : shown;
+    const due = live.filter(noteIsDue).length;
+    return '<div class="section"><div class="section-head"><h3>Notes (' + live.length + (due ? ' · ' + due + ' due' : "") + ')</h3>' +
+      (opts.limit ? '<a class="btn small" href="#/maint/' + encodeURIComponent(tankId) + '">All</a>' :
+       canLogTank(tankId) ? '<button class="btn small primary" data-act="add-note" data-tank="' + esc(tankId) + '">' + ICONS.plus + 'Add note</button>' : "") + '</div>' +
+      (list.length ? '<div class="card list">' + list.map(n => noteRow(n)).join("") + '</div>'
+                   : '<div class="card pad"><div class="sub">Nothing noted for this tank yet — light settings, equipment moved, parts replaced.</div></div>') +
+      (opts.limit && canLogTank(tankId) ? '<div class="actions"><button class="btn" data-act="add-note" data-tank="' + esc(tankId) + '">' + ICONS.plus + 'Add note</button></div>' : "") +
+      (!opts.limit && retired ? '<label class="check" style="margin-top:8px"><input type="checkbox" data-act="toggle-retired-notes"' + (opts.showRetired ? " checked" : "") + '> Show retired (' + retired + ')</label>' : "") +
+      '</div>';
+  }
+
+  // On an item's page: what's been done to this piece of equipment.
+  function itemNotesSection(itemId) {
+    const list = notesForItem(itemId);
+    if (!list.length) return "";
+    return '<div class="section"><div class="section-head"><h3>Maintenance notes (' + list.length + ')</h3></div>' +
+      '<div class="card list">' + list.map(n => noteRow(n, true)).join("") + '</div></div>';
+  }
+
+  // Add, or open one to change. `again` prefills from a note that's due.
+  function maintNoteForm(tankId, id, againId) {
+    const rec = id ? noteRows().find(n => n["Note ID"] === id) : null;
+    if (id && !rec) return;
+    const from = againId ? noteRows().find(n => n["Note ID"] === againId) : null;
+    const loggable = state.data.tanks.filter(t => !isRetired(t) && canLogTank(t["Tank ID"]));
+    if (!rec) {
+      if (!loggable.length) { toast("You don’t have any tanks assigned.", true); return; }
+      if (from) tankId = from["Tank ID"];
+      if (!canLogTank(tankId)) tankId = loggable[0]["Tank ID"];
+    } else tankId = rec["Tank ID"];
+    $$(".sheet-backdrop").forEach(b => b.remove()); document.body.style.overflow = "";
+    const types = (state.maintNoteTypes || []).slice();
+    const cur = rec || from || {};
+    if (cur["Maintenance Type"] && types.indexOf(cur["Maintenance Type"]) === -1) types.push(cur["Maintenance Type"]);
+    const editable = !rec || canCorrectBy(rec["Logged By"]);
+    // Equipment in the tank, so a note can point at the thing it was about.
+    const itemsFor = tank => {
+      const ids = tankAssignments(tank, true).map(a => a["Item ID"]).filter(x => findRec("equipment", x));
+      const extra = cur["Item ID"] && ids.indexOf(cur["Item ID"]) === -1 ? [cur["Item ID"]] : [];
+      return ids.concat(extra).map(x => '<option value="' + esc(x) + '"' + (cur["Item ID"] === x ? " selected" : "") + '>' + esc(equipLabel(x)) + '</option>').join("");
+    };
+    const dueMonths = rec || !from ? "" : monthsBetween(from["Done At"], from["Due Date"]);
+    openSheet({
+      title: rec ? "Maintenance note" : from ? "Done again" : "Add note",
+      submitLabel: rec ? "Save" : "Save note",
+      body:
+        (rec ? '<p class="meta">' + esc([rec["Note ID"], tankName(tankId), "Logged by " + personName(rec["Logged By"])].join(" · ")) + '</p>'
+             : '<div class="field"><label for="f_ntank">Tank</label><select id="f_ntank">' + loggable.map(t => '<option value="' + esc(t["Tank ID"]) + '"' + (t["Tank ID"] === tankId ? " selected" : "") + '>' + esc(t["Tank Name"]) + '</option>').join("") + '</select></div>') +
+        (from ? '<p class="hint">Last done ' + esc(fmtDate(from["Done At"])) + '. Saving this clears the reminder on that one.</p>' : "") +
+        '<div class="field"><label for="f_ndate">Date done</label><input type="date" id="f_ndate" value="' + esc(rec ? String(rec["Done At"]).slice(0, 10) : today()) + '" max="' + esc(today()) + '"></div>' +
+        comboHtml({ name: "type", label: "Kind", required: true, noThumbs: true, mode: isAdmin() ? "free" : "single",
+                    newLabel: "will be added to the list", value: cur["Maintenance Type"] || "",
+                    placeholder: isAdmin() ? "Choose or type a kind" : "Choose a kind" },
+                  types.map(t => ({ value: t, label: t }))) +
+        '<div class="field"><label for="f_nsum">What was done <span class="req">*</span></label><input type="text" id="f_nsum" maxlength="200" autocomplete="off" value="' + esc(cur["Summary"] || "") + '" placeholder="Moved the filter intake lower"></div>' +
+        '<div class="field"><label for="f_nitem">Equipment (optional)</label><select id="f_nitem"><option value="">None</option>' + itemsFor(tankId) + '</select></div>' +
+        '<div class="field"><label for="f_nnotes">Notes</label><textarea id="f_nnotes">' + esc(rec ? rec["Notes"] : "") + '</textarea></div>' +
+        '<div class="field"><label for="f_ndue">Due again</label><select id="f_ndue">' +
+          [["", "No reminder"], ["1", "In 1 month"], ["3", "In 3 months"], ["6", "In 6 months"], ["12", "In 12 months"], ["custom", "Pick a date"]]
+            .map(o => '<option value="' + o[0] + '"' + ((rec ? noteDueChoice(rec) : dueMonths) === o[0] ? " selected" : "") + '>' + o[1] + '</option>').join("") +
+          '</select></div>' +
+        '<div class="field" id="n-duedate"' + ((rec ? noteDueChoice(rec) : dueMonths) === "custom" ? "" : " hidden") + '><label for="f_nduedate">Due on</label><input type="date" id="f_nduedate" value="' + esc(rec && rec["Due Date"] ? String(rec["Due Date"]).slice(0, 10) : "") + '"></div>' +
+        (rec && editable ? '<div class="actions"><button type="button" class="btn ' + (isLive(rec) ? "danger" : "") + '" data-retire>' + (isLive(rec) ? "Retire this note" : "Restore this note") + '</button></div>' : ""),
+      onReady: form => {
+        $$("[data-combo]", form).forEach(wireCombo);
+        const tankSel = $("#f_ntank", form);
+        if (tankSel) tankSel.addEventListener("change", () => { $("#f_nitem", form).innerHTML = '<option value="">None</option>' + itemsFor(tankSel.value); });
+        const due = $("#f_ndue", form);
+        due.addEventListener("change", () => { $("#n-duedate", form).hidden = due.value !== "custom"; });
+        const rb = $("[data-retire]", form);
+        if (rb) rb.addEventListener("click", async () => {
+          try {
+            await write("retireMaintNote", { id: id, restore: !isLive(rec) }, isLive(rec) ? "Note retired" : "Note restored");
+            $$(".sheet-backdrop").forEach(b => b.remove()); document.body.style.overflow = "";
+          } catch (err) { toast(err.message, true); }
+        });
+      },
+      onSubmit: async (vals, form) => {
+        const summary = $("#f_nsum", form).value.replace(/\s+/g, " ").trim();
+        if (!summary) throw new Error("Say what was done.");
+        const type = String(vals.type || "").replace(/\s+/g, " ").trim();
+        if (!type) throw new Error("Choose what kind of maintenance this was.");
+        const doneAt = $("#f_ndate", form).value || today();
+        const choice = $("#f_ndue", form).value;
+        const dueDate = choice === "" ? "" : choice === "custom" ? $("#f_nduedate", form).value : addMonths(doneAt, Number(choice));
+        if (choice === "custom" && !dueDate) throw new Error("Pick the date it's due, or choose No reminder.");
+        if (dueDate && dueDate < doneAt) throw new Error("The due date can’t be before the date it was done.");
+        const itemId = $("#f_nitem", form).value;
+        if (!rec) {
+          const tank = tankSelValue(form, tankId);
+          const ok = await write("addMaintNote", { tankId: tank, itemId: itemId, type: type, summary: summary,
+                                                   notes: $("#f_nnotes", form).value, doneAt: doneAt, dueDate: dueDate,
+                                                   replacesId: againId || "" }, "Note saved");
+          state.maintTank = tank; try { localStorage.setItem("aa_maint_tank", tank); } catch (e) { /* ignore */ }
+          return ok;
+        }
+        if (!editable) return true;
+        const changed = {};
+        if (type !== rec["Maintenance Type"]) changed.type = type;
+        if (summary !== rec["Summary"]) changed.summary = summary;
+        if (itemId !== String(rec["Item ID"] || "")) changed.itemId = itemId;
+        if ($("#f_nnotes", form).value !== String(rec["Notes"] || "")) changed.notes = $("#f_nnotes", form).value;
+        if (doneAt !== String(rec["Done At"]).slice(0, 10)) changed.doneAt = doneAt;
+        if (dueDate !== String(rec["Due Date"] || "").slice(0, 10)) changed.dueDate = dueDate;
+        if (!Object.keys(changed).length) return true;
+        return write("updateMaintNote", { id: id, values: changed }, "Note saved");
+      }
+    });
+  }
+  const tankSelValue = (form, fallback) => { const s = $("#f_ntank", form); return s ? s.value : fallback; };
+  // "3" when the due date is a round number of months after the job, else "custom".
+  function noteDueChoice(n) {
+    if (!n["Due Date"]) return "";
+    return monthsBetween(n["Done At"], n["Due Date"]) || "custom";
+  }
+  function monthsBetween(from, to) {
+    if (!from || !to) return "";
+    const a = String(from).slice(0, 10), b = String(to).slice(0, 10);
+    const hit = ["1", "3", "6", "12"].find(m => addMonths(a, Number(m)) === b);
+    return hit || "custom";
+  }
+  // "2026-11-17" + 3 months, keeping the day where the month allows.
+  function addMonths(date, months) {
+    const p = String(date).slice(0, 10).split("-").map(Number);
+    if (p.length !== 3 || !p[0]) return "";
+    const d = new Date(p[0], p[1] - 1 + months, 1);
+    d.setDate(Math.min(p[2], new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()));
+    return fmtISO(d);
+  }
+
   function viewMaintenance(tankId) {
     tankId = tankId || defaultMaintTank();
     if (!tankId) return { title: "Maintenance", html: '<div class="empty">' + (isAdmin() ? "No tanks yet." : "No tanks are assigned to you yet.") + '</div>' };
@@ -4436,9 +4622,12 @@
             : '<div class="sub">No water changes logged for this tank yet.</div>') + '</div>' +
           (shown.length ? '<div class="card list" style="margin-top:10px">' + shown.map(w => wcRow(w)).join("") + '</div>' : "") +
           (retiredCount ? '<label class="check" style="margin-top:8px"><input type="checkbox" data-act="toggle-retired-maint"' + (state.showRetiredMaint ? " checked" : "") + '> Show retired (' + retiredCount + ')</label>' : "") +
-        '</div>' + (state.hasTreatments ? treatmentSection(tankId, { showPast: true }) : "")
+        '</div>' + maintNotesSection(tankId, { showRetired: state.showRetiredNotes }) +
+        (state.hasTreatments ? treatmentSection(tankId, { showPast: true }) : "")
     };
   }
+
+  function tankNotesSection(tankId) { return maintNotesSection(tankId, { limit: 3 }); }
 
   function maintSection(tankId) {
     const list = waterChangesFor(tankId);
@@ -4648,6 +4837,9 @@
       case "add-user": userForm(); break;
       case "log-water": logWaterForm(d.tank); break;
       case "log-wc": e.stopPropagation(); waterChangeForm(d.tank); break;
+      case "add-note": e.stopPropagation(); maintNoteForm(d.tank); break;
+      case "edit-note": e.stopPropagation(); maintNoteForm(null, d.id); break;
+      case "note-again": e.stopPropagation(); maintNoteForm(null, null, d.id); break;
       case "edit-wc": waterChangeForm(null, d.id); break;
       case "water-session": sessionSheet(d.id); break;
       case "edit-reading": readingForm(d.id); break;
@@ -4760,6 +4952,7 @@
     }
     if (e.target.matches("[data-act='toggle-past-trt']")) { state.showPastTrt = e.target.checked; render(); return; }
     if (e.target.matches("[data-act='toggle-retired-maint']")) { state.showRetiredMaint = e.target.checked; render(); }
+    if (e.target.matches("[data-act='toggle-retired-notes']")) { state.showRetiredNotes = e.target.checked; render(); }
     if (e.target.matches("[data-act='toggle-retired-receipts']")) { state.showRetiredReceipts = e.target.checked; render(); }
     if (e.target.matches("[data-act='toggle-retired']")) { state.showRetired = e.target.checked; render(); }
     if (e.target.matches("[data-act='wish-tank']")) { state.wishTank = e.target.value; render(); }
@@ -4772,7 +4965,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "47";
+  const APP_VERSION = "48";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

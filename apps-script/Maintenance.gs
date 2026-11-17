@@ -162,3 +162,176 @@ function apiRetireWaterChange_(req, user) {
    if (changes.length) apiLog_(user, req.restore ? "Restore" : "Retire", "Water Changes", row["Water Change ID"], changes.join("; "));
    return { updated: changes.length };
 }
+
+
+// ============================================================
+// MAINTENANCE NOTES
+//
+// One row per thing done to a tank that isn't a water change:
+// light settings changed, filter intake moved, UV bulb replaced.
+// Each note belongs to a tank, can point at a piece of equipment
+// (or any record), and can carry a date it's due again.
+// Types come from the Lookups tab, so they're managed on the
+// Dropdown lists screen like every other list.
+// ============================================================
+const MNOTE_CONFIG = {
+   sheetName: "Maintenance Notes",
+   prefix: "MN-",
+   typeList: "Maintenance Type",
+   // Seeded into Lookups the first time the tab is made.
+   defaultTypes: ["Light settings", "Equipment moved", "Part replaced", "Cleaning", "Repair", "Other"]
+};
+
+const MAINT_NOTE_HEADERS = ["Note ID", "Tank ID", "Item ID", "Maintenance Type", "Summary", "Notes",
+                            "Done At", "Due Date", "Logged By", "Logged At", "Status"];
+
+function apiEnsureNotesTab_() {
+   const ss = apiSs_();
+   let sh = ss.getSheetByName(MNOTE_CONFIG.sheetName);
+   if (!sh) {
+      sh = ss.insertSheet(MNOTE_CONFIG.sheetName);
+      sh.getRange(1, 1, 1, MAINT_NOTE_HEADERS.length).setValues([MAINT_NOTE_HEADERS])
+        .setFontWeight("bold").setBackground("#d9d9d9");
+      sh.setFrozenRows(1);
+      sh.getRange("G2:H").setNumberFormat("m/d/yyyy");
+      sh.getRange("J2:J").setNumberFormat("m/d/yyyy h:mm am/pm");
+      sh.getRange("K2:K").setDataValidation(SpreadsheetApp.newDataValidation()
+         .requireValueInList(["Active", "Retired"], true).setAllowInvalid(false).build());
+      sh.setColumnWidth(5, 260); sh.setColumnWidth(6, 300);
+      apiSeedNoteTypes_();
+   }
+   return sh;
+}
+
+// Puts the starting types on the Lookups tab, if that list is empty.
+function apiSeedNoteTypes_() {
+   const have = apiReadLookups_().some(r => r.type === MNOTE_CONFIG.typeList);
+   if (have) return;
+   const system = { id: "", email: "", name: "Setup", role: "Admin", tanks: [] };
+   MNOTE_CONFIG.defaultTypes.forEach(v => apiEnsureLookupValue_(MNOTE_CONFIG.typeList, v, system));
+}
+
+function apiReadMaintNotes_() {
+   return apiReadSheetRows_(apiEnsureNotesTab_(), "Note ID");
+}
+
+// The types to offer in the form: the active Lookups values for this list.
+function apiMaintNoteTypes_() {
+   const types = apiReadLookups_().filter(r => r.type === MNOTE_CONFIG.typeList && !r.inactive).map(r => r.value);
+   return types.length ? types : MNOTE_CONFIG.defaultTypes.slice();
+}
+
+function apiMaintNotesBootstrap_(user) {
+   const strip = r => { const o = Object.assign({}, r); delete o._row; return o; };
+   return { maintNotes: apiReadMaintNotes_().map(strip), maintNoteTypes: apiMaintNoteTypes_() };
+}
+
+// Checks and tidies what the form sent. isNew requires a tank, a type and a summary.
+function apiCleanMaintNote_(req, user, isNew, current) {
+   const out = {};
+   const has = k => k in req && req[k] !== undefined;
+   if (isNew || has("tankId")) {
+      const tankId = String(req.tankId || "").trim();
+      if (!apiFindById_("tanks", tankId)) throw apiError_("INVALID", "Choose a tank.");
+      if (!apiCanLogTank_(user, tankId)) throw apiError_("FORBIDDEN", "You can't log maintenance for that tank.");
+      out["Tank ID"] = tankId;
+   }
+   if (isNew || has("itemId")) {
+      const itemId = String(req.itemId || "").trim();
+      if (itemId && !apiPriceRecord_(itemId)) throw apiError_("INVALID", itemId + " doesn't exist.");
+      out["Item ID"] = itemId;
+   }
+   if (isNew || has("type")) {
+      let type = String(req.type || "").replace(/\s+/g, " ").trim();
+      if (!type) throw apiError_("INVALID", "Choose what kind of maintenance this was.");
+      const known = apiMaintNoteTypes_().find(t => t.toLowerCase() === type.toLowerCase());
+      // A new kind is added to the list, for admins only (same rule as the other lists).
+      if (known) type = known;
+      else if (user.role === "Admin") type = apiEnsureLookupValue_(MNOTE_CONFIG.typeList, type, user);
+      else throw apiError_("INVALID", "Choose a kind from the list.");
+      out["Maintenance Type"] = type;
+   }
+   if (isNew || has("summary")) {
+      const summary = String(req.summary || "").replace(/\s+/g, " ").trim();
+      if (!summary) throw apiError_("INVALID", "Say what was done.");
+      out["Summary"] = summary.slice(0, 200);
+   }
+   if (isNew || has("notes")) out["Notes"] = String(req.notes || "").trim();
+   if (isNew || has("doneAt")) out["Done At"] = req.doneAt ? apiParseDate_(String(req.doneAt).slice(0, 10)) : new Date();
+   if (isNew || has("dueDate")) {
+      const due = String(req.dueDate || "").slice(0, 10);
+      if (due) {
+         const doneText = out["Done At"] instanceof Date ? Utilities.formatDate(out["Done At"], apiSs_().getSpreadsheetTimeZone(), "yyyy-MM-dd")
+                        : String((current || {})["Done At"] || "").slice(0, 10);
+         if (doneText && due < doneText) throw apiError_("INVALID", "The due date can't be before the date it was done.");
+      }
+      out["Due Date"] = due ? apiParseDate_(due) : "";
+   }
+   return out;
+}
+
+// req: { tankId, itemId?, type, summary, notes?, doneAt?, dueDate?, replacesId? }
+// replacesId: doing a due job again — the old note's due date is cleared.
+function apiAddMaintNote_(req, user) {
+   const sheet = apiEnsureNotesTab_();
+   const values = apiCleanMaintNote_(req, user, true);
+   const rows = apiReadSheetRows_(sheet, "Note ID");
+   const id = apiNextSeqId_(rows, "Note ID", MNOTE_CONFIG.prefix);
+   apiAppendRow_(sheet, Object.assign({ "Note ID": id }, values,
+      { "Logged By": apiWho_(user), "Logged At": new Date(), "Status": "Active" }));
+   let replaced = "";
+   if (req.replacesId) {
+      const old = rows.find(r => r["Note ID"] === String(req.replacesId).trim());
+      if (old && old["Due Date"]) {
+         apiWriteChanges_(sheet, old._row, old, { "Due Date": "" });
+         replaced = old["Note ID"];
+      }
+   }
+   apiLog_(user, "Add", "Maintenance Notes", id + " / " + values["Tank ID"],
+           values["Maintenance Type"] + ": " + values["Summary"] +
+           (values["Item ID"] ? " (" + values["Item ID"] + ")" : "") +
+           (replaced ? "; done again, " + replaced + " no longer due" : ""));
+   return { id: id, replaced: replaced };
+}
+
+// req: { id, values: { ...same fields... } }
+function apiUpdateMaintNote_(req, user) {
+   const sheet = apiEnsureNotesTab_();
+   const row = apiFindMaintNote_(sheet, req.id);
+   if (!apiCanCorrectBy_(user, row["Logged By"])) throw apiError_("FORBIDDEN", "Only an admin or the person who logged it can change this.");
+   const values = apiCleanMaintNote_(req.values || {}, user, false, row);
+   const changes = apiWriteChanges_(sheet, row._row, row, values);
+   if (changes.length) apiLog_(user, "Edit", "Maintenance Notes", row["Note ID"], changes.join("; "));
+   return { id: row["Note ID"], changes: changes.length };
+}
+
+// Retired, not deleted, like every other maintenance entry.
+function apiRetireMaintNote_(req, user) {
+   const sheet = apiEnsureNotesTab_();
+   const row = apiFindMaintNote_(sheet, req.id);
+   if (!apiCanCorrectBy_(user, row["Logged By"])) throw apiError_("FORBIDDEN", "Only an admin or the person who logged it can remove this.");
+   apiWriteChanges_(sheet, row._row, row, { "Status": "Retired" });
+   apiLog_(user, "Retire", "Maintenance Notes", row["Note ID"], row["Summary"]);
+   return { id: row["Note ID"] };
+}
+
+function apiFindMaintNote_(sheet, id) {
+   const row = apiReadSheetRows_(sheet, "Note ID").find(r => r["Note ID"] === String(id || "").trim());
+   if (!row) throw apiError_("NOT_FOUND", "That note no longer exists.");
+   return row;
+}
+
+// Used when a tank or a record is deleted (Delete.gs).
+function apiDeleteMaintNotesWhere_(header, id) {
+   const sheet = apiSs_().getSheetByName(MNOTE_CONFIG.sheetName);
+   if (!sheet) return 0;
+   if (header === "Item ID") {
+      // The note still describes work on the tank: just unlink the item.
+      let n = 0;
+      apiReadSheetRows_(sheet, "Note ID").forEach(r => {
+         if (String(r["Item ID"]).trim() === String(id).trim()) { apiWriteChanges_(sheet, r._row, r, { "Item ID": "" }); n++; }
+      });
+      return n;
+   }
+   return apiDeleteRowsWhere_(sheet, header, v => String(v).trim() === String(id).trim()).count;
+}

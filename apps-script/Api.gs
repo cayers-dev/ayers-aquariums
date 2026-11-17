@@ -121,6 +121,9 @@ function apiRoute_(req, user) {
       case "retireTestType":      return apiWrite_(() => apiRetireTestType_(req, user));
       // Maintenance (Maintenance.gs)
       case "logWaterChange":      return apiWrite_(() => apiLogWaterChange_(req, user));
+      case "addMaintNote":        return apiWrite_(() => apiAddMaintNote_(req, user));
+      case "updateMaintNote":     return apiWrite_(() => apiUpdateMaintNote_(req, user));
+      case "retireMaintNote":     return apiWrite_(() => apiRetireMaintNote_(req, user));
       case "updateWaterChange":   return apiWrite_(() => apiUpdateWaterChange_(req, user));
       case "retireWaterChange":   return apiWrite_(() => apiRetireWaterChange_(req, user));
       // AI helper (Ai.gs)
@@ -293,6 +296,7 @@ function apiBootstrap_(user) {
    Object.assign(out, apiReceiptsBootstrap_(user, lists));
    Object.assign(out, apiWaterBootstrap_(user));
    Object.assign(out, apiMaintBootstrap_(user));
+   Object.assign(out, apiMaintNotesBootstrap_(user));
    Object.assign(out, apiWishBootstrap_(user, out.data.assignments));
    Object.assign(out, apiPhotosBootstrap_());
    Object.assign(out, apiPricesBootstrap_());
@@ -325,6 +329,7 @@ function apiLimitToAssignedTanks_(out, user) {
    if (out.waterSessions) out.waterSessions = out.waterSessions.filter(r => visible(r["Tank ID"]));
    if (out.waterTests) out.waterTests = out.waterTests.filter(r => visible(r["Tank ID"]));
    if (out.waterChanges) out.waterChanges = out.waterChanges.filter(r => visible(r["Tank ID"]));
+   if (out.maintNotes) out.maintNotes = out.maintNotes.filter(r => visible(r["Tank ID"]));
    if (out.receiptLinks) out.receiptLinks = out.receiptLinks.filter(l => !allTankIds[l["Item ID"]] || visible(l["Item ID"]));
    if (out.treatments) out.treatments = out.treatments.filter(r => visible(r["Tank ID"]));
    if (out.treatmentDoses) out.treatmentDoses = out.treatmentDoses.filter(r => visible(r["Tank ID"]));
