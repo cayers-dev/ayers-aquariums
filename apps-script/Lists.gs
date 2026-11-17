@@ -141,3 +141,47 @@ function apiLookupValueFor_(f, v, user) {
    if (f.strict) throw apiError_("INVALID", f.name + " must be one of: " + f.options.join(", "));
    return v;
 }
+
+
+// ------------------------------------------------------------
+// Name matching — the same rules as the app's "Did you mean…?" check:
+// capitals, spaces, punctuation and a leading "The" are ignored, and
+// 1-2 letters off still counts as the same name.
+// ------------------------------------------------------------
+function apiNameKey_(s) {
+   return String(s || "").toLowerCase().replace(/^\s*the\s+/, "").replace(/[^a-z0-9]/g, "");
+}
+
+// True when two names are the same once capitals and punctuation are ignored.
+function apiSameName_(a, b) {
+   const ka = apiNameKey_(a);
+   return !!ka && ka === apiNameKey_(b);
+}
+
+function apiEditDistance_(a, b) {
+   const d = [];
+   for (let i = 0; i <= a.length; i++) d[i] = [i];
+   for (let j = 1; j <= b.length; j++) d[0][j] = j;
+   for (let i = 1; i <= a.length; i++) {
+      for (let j = 1; j <= b.length; j++) {
+         d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      }
+   }
+   return d[a.length][b.length];
+}
+
+// The name in `existing` that `value` is the same as or a near miss for, or "".
+function apiCloseName_(value, existing) {
+   const k = apiNameKey_(value);
+   if (k.length < 3) return "";
+   let best = "", bestD = 99;
+   (existing || []).forEach(e => {
+      const ek = apiNameKey_(e);
+      if (!ek) return;
+      const short = Math.min(k.length, ek.length);
+      const allow = short >= 8 ? 2 : short >= 4 ? 1 : 0;
+      const dist = ek === k ? 0 : (Math.abs(ek.length - k.length) > allow ? 99 : apiEditDistance_(k, ek));
+      if (dist <= allow && dist < bestD) { best = e; bestD = dist; }
+   });
+   return best;
+}

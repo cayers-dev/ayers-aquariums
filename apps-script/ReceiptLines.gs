@@ -110,22 +110,39 @@ function apiApplyLinePrice_(receipt, line, info, user) {
    if (!vendor) return { action: "none", note: "receipt has no vendor" };
    if (!dateText) return { action: "none", note: "receipt has no purchase date" };
    const each = Math.round(line.price / line.qty * 100) / 100;
-   const date = apiParseDate_(dateText.slice(0, 10));
+   return apiRecordObservedPrice_(info.priceItemId, vendor, each, line.size, line.unit, dateText,
+                                  "receipt " + receipt["Receipt ID"], user);
+}
+
+// Records a price seen somewhere (a receipt line, a wishlist purchase) against a
+// price item. The same price as that store's latest only moves its date forward;
+// an older date, or a different price or size, adds to the history.
+// Returns { action: "added" | "date" | "same" | "none", priceId, previousDate, note }.
+function apiRecordObservedPrice_(priceItemId, vendor, each, size, unit, dateText, source, user) {
+   if (!priceItemId) return { action: "none", note: "no price item" };
+   if (each === "" || each === null || each === undefined || isNaN(Number(each))) return { action: "none", note: "no price" };
+   if (!size || !unit) return { action: "none", note: "no size" };
+   if (!String(vendor || "").trim()) return { action: "none", note: "no vendor" };
+   if (!(dateText instanceof Date) && !String(dateText || "").trim()) return { action: "none", note: "no date" };
+   vendor = String(vendor).trim();
+   each = Math.round(Number(each) * 100) / 100;
+   // The caller may hand over a date or its text ("2026-11-16").
+   const date = dateText instanceof Date ? dateText : apiParseDate_(String(dateText).slice(0, 10));
    const dkey = Utilities.formatDate(date, apiSs_().getSpreadsheetTimeZone(), "yyyy-MM-dd");
    const key = p => String(p["Date Gathered"] || "") + " " + String(p["Added At"] || "");
-   const latest = apiReadPrices_().filter(p => p["Price Item ID"] === info.priceItemId && String(p["Location"]).trim().toLowerCase() === vendor.toLowerCase())
+   const latest = apiReadPrices_().filter(p => p["Price Item ID"] === priceItemId && String(p["Location"]).trim().toLowerCase() === vendor.toLowerCase())
       .sort((a, b) => key(b).localeCompare(key(a)))[0];
-   const same = latest && Math.abs(Number(latest["Price"]) - each) < 0.005 && Number(latest["Size"]) === Number(line.size) && latest["Unit"] === line.unit;
+   const same = latest && Math.abs(Number(latest["Price"]) - each) < 0.005 && Number(latest["Size"]) === Number(size) && latest["Unit"] === unit;
    if (same) {
       const old = String(latest["Date Gathered"] || "");
       if (dkey > old) {
          const changes = apiWriteChanges_(apiPricesSheet_(), latest._row, latest, { "Date Gathered": date });
-         apiLog_(user, "Edit", "Prices", latest["Price ID"] + " / " + info.priceItemId, changes.join("; ") + " — same price on receipt " + receipt["Receipt ID"]);
+         apiLog_(user, "Edit", "Prices", latest["Price ID"] + " / " + priceItemId, changes.join("; ") + " — same price on " + source);
          return { priceId: latest["Price ID"], action: "date", previousDate: old };
       }
       return { priceId: latest["Price ID"], action: "same" };
    }
-   const added = apiAddPrice_({ item: { priceItemId: info.priceItemId }, location: vendor, price: each, size: line.size, unit: line.unit, date: dkey }, user);
+   const added = apiAddPrice_({ item: { priceItemId: priceItemId }, location: vendor, price: each, size: size, unit: unit, date: dkey }, user);
    return { priceId: added.priceId, action: "added" };
 }
 
@@ -181,6 +198,9 @@ function apiAddReceiptLines_(receipt, lines, user) {
       // Buying it means it's on hand (Treatments.gs).
       const stocked = apiStockOnHandFromReceipt_(info, user);
       if (stocked) onHand.push(stocked);
+      // An open wish for this item is now bought (Wishlist.gs).
+      const wished = apiWishPurchasedFromLine_(receipt, line, info, user);
+      if (wished) notes.push(wished);
       if (info.recordId) toLink.push(info.recordId);
    });
    if (created.length) notes.push("Added to your records: " + created.join(", "));

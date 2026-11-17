@@ -93,3 +93,55 @@ const API_USERS_CACHE_KEY = "app_users_v1";
 function apiClearUsersCache_() {
    CacheService.getScriptCache().remove(API_USERS_CACHE_KEY);
 }
+
+// ------------------------------------------------------------
+// Trimming empty rows
+// A tab with thousands of blank rows is still read in full on every load, which
+// slows the app down. Checkboxes and dropdowns set down a whole column make rows
+// look used, so a row counts as empty when its ID column is blank and every other
+// cell is blank or an unticked checkbox.
+// Run trimEmptyRowsDryRun() from the editor to see what would go, then
+// trimEmptyRows() to delete it. Both leave 20 spare rows under the last record.
+// ------------------------------------------------------------
+const TRIM_SPARE_ROWS = 20;
+
+function apiRowIsEmpty_(row) {
+   return row.every(v => v === "" || v === null || v === false);
+}
+
+// For each tab: its last used row, and how many rows could be deleted.
+function apiTrimPlan_() {
+   return apiSs_().getSheets().map(sheet => {
+      const last = sheet.getLastRow(), cols = sheet.getLastColumn();
+      const name = sheet.getName();
+      if (last < 2 || cols < 1) return { name: name, rows: last, used: last, cut: 0 };
+      const values = sheet.getRange(1, 1, last, cols).getValues();
+      let used = 1;
+      for (let r = 1; r < values.length; r++) {
+         if (String(values[r][0]).trim() !== "" || !apiRowIsEmpty_(values[r])) used = r + 1;
+      }
+      const keep = Math.min(last, used + TRIM_SPARE_ROWS);
+      return { name: name, rows: last, used: used, cut: Math.max(0, last - keep), from: keep + 1 };
+   });
+}
+
+function trimEmptyRowsDryRun() {
+   const plan = apiTrimPlan_();
+   const lines = plan.map(p => p.name + ": " + p.rows + " rows, " + (p.used - 1) + " records" +
+      (p.cut ? " — would delete rows " + p.from + "-" + p.rows + " (" + p.cut + ")" : " — nothing to trim"));
+   Logger.log(lines.join("\n"));
+   return lines;
+}
+
+function trimEmptyRows() {
+   const ss = apiSs_();
+   const done = [];
+   apiTrimPlan_().forEach(p => {
+      if (!p.cut) return;
+      const sheet = ss.getSheetByName(p.name);
+      sheet.deleteRows(p.from, p.cut);
+      done.push(p.name + ": removed " + p.cut + " empty rows (now " + sheet.getLastRow() + ")");
+   });
+   Logger.log(done.join("\n") || "Nothing to trim.");
+   return done;
+}

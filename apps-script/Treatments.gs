@@ -32,9 +32,10 @@ function apiTreatmentDosesSheet_() {
 const apiReadTreatments_ = () => apiReadPriceTab_(TRT_CONFIG.sheetName, "Treatment ID");
 const apiReadTreatmentDoses_ = () => apiReadPriceTab_(TRT_CONFIG.dosesSheetName, "Dose ID");
 
-function apiTreatmentsBootstrap_() {
+// `lists` comes from the caller (apiBootstrap_ has already read them).
+function apiTreatmentsBootstrap_(lists) {
    const strip = r => { const o = Object.assign({}, r); delete o._row; return o; };
-   const lists = apiReadLists_(apiSs_());
+   lists = lists || apiReadLists_(apiSs_());
    return { treatments: apiReadTreatments_().map(strip), treatmentDoses: apiReadTreatmentDoses_().map(strip),
             doseUnits: lists[TRT_CONFIG.unitList] || [], stockOptions: lists[TRT_CONFIG.stockList] || [] };
 }

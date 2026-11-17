@@ -399,6 +399,8 @@
     state.testTypes = r.testTypes || [];
     state.waterSessions = r.waterSessions || [];
     state.waterTests = r.waterTests || [];
+    state.waterDaysLoaded = r.waterDaysLoaded || 0;
+    state.waterAllLoaded = r.waterAllLoaded !== false;
     if (r.methods) state.methods = r.methods;
     state.waterChanges = r.waterChanges || [];
     state.wishes = r.wishes || [];
@@ -1835,7 +1837,8 @@
         link("#/browse", "gear", "Equipment", n(browseCount("equipment"), "active"), "equipment"),
         link("#/browse", "leaf", "Plants", n(browseCount("plants"), "active"), "plants"),
         link("#/browse", "pill", "Medications", n(browseCount("medications"), "active"), "medications"),
-        link("#/wish", "wish", "Wishlist", n(openWishes, "open"))
+        link("#/wish", "wish", "Wishlist", n(openWishes, "open") +
+          (wishesNeedingTank().length ? " · " + wishesNeedingTank().length + " need a tank" : ""))
       ].concat(canReceipts() ? [link("#/receipts", "receipts", "Receipts", n(unassigned, "unassigned"))] : [])
        .concat([link("#/prices", "tag", "Prices", n(state.priceItems.length, state.priceItems.length === 1 ? "item" : "items") + " · " + n(state.prices.length, state.prices.length === 1 ? "price" : "prices"))])) +
       group("Account", [link("#/account", "account", "My account", state.me ? state.me.name || state.me.email : "")]
@@ -3400,6 +3403,9 @@
   const wishPending = id => state.data.assignments.filter(a => a["Wish ID"] === id && isPendingWishRow(a));
   const wishAdded = id => state.data.assignments.filter(a => a["Wish ID"] === id && !!a["Date Added"]);
   const wishItem = w => findRec(w["Item Type"], w["Item ID"]);
+  // Purchased from a receipt line, so nothing has been added to a tank yet.
+  const wishNeedsTank = w => String(w["Wish Status"]) === "Purchased" && wishAdded(w["Wish ID"]).length === 0;
+  const wishesNeedingTank = () => state.wishes.filter(wishNeedsTank);
   const wishTitle = w => { const r = wishItem(w); return r ? TYPES[w["Item Type"]].title(r) : w["Item ID"]; };
   const compatFor = (wishId, tankId) => state.compat.find(c => c["Wish ID"] === wishId && c["Tank ID"] === tankId);
   const canAddWish = () => isAdmin() || (state.me && state.me.role === "Editor" && state.me.tanks.length > 0);
@@ -3435,12 +3441,13 @@
     const tanksLine = tankId
       ? verdictPill((compatFor(w["Wish ID"], tankId) || {})["Verdict"], true)
       : pend.map(a => '<span class="tank-chip">' + esc(tankName(a["Tank ID"])) + ' ' + verdictPill((compatFor(w["Wish ID"], a["Tank ID"]) || {})["Verdict"], true) + '</span>').join("");
-    return '<a class="list-item wish-row ' + (wishIsOpen(w) ? "" : "dim") + '" href="#/wish/' + encodeURIComponent(w["Wish ID"]) + '">' +
+    const needs = wishNeedsTank(w);
+    return '<a class="list-item wish-row ' + (wishIsOpen(w) || needs ? "" : "dim") + '" href="#/wish/' + encodeURIComponent(w["Wish ID"]) + '">' +
       photoHtml(r ? T.img(r) : "", "thumb", 160, String(w["Item ID"]).split("-")[0]) +
       '<div class="body"><div class="title">' + esc(wishTitle(w)) + '</div>' +
       '<div class="sub">' + esc([w["Wish ID"], T.one, w["Priority"] ? w["Priority"] + " priority" : "", money(w["Estimated Price"])].filter(Boolean).join(" · ")) + '</div>' +
       (tanksLine ? '<div class="tank-chips">' + tanksLine + '</div>' : "") + '</div>' +
-      (tankId ? "" : wishStatusPill(w)) + '</a>';
+      (tankId ? "" : (needs ? '<span class="pill edit">Needs a tank</span>' : wishStatusPill(w))) + '</a>';
   }
 
   function wishSection(tankId) {
@@ -3457,7 +3464,8 @@
     const visibleTanks = state.data.tanks.filter(t => !isRetired(t));
     if (state.wishTank && !visibleTanks.some(t => t["Tank ID"] === state.wishTank)) state.wishTank = "";
     return state.wishes
-      .filter(w => f === "open" ? wishIsOpen(w) : String(w["Wish Status"]) === (f === "purchased" ? "Purchased" : "Not getting"))
+      // A wish bought from a receipt still needs a tank, so it stays under Open too.
+      .filter(w => f === "open" ? (wishIsOpen(w) || wishNeedsTank(w)) : String(w["Wish Status"]) === (f === "purchased" ? "Purchased" : "Not getting"))
       .filter(w => !state.wishTank || state.data.assignments.some(a => a["Wish ID"] === w["Wish ID"] && a["Tank ID"] === state.wishTank &&
                                                                          (f === "open" ? isPendingWishRow(a) : true)))
       .sort((a, b) => ((PRIORITY_ORDER[a["Priority"]] ?? 1) - (PRIORITY_ORDER[b["Priority"]] ?? 1)) ||
@@ -3467,7 +3475,7 @@
     const f = state.wishFilter;
     const visibleTanks = state.data.tanks.filter(t => !isRetired(t)).sort((a, b) => String(a["Tank Name"]).localeCompare(String(b["Tank Name"])));
     const rows = wishRows();
-    const count = k => state.wishes.filter(w => k === "open" ? wishIsOpen(w) : String(w["Wish Status"]) === (k === "purchased" ? "Purchased" : "Not getting")).length;
+    const count = k => state.wishes.filter(w => k === "open" ? (wishIsOpen(w) || wishNeedsTank(w)) : String(w["Wish Status"]) === (k === "purchased" ? "Purchased" : "Not getting")).length;
     return {
       title: "Wishlist",
       keepScroll: true,
@@ -3495,7 +3503,8 @@
     const pend = wishPending(id);
     const added = wishAdded(id);
     const manage = canManageWish(w);
-    const canBuy = open && canUseAi() && wishTanksAllowed().length > 0;
+    const needsTank = wishNeedsTank(w);
+    const canBuy = (open || needsTank) && canUseAi() && wishTanksAllowed().length > 0;
     const img = r ? T.img(r) : "";
     const checked = state.compat.filter(c => c["Wish ID"] === id);
     const lastCheck = checked.map(c => c["Checked At"]).sort().pop();
@@ -3503,9 +3512,11 @@
     const hero = '<div class="card">' + photoHtml(img, "big-img", 800, "") +
       '<div class="hero"><h2>' + esc(wishTitle(w)) + '</h2>' +
       '<div class="meta">' + esc([id, T.one, w["Item ID"], r ? T.sub(r) : ""].filter(Boolean).join(" · ")) + '</div>' +
-      '<div class="counts">' + wishStatusPill(w) + (w["Priority"] ? '<span class="pill">' + esc(w["Priority"]) + ' priority</span>' : "") + '</div>' +
+      '<div class="counts">' + wishStatusPill(w) + (needsTank ? '<span class="pill edit">Needs a tank</span>' : "") +
+        (w["Priority"] ? '<span class="pill">' + esc(w["Priority"]) + ' priority</span>' : "") + '</div>' +
+      (needsTank ? '<p class="hint">Marked purchased from ' + esc(String(w["Receipt ID"] || "a receipt")) + '. Choose the tank it went into.</p>' : "") +
       '<div class="actions">' +
-        (canBuy ? '<button class="btn primary" data-act="purchase-wish" data-id="' + esc(id) + '">Mark purchased</button>' : "") +
+        (canBuy ? '<button class="btn primary" data-act="purchase-wish" data-id="' + esc(id) + '">' + (needsTank ? "Choose a tank" : "Mark purchased") + '</button>' : "") +
         (manage ? '<button class="btn" data-act="edit-wish" data-id="' + esc(id) + '">Edit wish</button>' : "") +
         (r && canEditItem(type, r) && (isWishItem(r) || isAdmin()) ? '<button class="btn" data-act="edit-record" data-type="' + type + '" data-id="' + esc(w["Item ID"]) + '">Edit item</button>' : "") +
         (open && canCloseWish(w) ? '<button class="btn danger" data-act="close-wish" data-id="' + esc(id) + '">Not getting</button>' : "") +
@@ -3775,6 +3786,8 @@
   function purchaseWishForm(id) {
     const w = findWish(id);
     if (!w) return;
+    // Already purchased (from a receipt line): only the tank is missing.
+    const tankOnly = wishNeedsTank(w);
     const type = w["Item Type"];
     const r = wishItem(w);
     const pend = wishPending(id).map(a => a["Tank ID"]);
@@ -3782,14 +3795,16 @@
     const tanks = wishTanksAllowed();
     const receipts = canReceipts() ? state.receipts.filter(x => !isRetired(x)).sort((x, y) => receiptSortKey(y).localeCompare(receiptSortKey(x))) : [];
     openSheet({
-      title: "Mark purchased",
+      title: tankOnly ? "Choose a tank" : "Mark purchased",
       submitLabel: "Add to tanks",
       body: '<p class="meta">' + esc(id + " · " + wishTitle(w) + " (" + w["Item ID"] + ")") + '</p>' +
-        fieldHtml({ name: "purchaseDate", label: "Purchase date", type: "date", required: true }, today()) +
-        comboHtml({ name: "vendor", label: "Vendor", mode: "free", noThumbs: true, newLabel: "will be added to the vendor list", value: w["Vendor"] || "",
-                    placeholder: "Choose or type a store" }, vendorItems()) +
-        '<div class="field"><label for="f_paid">Price paid</label><input type="text" inputmode="decimal" id="f_paid" name="pricePaid" placeholder="' + esc(w["Estimated Price"] ? "Estimated " + money(w["Estimated Price"]) : "0.00") + '" autocomplete="off"></div>' +
-        (canReceipts() ? fieldHtml({ name: "receiptId", label: "Receipt", type: "select", hint: "Optional. Upload it first under Receipts if it isn’t there.",
+        (tankOnly ? '<p class="hint">Bought ' + esc(fmtDate(w["Purchase Date"]) || "earlier") +
+            esc([w["Vendor"] ? " from " + w["Vendor"] : "", w["Price Paid"] ? " for " + money(w["Price Paid"]) : ""].join("")) + '.</p>' : "") +
+        (tankOnly ? "" : fieldHtml({ name: "purchaseDate", label: "Purchase date", type: "date", required: true }, today())) +
+        (tankOnly ? "" : comboHtml({ name: "vendor", label: "Vendor", mode: "free", noThumbs: true, newLabel: "will be added to the vendor list", value: w["Vendor"] || "",
+                    placeholder: "Choose or type a store" }, vendorItems())) +
+        (tankOnly ? "" : '<div class="field"><label for="f_paid">Price paid</label><input type="text" inputmode="decimal" id="f_paid" name="pricePaid" placeholder="' + esc(w["Estimated Price"] ? "Estimated " + money(w["Estimated Price"]) : "0.00") + '" autocomplete="off"></div>') +
+        (!tankOnly && canReceipts() ? fieldHtml({ name: "receiptId", label: "Receipt", type: "select", hint: "Optional. Upload it first under Receipts if it isn’t there.",
           html: '<option value="">None</option>' + receipts.map(x => '<option value="' + esc(x["Receipt ID"]) + '">' + esc([x["Receipt ID"], receiptTitle(x), money(x["Total"])].filter(Boolean).join(" · ")) + '</option>').join("") }) : "") +
         '<div class="form-section"><h3>Add to which tanks?</h3>' +
           (type === "equipment" ? '<p class="hint">Each tank gets its own piece of equipment. The first uses ' + esc(w["Item ID"]) + (r && !isWishItem(r) ? " only if it isn’t already in use; otherwise new Equipment IDs are created" : "; any others get new Equipment IDs with the same details") + '.</p>' : "") +
@@ -3816,12 +3831,15 @@
       onSubmit: async (vals, form) => {
         const picked = $$("input[name^='tank:']", form).filter(el => el.checked && !el.disabled).map(el => el.name.slice(5));
         if (!picked.length) throw new Error("Choose at least one tank to add it to.");
-        if (!(await checkVendorField(vals, form, "vendor"))) return false;
+        const bought = tankOnly ? (String(w["Purchase Date"] || "").slice(0, 10) || today()) : vals.purchaseDate;
+        if (!tankOnly && !(await checkVendorField(vals, form, "vendor"))) return false;
         const paid = String(vals.pricePaid || "").replace(/[$,\s]/g, "");
         if (paid && isNaN(Number(paid))) throw new Error("Price paid must be an amount like 24.99.");
+        // In choose-a-tank mode the price, vendor and receipt are already on the wish.
         return write("purchaseWish", {
-          wishId: id, purchaseDate: vals.purchaseDate, vendor: vals.vendor, pricePaid: paid, receiptId: vals.receiptId || "",
-          tanks: picked.map(t => ({ tankId: t, dateAdded: vals["date:" + t] || vals.purchaseDate, notes: vals["notes:" + t] || "" }))
+          wishId: id, purchaseDate: bought, vendor: tankOnly ? "" : vals.vendor, pricePaid: tankOnly ? "" : paid,
+          receiptId: tankOnly ? "" : (vals.receiptId || ""), skipPrice: tankOnly,
+          tanks: picked.map(t => ({ tankId: t, dateAdded: vals["date:" + t] || bought, notes: vals["notes:" + t] || "" }))
         }, "Added to " + picked.map(tankName).join(", "));
       }
     });
@@ -3902,6 +3920,24 @@
     return '<span class="pill">No range</span>';
   }
   const cutoffDate = () => { const d = new Date(); d.setDate(d.getDate() - state.waterDays); return d; };
+  // Startup sends the recent readings only (plus each tank's latest of each type).
+  // Looking further back than that fetches the rest once.
+  let waterFetch = null;
+  async function ensureWaterDays(days) {
+    if (state.waterAllLoaded || days <= state.waterDaysLoaded) return false;
+    if (!waterFetch) {
+      waterFetch = api("waterHistory", { days: days >= 3650 ? 0 : days }).then(r => {
+        if (r && r.waterTests) {
+          state.waterTests = r.waterTests;
+          state.waterDaysLoaded = r.waterDaysLoaded || days;
+          state.waterAllLoaded = !!r.waterAllLoaded;
+        }
+        waterFetch = null;
+      }).catch(() => { waterFetch = null; });
+    }
+    await waterFetch;
+    return true;
+  }
   function readings(tankId, typeId, all) {
     const cut = cutoffDate();
     return state.waterTests.filter(r => r["Tank ID"] === tankId && r["Test Type ID"] === typeId && isLive(r))
@@ -4212,6 +4248,12 @@
   function sessionSheet(id) {
     const s = state.waterSessions.find(x => x["Session ID"] === id);
     if (!s) return;
+    // A session older than the readings we hold: fetch the rest first.
+    if (!state.waterAllLoaded && !state.waterTests.some(r => r["Session ID"] === id)) {
+      toast("Loading older tests\u2026");
+      ensureWaterDays(3650).then(() => sessionSheet(id));
+      return;
+    }
     const rs = state.waterTests.filter(r => r["Session ID"] === id)
       .sort((a, b) => ((findType(a["Test Type ID"]) || {})["Order"] || 0) - ((findType(b["Test Type ID"]) || {})["Order"] || 0));
     const editable = canCorrect(s);
@@ -4700,7 +4742,14 @@
     }
     if (e.target.matches("[data-act='water-days']")) {
       const n = Math.round(Number(e.target.value));
-      if (n >= 1 && n <= 3650) { state.waterDays = n; try { localStorage.setItem("aa_water_days", String(n)); } catch (err) { /* ignore */ } }
+      if (n >= 1 && n <= 3650) {
+        state.waterDays = n;
+        try { localStorage.setItem("aa_water_days", String(n)); } catch (err) { /* ignore */ }
+        if (!state.waterAllLoaded && n > state.waterDaysLoaded) {
+          toast("Loading older tests\u2026");
+          ensureWaterDays(n).then(render);
+        }
+      }
       render();
     }
     if (e.target.matches("[data-act='maint-tank']")) {
@@ -4721,7 +4770,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "46";
+  const APP_VERSION = "47";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

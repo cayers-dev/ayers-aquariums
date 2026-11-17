@@ -493,7 +493,11 @@ function apiPurchaseWish_(req, user) {
    apiEnsureWishColumn_();
    const tabs = apiEnsureWishTabs_();
    const wish = apiFindWish_(req.wishId);
-   if (!apiWishIsOpen_(wish)) throw apiError_("INVALID", "This wish is already closed.");
+   // A wish closed from a receipt has no tank yet, so it can still be added to one.
+   const addedAlready = apiReadTable_("assignments").rows
+      .some(a => a["Wish ID"] === wish["Wish ID"] && !!a["Date Added"]);
+   const needsTank = String(wish["Wish Status"]) === "Purchased" && !addedAlready;
+   if (!apiWishIsOpen_(wish) && !needsTank) throw apiError_("INVALID", "This wish is already closed.");
    const type = wish["Item Type"];
    const def = API_TABLES[type];
    if (!def || WISH_CONFIG.types.indexOf(type) === -1) throw apiError_("INVALID", "Unknown item type on this wish.");
@@ -590,19 +594,14 @@ function apiPurchaseWish_(req, user) {
    if (receiptId) apiAddReceiptLinks_(apiEnsureReceiptTabs_(), receiptId, itemIds.filter((v, i, a) => a.indexOf(v) === i), user);
 
    // Update the wish; it's Purchased once no wished tanks are left.
-   const wUpd = { "Purchase Date": purchaseDate };
-   if (price !== "") {
-      const before = Number(String(wish["Price Paid"] || "").replace(/[$,]/g, "")) || 0;
-      wUpd["Price Paid"] = Math.round((before + price) * 100) / 100;
+   const wChanges = apiWriteWishPurchase_(tabs, wish, purchaseDate, price, vendor, receiptId, !pending.length);
+   // The price paid goes to the price tracker, like a priced receipt line (Prices.gs).
+   // A purchase recorded from a receipt line has already priced it, and skips this.
+   if (price !== "" && !req.skipPrice) {
+      const item = apiPriceItemFor_({ recordId: itemIds[0] || rec[def.id] }, user);
+      apiRecordObservedPrice_(item.id, vendor || rec["Vendor"], price / Math.max(1, itemIds.length),
+                              1, "each", purchaseDate, "wishlist purchase " + wish["Wish ID"], user);
    }
-   if (vendor) wUpd["Vendor"] = vendor;
-   if (receiptId) {
-      const had = String(wish["Receipt ID"] || "").split(",").map(s => s.trim()).filter(Boolean);
-      if (had.indexOf(receiptId) === -1) had.push(receiptId);
-      wUpd["Receipt ID"] = had.join(", ");
-   }
-   if (!pending.length) { wUpd["Wish Status"] = "Purchased"; wUpd["Closed At"] = new Date(); }
-   const wChanges = apiWriteChanges_(tabs.wishes, wish._row, wish, wUpd);
    apiLog_(user, "Purchase (wishlist)", "Wishlist", wish["Wish ID"],
            "Added to " + picks.map(p => p.tankId).join(", ") + " as " + itemIds.join(", ") +
            (notes.length ? " (" + notes.join(", ") + ")" : "") + (wChanges.length ? "; " + wChanges.join("; ") : ""));
@@ -713,4 +712,93 @@ function apiCheckWish_(req, user) {
               keep.map(id => id + ": " + results[id].verdict).join("; ") || "No tanks");
       return { checked: keep.length, bestFit: bestFit, missing: missing, summary: String(ai.summary || "").slice(0, 400) };
    });
+}
+
+
+// ------------------------------------------------------------
+// Purchase details on the wish row (date, price paid, vendor, receipt),
+// shared by "Mark purchased" and a matching receipt line.
+// ------------------------------------------------------------
+function apiWriteWishPurchase_(tabs, wish, purchaseDate, price, vendor, receiptId, close) {
+   const wUpd = { "Purchase Date": purchaseDate };
+   if (price !== "" && price !== null && price !== undefined) {
+      const before = Number(String(wish["Price Paid"] || "").replace(/[$,]/g, "")) || 0;
+      wUpd["Price Paid"] = Math.round((before + Number(price)) * 100) / 100;
+   }
+   if (vendor) wUpd["Vendor"] = vendor;
+   if (receiptId) {
+      const had = String(wish["Receipt ID"] || "").split(",").map(s => s.trim()).filter(Boolean);
+      if (had.indexOf(receiptId) === -1) had.push(receiptId);
+      wUpd["Receipt ID"] = had.join(", ");
+   }
+   if (close) {
+      wUpd["Wish Status"] = "Purchased";
+      if (!wish["Closed At"]) wUpd["Closed At"] = new Date();
+   }
+   return apiWriteChanges_(tabs.wishes, wish._row, wish, wUpd);
+}
+
+// ------------------------------------------------------------
+// A receipt line that matches an open wish marks it purchased.
+// A match is the wish's own record, or an item name that matches closely
+// (ReceiptLines.gs calls this once per saved line). Wishes added after the
+// receipt's purchase date are left alone — they're a later want.
+// Returns a note for the person, or "".
+// ------------------------------------------------------------
+function apiWishPurchasedFromLine_(receipt, line, info, user) {
+   const bought = String(receipt["Purchase Date"] || "").slice(0, 10);
+   if (!bought) return "";
+   const open = apiReadWishes_().filter(apiWishIsOpen_);
+   if (!open.length) return "";
+   const typed = String(info.name || "").replace(/\s+/g, " ").trim();
+   const recordId = String(info.recordId || "").trim();
+
+   const matches = open.filter(w => {
+      const added = String(w["Added At"] || "").slice(0, 10);
+      if (added && bought < added) return false;
+      if (recordId && String(w["Item ID"]).trim() === recordId) return true;
+      if (!typed) return false;
+      const rec = apiFindById_(w["Item Type"], w["Item ID"]);
+      const wished = rec ? apiItemTitle_(w["Item Type"], rec) : "";
+      return !!wished && (apiSameName_(wished, typed) || !!apiCloseName_(typed, [wished]));
+   });
+   if (!matches.length) return "";
+
+   const tabs = apiEnsureWishTabs_();
+   const price = line.price === "" || line.price === undefined ? "" : Number(line.price);
+   const vendor = String(receipt["Vendor"] || "").trim();
+   const notes = [];
+   matches.forEach(w => {
+      const label = w["Wish ID"] + " " + apiWishLabel_(w);
+      // Wished tanks it can go straight into (the normal purchase, which creates the
+      // records and assignments); otherwise close it and leave the tank to choose.
+      const pending = apiPendingWishRows_(w["Wish ID"]);
+      const mine = pending.filter(p => apiCanEditTank_(user, p["Tank ID"]));
+      if (pending.length && mine.length === pending.length) {
+         try {
+            apiPurchaseWish_({ wishId: w["Wish ID"], purchaseDate: bought, vendor: vendor, pricePaid: price,
+                               receiptId: receipt["Receipt ID"], skipPrice: true,
+                               tanks: pending.map(p => ({ tankId: p["Tank ID"], dateAdded: bought })) }, user);
+            notes.push(label + ": marked purchased and added to " + pending.map(p => p["Tank ID"]).join(", "));
+            return;
+         } catch (e) {
+            // Couldn't add it to the tank, so close the wish and say why.
+            notes.push(label + ": marked purchased (not added to a tank — " + (e.message || e) + ")");
+            apiWriteWishPurchase_(tabs, apiFindWish_(w["Wish ID"]), apiParseDate_(bought), price, vendor, receipt["Receipt ID"], true);
+            apiLog_(user, "Purchase (from receipt)", "Wishlist", w["Wish ID"], "Receipt " + receipt["Receipt ID"] + " — no tank");
+            return;
+         }
+      }
+      apiWriteWishPurchase_(tabs, w, apiParseDate_(bought), price, vendor, receipt["Receipt ID"], true);
+      apiLog_(user, "Purchase (from receipt)", "Wishlist", w["Wish ID"],
+              "Receipt " + receipt["Receipt ID"] + " matched " + (recordId || typed) + " — tank still to choose");
+      notes.push(label + ": marked purchased — choose a tank for it");
+   });
+   return notes.join("; ");
+}
+
+// "Pumpkin Nerite Snail" for a wish, for messages.
+function apiWishLabel_(w) {
+   const rec = apiFindById_(w["Item Type"], w["Item ID"]);
+   return rec ? apiItemTitle_(w["Item Type"], rec) : String(w["Item ID"] || "");
 }

@@ -21,7 +21,10 @@ const WATER_CONFIG = {
    typesSheetName: "Test Types",
    sessionsSheetName: "Water Test Sessions",
    testsSheetName: "Water Tests",
-   methods: ["Strip", "Liquid", "Digital"]
+   methods: ["Strip", "Liquid", "Digital"],
+   // Readings older than this aren't sent on startup; the app asks for them
+   // (route "waterHistory") when you widen the window past what it has.
+   bootstrapDays: 180
 };
 
 // Columns of the Test Types tab, in order.
@@ -124,13 +127,55 @@ function apiReadWaterJoined_(tabs) {
    return { sessions: sessions, tests: tests };
 }
 
-// Water testing data for the app's startup load (test types, sessions, readings).
+// The readings from the last `days` days (0 = all of them). Sessions are always
+// sent in full — they're small, and the app counts and lists them.
+function apiWaterTestsSince_(tests, days) {
+   if (!days) return { tests: tests, all: true };
+   const cut = new Date();
+   cut.setDate(cut.getDate() - days);
+   const from = Utilities.formatDate(cut, apiSs_().getSpreadsheetTimeZone(), "yyyy-MM-dd");
+   // Dates read as "yyyy-MM-dd HH:mm", so comparing the text works. A reading with no
+   // readable date is kept, so nothing can go missing.
+   const kept = tests.filter(r => {
+      const t = String(r["Tested At"] || "").slice(0, 10);
+      return !/^\d{4}-\d{2}-\d{2}$/.test(t) || t >= from;
+   });
+   const all = kept.length === tests.length;
+   // Each tank's most recent reading of each test type comes too, however old it is,
+   // so a tank that hasn't been tested in a while still shows its last numbers.
+   if (!all) {
+      const have = {};
+      kept.forEach(r => have[r["Test ID"]] = true);
+      const newest = {};
+      tests.forEach(r => {
+         const k = r["Tank ID"] + "|" + r["Test Type ID"];
+         if (!newest[k] || String(r["Tested At"] || "") > String(newest[k]["Tested At"] || "")) newest[k] = r;
+      });
+      Object.keys(newest).forEach(k => { if (!have[newest[k]["Test ID"]]) kept.push(newest[k]); });
+   }
+   return { tests: kept, all: all, from: from };
+}
+
+// Water testing data for the app's startup load (test types, sessions, recent readings).
 function apiWaterBootstrap_(user) {
    const tabs = apiEnsureWaterTabs_();
    const types = apiReadTestTypes_();
    apiBackfillParamTypeIds_(types);
    const j = apiReadWaterJoined_(tabs);
-   return { testTypes: types, waterSessions: j.sessions, waterTests: j.tests, methods: WATER_CONFIG.methods };
+   const w = apiWaterTestsSince_(j.tests, WATER_CONFIG.bootstrapDays);
+   return { testTypes: types, waterSessions: j.sessions, waterTests: w.tests, methods: WATER_CONFIG.methods,
+            waterDaysLoaded: WATER_CONFIG.bootstrapDays, waterAllLoaded: w.all };
+}
+
+// Older readings, on demand: req { days } (0 or missing = every reading).
+function apiWaterHistory_(req, user) {
+   const days = Math.max(0, Math.round(Number((req && req.days) || 0))) || 0;
+   const j = apiReadWaterJoined_(apiEnsureWaterTabs_());
+   const w = apiWaterTestsSince_(j.tests, days);
+   // Everyone but an Admin sees their assigned tanks only, as on startup.
+   const tests = user.role === "Admin" ? w.tests
+      : w.tests.filter(r => user.tanks.indexOf(r["Tank ID"]) !== -1);
+   return { waterTests: tests, waterDaysLoaded: days, waterAllLoaded: w.all };
 }
 
 // Admins can log tests for any tank; everyone else for their assigned tanks.
