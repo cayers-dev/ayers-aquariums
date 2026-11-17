@@ -94,12 +94,14 @@ function apiMethodsOf_(t) {
 // (e.g. from the sheet's Add Water Parameter form).
 function apiBackfillParamTypeIds_(types) {
    const wp = apiSheet_("waterParameters");
-   const wh = wp.getRange(1, 1, 1, wp.getLastColumn()).getValues()[0].map(h => String(h).trim());
+   const wh = apiHeaderValues_(wp).map(h => String(h).trim());
    const pCol = wh.indexOf("Parameter"), idCol = wh.indexOf("Test Type ID");
    if (pCol === -1 || idCol === -1) return;
    const last = apiLastDataRow_(wp);
    if (last < 2) return;
-   const v = wp.getRange(2, 1, last - 1, wh.length).getValues();
+   // From the snapshot during a load (Speed.gs), otherwise a read.
+   const grid = apiGrid_(wp).values;
+   const v = grid.length >= last ? grid.slice(1, last) : wp.getRange(2, 1, last - 1, wh.length).getValues();
    const byName = {};
    types.forEach(t => byName[String(t["Name"]).toLowerCase()] = t["Test Type ID"]);
    v.forEach((r, i) => {

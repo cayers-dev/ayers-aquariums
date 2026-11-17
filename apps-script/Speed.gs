@@ -32,6 +32,15 @@ function apiGrid_(sheet) {
    return { values: range.getValues(), shown: range.getDisplayValues() };
 }
 
+// A tab's header row. During a load this comes from the one-request snapshot;
+// outside one it's a single-row read, as before.
+function apiHeaderValues_(sheet) {
+   const snap = API_GRID && API_GRID[sheet.getSheetId()];
+   if (snap && snap.values && snap.values.length) return snap.values[0];
+   const lastCol = sheet.getLastColumn();
+   return lastCol < 1 ? [] : sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+}
+
 // Reads every tab the app uses in one Sheets API request (two passes: raw values and
 // displayed text) into API_GRID. Entry-form tabs ("Add ...") and the Change Log are skipped.
 function apiPrefetchGrids_() {

@@ -381,8 +381,8 @@ function apiReadLists_(ss) {
 function apiSchema_(table, lists) {
    const def = API_TABLES[table];
    const sheet = apiSheet_(def.sheetKey);
-   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0]
-      .map(h => String(h).trim()).filter(Boolean);
+   // From the load's one-request snapshot where there is one (Speed.gs).
+   const headers = apiHeaderValues_(sheet).map(h => String(h).trim()).filter(Boolean);
    const listDefs = API_FIELD_LISTS[table] || {};
    const required = def.required || [];
 
@@ -783,8 +783,9 @@ function apiSheet_(sheetKey) {
 
 // Header name (lower case) -> column number for a tab.
 function apiHeaderMap_(sheet) {
-   const lastCol = sheet.getLastColumn();
-   const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+   const snap = API_GRID && API_GRID[sheet.getSheetId()];
+   const headers = apiHeaderValues_(sheet);
+   const lastCol = snap && snap.values && snap.values.length ? headers.length : sheet.getLastColumn();
    const map = {};
    headers.forEach((h, i) => {
       const name = String(h).trim().toLowerCase();
@@ -802,9 +803,9 @@ function apiHasHeader_(sheet, name) {
 // cells don't count, so a column of empty checkboxes doesn't push new
 // rows to the bottom of the tab.
 function apiLastDataRow_(sheet) {
-   const last = sheet.getLastRow();
-   if (last < 2) return 1;
-   const values = sheet.getRange(1, 1, last, Math.max(sheet.getLastColumn(), 1)).getValues();
+   // apiGrid_ hands back the load's snapshot when there is one, and reads the tab otherwise.
+   const values = apiGrid_(sheet).values;
+   if (values.length < 2) return 1;
    for (let r = values.length - 1; r >= 1; r--) {
       if (values[r].some(c => c !== "" && c !== false && c !== null)) return r + 1;
    }
