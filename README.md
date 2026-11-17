@@ -25,5 +25,6 @@ All of these live in the sheet's Apps Script project ("Aquarium Database"); GitH
 | `Prices.gs` | Price tracker: Price Items and Prices tabs. One row per item, the latest price at each store, history kept; admins and editors add, edit and delete. |
 | `Lists.gs` | Dropdown lists (Lookups tab): admins add, rename (records using the value are updated), turn off/on and describe values; admins can also type new values into form dropdowns. |
 | `ReceiptLines.gs` | Receipt item lines (Receipt Lines tab): item, qty, line price, size. Priced lines go into the price tracker for the receipt's vendor (price ÷ qty); same price just moves the date; records get linked; edits and deletes undo the price. |
+| `Treatments.gs` | Medication treatments (Treatments and Treatment Doses tabs): courses per tank with dose, schedule and logged doses; plus the manual Stock field on medications and typed price items. |
 
 `apps-script/archive/` holds old code that is no longer in the project (kept for reference only).

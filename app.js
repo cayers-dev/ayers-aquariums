@@ -44,6 +44,7 @@
     photos: [],
     priceItems: [], prices: [], priceUnits: [], priceQuery: "", priceFilter: "all", priceOpen: {},
     lookups: [], lookupTypes: [], listQuery: "", receiptLines: [],
+    treatments: [], treatmentDoses: [], doseUnits: [], stockOptions: [], showPastTrt: false,
     wishOptions: { priorities: ["High", "Medium", "Low"], statuses: ["Researching", "Want", "Purchased", "Not getting"] },
     wishFilter: "open",
     wishTank: "",
@@ -407,6 +408,12 @@
     state.priceItems = r.priceItems || [];
     state.lookups = r.lookups || [];
     state.receiptLines = r.receiptLines || [];
+    state.treatments = r.treatments || [];
+    state.treatmentDoses = r.treatmentDoses || [];
+    state.doseUnits = r.doseUnits || [];
+    state.stockOptions = r.stockOptions || [];
+    // Treatments need the matching server update; until then their screens stay hidden.
+    state.hasTreatments = Array.isArray(r.treatments);
     // Item lines need the matching server update; until then the section stays hidden.
     state.hasReceiptLines = Array.isArray(r.receiptLines);
     state.lookupTypes = r.lookupTypes || [];
@@ -606,12 +613,14 @@
       case "maint": view = viewMaintenance(route.args[0]); break;
       case "receipt": view = canReceipts() ? viewReceipt(route.args[0]) : viewTanks(); break;
       case "prices": view = viewPrices(); break;
+      case "treatments": view = viewTreatments(); break;
+      case "treatment": view = viewTreatment(route.args[0]); break;
       case "price": view = viewPriceItem(route.args[0]); break;
       default: view = viewHome();
     }
     const nav = stepNav(route);
     const tab = route.name === "tank" ? "tanks" : route.name === "item" ? "browse" : route.name === "receipt" ? "receipts" :
-                route.name === "testtypes" ? "water" : (route.name === "users" || route.name === "account" || route.name === "prices" || route.name === "price" || route.name === "lists") ? "home" : route.name;
+                route.name === "testtypes" ? "water" : (route.name === "users" || route.name === "account" || route.name === "prices" || route.name === "price" || route.name === "lists" || route.name === "treatments" || route.name === "treatment") ? "home" : route.name;
     const tabs = [["home", "Home"], ["tanks", "Tanks"], ["water", "Test"], ["maint", "Maint."], ["browse", "Browse"], ["wish", "Wishlist"]]
       .concat(canReceipts() ? [["receipts", "Receipts"]] : []);
 
@@ -655,6 +664,9 @@
       if (!canReceipts()) return null;
       lists = [receiptRows().map(r => r["Receipt ID"]),
                state.receipts.slice().sort((x, y) => receiptSortKey(y).localeCompare(receiptSortKey(x))).map(r => r["Receipt ID"])];
+    } else if (route.name === "treatment") {
+      const act = (state.treatments || []).filter(trtActive).sort((a, b) => (daysUntil(nextDue(a)) || 0) - (daysUntil(nextDue(b)) || 0)).map(t => t["Treatment ID"]);
+      lists = [act, (state.treatments || []).map(t => t["Treatment ID"])];
     } else if (route.name === "price") {
       lists = [priceRows().map(p => p["Price Item ID"]), state.priceItems.slice().sort(byPriceName).map(p => p["Price Item ID"])];
     } else if (route.name === "wish") {
@@ -935,6 +947,7 @@
         (canPrices() ? '<button class="btn primary" data-act="add-price" data-item="' + esc(id) + '">' + ICONS.plus + 'Add price</button>' : "") +
         (info.linked && info.type ? '<a class="btn" href="#/item/' + info.type + '/' + encodeURIComponent(info.rid) + '">Open ' + esc(info.rid) + '</a>' : "") +
         (canPrices() && !info.linked ? '<button class="btn" data-act="edit-price-item" data-id="' + esc(id) + '">Edit item</button>' : "") +
+        (canPrices() && !info.linked && state.hasTreatments ? '<button class="btn" data-act="set-stock" data-price-item="' + esc(id) + '">Stock' + (pi["Stock"] ? ": " + esc(pi["Stock"]) : "") + '</button>' : "") +
         (canPrices() ? '<button class="btn danger" data-act="delete-price-item" data-id="' + esc(id) + '">Delete</button>' : "") +
       '</div></div>';
     return {
@@ -1163,6 +1176,313 @@
         if (ok) location.hash = "#/prices";
         return ok;
       }
+    });
+  }
+
+  // ---------- Treatments (medication courses) ----------
+  // A course: tank + medication + dose + every N days + how many doses (blank = ongoing).
+  // Each dose given is logged; the next dose is worked out from the last one.
+  const canTreat = tankId => canEditTank(tankId);
+  const treatmentsFor = tankId => (state.treatments || []).filter(t => t["Tank ID"] === tankId);
+  const dosesFor = id => (state.treatmentDoses || []).filter(d => d["Treatment ID"] === id)
+    .sort((a, b) => Number(a["Dose No"]) - Number(b["Dose No"]));
+  const findTreatment = id => (state.treatments || []).find(t => t["Treatment ID"] === id);
+  const trtActive = t => String(t["Status"] || "Active") === "Active";
+  const trtMed = t => findRec("medications", t["Product ID"]);
+  const trtName = t => { const m = trtMed(t); return m ? TYPES.medications.title(m) : String(t["Product ID"] || "Treatment"); };
+  const midnight = d => d ? new Date(d.getFullYear(), d.getMonth(), d.getDate()) : null;
+  // "1 packet", "2 packets", "5 mL" — a unit written in plural loses its s for a single dose.
+  const doseText = (amount, unit) => {
+    const n = Number(amount);
+    const u = String(unit || "");
+    return (isNaN(n) ? amount : n) + " " + (n === 1 && /[a-z]s$/.test(u) ? u.slice(0, -1) : u);
+  };
+  const trtDoseText = t => doseText(t["Dose Amount"], t["Dose Unit"]);
+  function trtEveryText(t) {
+    const n = Number(t["Every Days"]) || 1;
+    return n === 1 ? "daily" : n === 7 ? "weekly" : "every " + n + " days";
+  }
+  // The date the next dose is due, or null when the course isn't running.
+  function nextDue(t) {
+    if (!trtActive(t)) return null;
+    const doses = dosesFor(t["Treatment ID"]);
+    if (!doses.length) return midnight(parseDT(t["Start Date"]));
+    const last = doses.map(d => parseDT(d["Given At"])).filter(Boolean).sort((a, b) => b - a)[0];
+    if (!last) return midnight(parseDT(t["Start Date"]));
+    const d = midnight(last);
+    d.setDate(d.getDate() + (Number(t["Every Days"]) || 1));
+    return d;
+  }
+  const daysUntil = d => d ? Math.round((d - midnight(new Date())) / 864e5) : null;
+  const isDue = t => { const n = daysUntil(nextDue(t)); return n !== null && n <= 0; };
+  const dueCount = () => (state.treatments || []).filter(t => trtActive(t) && isDue(t)).length;
+  function dueText(t) {
+    const n = daysUntil(nextDue(t));
+    if (n === null) return "";
+    if (n < 0) return n === -1 ? "Due since yesterday" : "Due " + (-n) + " days ago";
+    return n === 0 ? "Due today" : n === 1 ? "Due tomorrow" : "Due in " + n + " days";
+  }
+  function trtProgress(t) {
+    const given = dosesFor(t["Treatment ID"]).length;
+    const total = t["Total Doses"] === "" || t["Total Doses"] === undefined ? "" : Number(t["Total Doses"]);
+    return total === "" ? given + (given === 1 ? " dose given · ongoing" : " doses given · ongoing") : "Dose " + Math.min(given + 1, total) + " of " + total;
+  }
+
+  // One course as a card. showTank adds the tank's name (for the all-tanks screen).
+  function treatmentCard(t, opts) {
+    opts = opts || {};
+    const id = t["Treatment ID"];
+    const due = trtActive(t) ? dueText(t) : String(t["Status"]);
+    const cls = !trtActive(t) ? "" : (isDue(t) ? " due" : "");
+    const bits = [trtDoseText(t) + " " + trtEveryText(t), trtProgress(t), opts.showTank ? tankName(t["Tank ID"]) : "", t["Reason"]].filter(Boolean);
+    return '<div class="card trt-card' + cls + '">' +
+      '<div class="trt-top"><div class="trt-l"><a class="trt-name" href="#/treatment/' + encodeURIComponent(id) + '">' + esc(trtName(t)) + '</a>' +
+        '<div class="sub">' + esc(bits.join(" · ")) + '</div></div>' +
+        (due ? '<span class="pill ' + (trtActive(t) ? (isDue(t) ? "warn" : "edit") : "retired") + '">' + esc(due) + '</span>' : "") + '</div>' +
+      (t["Water Change"] || t["Remove Carbon"] === true
+        ? '<div class="trt-note">' + [t["Water Change"] ? "Water change: " + t["Water Change"] : "", t["Remove Carbon"] === true ? "Remove carbon / chemical media" : ""].filter(Boolean).map(esc).join(" · ") + '</div>' : "") +
+      (canTreat(t["Tank ID"]) && trtActive(t)
+        ? '<div class="actions"><button class="btn small primary" data-act="log-dose" data-id="' + esc(id) + '">' + ICONS.plus + 'Log dose</button>' +
+          '<a class="btn small" href="#/treatment/' + encodeURIComponent(id) + '">Details</a></div>'
+        : '<div class="actions"><a class="btn small" href="#/treatment/' + encodeURIComponent(id) + '">Details</a></div>') +
+      '</div>';
+  }
+
+  // The Treatments section on a tank's page and on the Maint. screen.
+  function treatmentSection(tankId, opts) {
+    opts = opts || {};
+    const all = treatmentsFor(tankId);
+    const active = all.filter(trtActive).sort((a, b) => (daysUntil(nextDue(a)) || 0) - (daysUntil(nextDue(b)) || 0));
+    const past = all.filter(t => !trtActive(t));
+    return '<div class="section"><div class="section-head"><h3>Treatments (' + active.length + ')</h3>' +
+      (canTreat(tankId) ? '<button class="btn small primary" data-act="add-treatment" data-tank="' + esc(tankId) + '">' + ICONS.plus + 'Start treatment</button>' : "") + '</div>' +
+      (active.length ? active.map(t => treatmentCard(t)).join("")
+                     : '<div class="card"><div class="empty">No treatments running.</div></div>') +
+      (past.length && opts.showPast
+        ? '<label class="check" style="margin-top:8px"><input type="checkbox" data-act="toggle-past-trt"' + (state.showPastTrt ? " checked" : "") + '> Show finished and stopped (' + past.length + ')</label>' +
+          (state.showPastTrt ? past.map(t => treatmentCard(t)).join("") : "")
+        : "") + '</div>';
+  }
+
+  // Every course across the tanks this person can see.
+  function viewTreatments() {
+    const all = (state.treatments || []).slice();
+    const active = all.filter(trtActive).sort((a, b) => (daysUntil(nextDue(a)) || 0) - (daysUntil(nextDue(b)) || 0) ||
+                                                        String(tankName(a["Tank ID"])).localeCompare(String(tankName(b["Tank ID"]))));
+    const past = all.filter(t => !trtActive(t)).sort((a, b) => String(b["Ended At"] || "").localeCompare(String(a["Ended At"] || "")));
+    const due = active.filter(isDue), later = active.filter(t => !isDue(t));
+    const group = (title, list) => list.length
+      ? '<div class="section"><div class="section-head"><h3>' + esc(title) + ' (' + list.length + ')</h3></div>' + list.map(t => treatmentCard(t, { showTank: true })).join("") + '</div>' : "";
+    const tanks = state.data.tanks.filter(t => canEditTank(t["Tank ID"]) && !isRetired(t));
+    return {
+      title: "Treatments", back: true, keepScroll: true,
+      html: (tanks.length ? '<div class="actions" style="margin:0 0 12px"><button class="btn primary" data-act="add-treatment">' + ICONS.plus + 'Start treatment</button></div>' : "") +
+        (all.length ? "" : '<div class="empty">No treatments yet.' + (tanks.length ? " Tap Start treatment to begin one." : "") + '</div>') +
+        group("Due now", due) + group("Coming up", later) +
+        (past.length ? '<div class="section"><div class="section-head"><h3>Finished and stopped (' + past.length + ')</h3></div>' +
+          '<label class="check"><input type="checkbox" data-act="toggle-past-trt"' + (state.showPastTrt ? " checked" : "") + '> Show them</label>' +
+          (state.showPastTrt ? past.map(t => treatmentCard(t, { showTank: true })).join("") : "") + '</div>' : "")
+    };
+  }
+
+  function viewTreatment(id) {
+    const t = findTreatment(id);
+    if (!t) return { title: "Treatment", back: true, html: '<div class="empty">That treatment wasn’t found.</div>' };
+    const med = trtMed(t);
+    const doses = dosesFor(id).slice().reverse();
+    const may = canTreat(t["Tank ID"]);
+    const total = t["Total Doses"] === "" ? "" : Number(t["Total Doses"]);
+    const kv = [["Tank", tankName(t["Tank ID"])], ["Medication", trtName(t)], ["Reason", t["Reason"]],
+                ["Dose", trtDoseText(t)], ["How often", trtEveryText(t).replace(/^./, c => c.toUpperCase())],
+                ["Doses", total === "" ? "Ongoing (no end date)" : total + " in total"],
+                ["Started", fmtDate(t["Start Date"])],
+                ["Water change", t["Water Change"]], ["Remove carbon", t["Remove Carbon"] === true ? "Yes" : ""],
+                ["Status", t["Status"] + (t["Ended At"] ? " · " + fmtDate(String(t["Ended At"]).slice(0, 10)) : "")],
+                ["Notes", t["Notes"]]].filter(x => x[1]);
+    const hero = '<div class="card hero"><h2>' + esc(trtName(t)) + '</h2>' +
+      '<div class="meta">' + esc([tankName(t["Tank ID"]), trtDoseText(t) + " " + trtEveryText(t), trtProgress(t)].join(" · ")) + '</div>' +
+      (trtActive(t) ? '<div class="meta ' + (isDue(t) ? "trt-due" : "") + '">' + esc(dueText(t) + " · " + fmtDate(fmtISO(nextDue(t)))) + '</div>' : "") +
+      (may ? '<div class="actions">' +
+        (trtActive(t) ? '<button class="btn primary" data-act="log-dose" data-id="' + esc(id) + '">' + ICONS.plus + 'Log dose</button>' : "") +
+        '<button class="btn" data-act="edit-treatment" data-id="' + esc(id) + '">Edit</button>' +
+        (trtActive(t) ? '<button class="btn" data-act="trt-status" data-id="' + esc(id) + '" data-status="Stopped">Stop</button>'
+                      : '<button class="btn" data-act="trt-status" data-id="' + esc(id) + '" data-status="Active">Start again</button>') +
+        '<button class="btn danger" data-act="delete-treatment" data-id="' + esc(id) + '">Delete</button>' +
+      '</div>' : "") + '</div>';
+    const doseList = '<div class="section"><div class="section-head"><h3>Doses given (' + doses.length + ')</h3></div>' +
+      '<div class="card list">' + (doses.map(d =>
+        
+        '<div class="list-item"><div class="body"><div class="title">Dose ' + esc(d["Dose No"]) + ' · ' + esc(doseText(d["Dose Amount"], d["Dose Unit"])) + '</div>' +
+        '<div class="sub">' + esc([fmtDT(d["Given At"]), d["Given By"] ? personName(d["Given By"]) : "", d["Notes"]].filter(Boolean).join(" · ")) + '</div></div>' +
+        (may ? '<button class="btn small" data-act="edit-dose" data-id="' + esc(d["Dose ID"]) + '">Edit</button>' : "") + '</div>').join("")
+        || '<div class="empty">No doses logged yet.</div>') + '</div></div>';
+    const medLink = med ? '<div class="section"><div class="section-head"><h3>Medication</h3></div><div class="card list">' +
+      '<a class="list-item" href="#/item/medications/' + encodeURIComponent(t["Product ID"]) + '"><div class="body"><div class="title">' + esc(TYPES.medications.title(med)) + '</div>' +
+      '<div class="sub">' + esc([t["Product ID"], med["Standard Dose"] ? "Label dose: " + med["Standard Dose"] : "", med["Frequency / Duration"] || ""].filter(Boolean).join(" · ")) + '</div></div></a></div></div>' : "";
+    return { title: trtName(t), back: true, keepScroll: true,
+             html: hero + doseList + medLink + '<div class="section"><div class="section-head"><h3>Details</h3></div><div class="card kv">' +
+               kv.map(x => '<div class="k">' + esc(x[0]) + '</div><div>' + esc(x[1]) + '</div>').join("") + '</div></div>' };
+  }
+  const fmtISO = d => d ? d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0") : "";
+
+  // Start or edit a course. tankId preselects a tank; id edits an existing course.
+  function treatmentForm(tankId, id) {
+    const t = id ? findTreatment(id) : null;
+    if (id && !t) return;
+    const tanks = state.data.tanks.filter(x => canEditTank(x["Tank ID"]) && (!isRetired(x) || (t && t["Tank ID"] === x["Tank ID"])));
+    if (!tanks.length) { toast("You don’t have any tanks you can treat.", true); return; }
+    const tank = t ? t["Tank ID"] : (tankId && tanks.some(x => x["Tank ID"] === tankId) ? tankId : tanks[0]["Tank ID"]);
+    const meds = state.data.medications.filter(m => !isRetired(m))
+      .sort((a, b) => String(TYPES.medications.title(a)).localeCompare(String(TYPES.medications.title(b))))
+      .map(m => ({ value: m["Product ID"], label: TYPES.medications.title(m), sub: [m["Product ID"], m["Product Type"], m["Standard Dose"]].filter(Boolean).join(" · ") }));
+    const units = (state.doseUnits || []).map(u => ({ value: u, label: u }));
+    openSheet({
+      title: t ? "Edit treatment" : "Start treatment",
+      submitLabel: t ? "Save" : "Start",
+      body:
+        (t ? '<p class="meta">' + esc(t["Treatment ID"] + " · " + trtName(t) + " · " + tankName(tank)) + '</p>'
+           : '<div class="field"><label for="f_tankId">Tank <span class="req">*</span></label><select id="f_tankId" name="tankId" required>' +
+             tanks.map(x => '<option value="' + esc(x["Tank ID"]) + '"' + (x["Tank ID"] === tank ? " selected" : "") + '>' + esc(x["Tank Name"]) + '</option>').join("") + '</select></div>' +
+             comboHtml({ name: "productId", label: "Medication", required: true, noThumbs: true, placeholder: "Choose a medication or supplement" }, meds)) +
+        '<div class="trt-dose-hint hint"></div>' +
+        '<div class="price-grid">' +
+          '<div class="field"><label for="f_doseAmount">Dose <span class="req">*</span></label><div class="size-row">' +
+            '<input type="number" step="any" inputmode="decimal" id="f_doseAmount" name="doseAmount" required data-label="Dose" value="' + esc(t ? t["Dose Amount"] : "") + '">' +
+            '<select id="f_doseUnit" name="doseUnit" aria-label="Dose unit" required data-label="Dose unit"><option value="">Unit</option>' +
+              units.map(u => '<option value="' + esc(u.value) + '"' + (t && t["Dose Unit"] === u.value ? " selected" : "") + '>' + esc(u.label) + '</option>').join("") + '</select></div></div>' +
+          '<div class="field"><label for="f_everyDays">Every (days) <span class="req">*</span></label>' +
+            '<input type="number" step="1" min="1" inputmode="numeric" id="f_everyDays" name="everyDays" required data-label="Every (days)" value="' + esc(t ? t["Every Days"] : "1") + '"></div>' +
+        '</div>' +
+        '<div class="field"><label for="f_totalDoses">Number of doses <span class="opt">blank = ongoing</span></label>' +
+          '<input type="number" step="1" min="1" inputmode="numeric" id="f_totalDoses" name="totalDoses" value="' + esc(t ? t["Total Doses"] : "") + '" placeholder="e.g. 5"></div>' +
+        fieldHtml({ name: "startDate", label: "Start date", type: "date", required: true }, t ? String(t["Start Date"]).slice(0, 10) : today()) +
+        fieldHtml({ name: "reason", label: "Reason / what you’re treating" }, t ? t["Reason"] : "") +
+        fieldHtml({ name: "waterChange", label: "Water change between doses" }, t ? t["Water Change"] : "") +
+        '<div class="field"><label class="check"><input type="checkbox" name="removeCarbon"' + (t && t["Remove Carbon"] === true ? " checked" : "") + '> Remove carbon / chemical media</label></div>' +
+        fieldHtml({ name: "notes", label: "Notes", type: "longtext" }, t ? t["Notes"] : ""),
+      onReady: form => {
+        $$("[data-combo]", form).forEach(wireCombo);
+        const hint = $(".trt-dose-hint", form);
+        const showHint = pid => {
+          const m = findRec("medications", pid);
+          const bits = m ? [m["Standard Dose"] ? "Label dose: " + m["Standard Dose"] : "", m["Frequency / Duration"] ? "Label says: " + m["Frequency / Duration"] : "",
+                            m["Remove Carbon / Chemical Media"] ? "Carbon: " + m["Remove Carbon / Chemical Media"] : ""].filter(Boolean) : [];
+          hint.textContent = bits.join(" · ");
+          hint.hidden = !bits.length;
+          const carbon = $("[name=removeCarbon]", form);
+          if (m && !t && /yes|remove/i.test(String(m["Remove Carbon / Chemical Media"] || "")) && !carbon.checked) carbon.checked = true;
+        };
+        const pick = $("input[name=productId]", form);
+        if (pick) pick.addEventListener("change", e => showHint(e.target.value));
+        showHint(t ? t["Product ID"] : "");
+      },
+      onSubmit: vals => {
+        const payload = { tankId: t ? t["Tank ID"] : vals.tankId, productId: t ? t["Product ID"] : vals.productId,
+                          reason: vals.reason, doseAmount: vals.doseAmount, doseUnit: vals.doseUnit, everyDays: vals.everyDays,
+                          totalDoses: vals.totalDoses, startDate: vals.startDate, waterChange: vals.waterChange,
+                          removeCarbon: !!vals.removeCarbon, notes: vals.notes };
+        if (!t && !payload.productId) throw new Error("Choose a medication or supplement.");
+        return t ? write("updateTreatment", Object.assign({ id: id }, payload), "Treatment saved")
+                 : write("addTreatment", payload, "Treatment started");
+      }
+    });
+  }
+
+  function logDoseForm(id) {
+    const t = findTreatment(id);
+    if (!t || !canTreat(t["Tank ID"])) return;
+    const due = nextDue(t), n = dosesFor(id).length + 1;
+    openSheet({
+      title: "Log dose " + n,
+      submitLabel: "Log dose",
+      body: '<p class="meta">' + esc(trtName(t) + " · " + tankName(t["Tank ID"])) + '</p>' +
+        (due ? '<p class="hint">' + esc(dueText(t) + " (" + fmtDate(fmtISO(due)) + "). Logging it later moves the following doses along to keep the " + trtEveryText(t) + " spacing.") + '</p>' : "") +
+        '<div class="field"><label for="f_givenAt">Given at <span class="req">*</span></label>' +
+          '<input type="datetime-local" id="f_givenAt" name="givenAt" required data-label="Given at" value="' + esc(nowLocal()) + '"></div>' +
+        '<div class="field"><label for="f_doseAmount">Dose</label><div class="size-row">' +
+          '<input type="number" step="any" inputmode="decimal" id="f_doseAmount" name="doseAmount" value="' + esc(t["Dose Amount"]) + '">' +
+          '<input type="text" value="' + esc(t["Dose Unit"]) + '" readonly aria-label="Unit"></div></div>' +
+        (t["Water Change"] ? '<p class="hint">Water change: ' + esc(t["Water Change"]) + '</p>' : "") +
+        fieldHtml({ name: "notes", label: "Notes", type: "longtext" }, ""),
+      onSubmit: vals => write("logDose", { treatmentId: id, givenAt: vals.givenAt, doseAmount: vals.doseAmount, notes: vals.notes },
+                              res => res && res.finished ? "Last dose logged · treatment complete" : "Dose logged")
+    });
+  }
+
+  function editDoseForm(doseId) {
+    const d = (state.treatmentDoses || []).find(x => x["Dose ID"] === doseId);
+    if (!d || !canTreat(d["Tank ID"])) return;
+    openSheet({
+      title: "Edit dose " + d["Dose No"],
+      submitLabel: "Save",
+      body: '<p class="meta">' + esc(doseId) + '</p>' +
+        '<div class="field"><label for="f_givenAt">Given at <span class="req">*</span></label>' +
+          '<input type="datetime-local" id="f_givenAt" name="givenAt" required data-label="Given at" value="' + esc(String(d["Given At"]).replace(" ", "T").slice(0, 16)) + '"></div>' +
+        '<div class="field"><label for="f_doseAmount">Dose</label><div class="size-row">' +
+          '<input type="number" step="any" inputmode="decimal" id="f_doseAmount" name="doseAmount" value="' + esc(d["Dose Amount"]) + '">' +
+          '<input type="text" value="' + esc(d["Dose Unit"] || "") + '" readonly aria-label="Unit"></div></div>' +
+        fieldHtml({ name: "notes", label: "Notes", type: "longtext" }, d["Notes"] || "") +
+        '<div class="actions" style="margin-top:8px"><button type="button" class="btn danger" data-del-dose>Delete this dose</button></div>',
+      onReady: form => {
+        $("[data-del-dose]", form).addEventListener("click", () => {
+          openSheet({
+            title: "Delete dose?", submitLabel: "Delete", danger: true,
+            body: '<p>Delete dose ' + esc(d["Dose No"]) + ' (' + esc(fmtDT(d["Given At"])) + ')? The doses after it are renumbered.</p>',
+            onSubmit: async () => {
+              const ok = await write("deleteDose", { doseId: doseId }, "Dose deleted");
+              $$(".sheet-backdrop").forEach(b => b.remove()); document.body.style.overflow = "";
+              return ok;
+            }
+          });
+        });
+      },
+      onSubmit: vals => write("updateDose", { doseId: doseId, givenAt: vals.givenAt, doseAmount: vals.doseAmount, notes: vals.notes }, "Dose saved")
+    });
+  }
+
+  function deleteTreatmentForm(id) {
+    const t = findTreatment(id);
+    if (!t || !canTreat(t["Tank ID"])) return;
+    const n = dosesFor(id).length;
+    openSheet({
+      title: "Delete treatment?", submitLabel: "Delete", danger: true,
+      body: '<p>Permanently delete this <b>' + esc(trtName(t)) + '</b> treatment on <b>' + esc(tankName(t["Tank ID"])) + '</b>, with its <b>' + n + ' dose' + (n === 1 ? "" : "s") + '</b>? This can’t be undone.</p>' +
+        '<p class="hint">To keep the history, use Stop instead.</p>',
+      onSubmit: async () => {
+        const ok = await write("deleteTreatment", { id: id }, "Treatment deleted");
+        if (ok) location.hash = "#/treatments";
+        return ok;
+      }
+    });
+  }
+  // "2026-11-16T18:30" for a datetime-local field.
+  function nowLocal() {
+    const d = new Date();
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0") +
+      "T" + String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+  }
+
+  // ---------- Stock (medications and typed price-tracker items) ----------
+  const stockOf = r => String((r && r["Stock"]) || "").trim();
+  const stockClass = v => /out of/i.test(v) ? "retired" : /need|order|low/i.test(v) ? "warn" : /on hand/i.test(v) ? "good" : "edit";
+  const stockPill = v => v ? '<span class="pill ' + stockClass(v) + '">' + esc(v) + '</span>' : "";
+  // Equipment isn't counted: anything active and not in a tank is in storage.
+  const inStorage = (type, r) => type === "equipment" && !isRetired(r) && !isWishItem(r) &&
+    !state.data.assignments.some(a => a["Item ID"] === r["Equipment ID"] && isActiveAssignment(a)) &&
+    !(state.otherAssignments || []).some(a => a["Item ID"] === r["Equipment ID"]);
+
+  function stockForm(opts) {
+    const cur = opts.current || "";
+    const options = (state.stockOptions || []).slice();
+    if (cur && options.indexOf(cur) === -1) options.unshift(cur);
+    openSheet({
+      title: "Stock",
+      submitLabel: "Save",
+      body: '<p class="meta">' + esc(opts.label) + '</p>' +
+        '<div class="field"><label for="f_stock">Stock</label><select id="f_stock" name="stock"><option value="">(not set)</option>' +
+          options.map(o => '<option' + (o === cur ? " selected" : "") + '>' + esc(o) + '</option>').join("") + '</select></div>' +
+        '<p class="hint">Set by hand. Entering a receipt line for this item marks it on hand. Admins can change the choices under Home › Dropdown lists.</p>',
+      onSubmit: vals => write("setStock", Object.assign({ stock: vals.stock }, opts.key), "Stock saved")
     });
   }
 
@@ -1467,7 +1787,8 @@
         link("#/tanks", "tanks", "Tanks", n(state.data.tanks.filter(t => tankStatus(t) === "Active").length, "active")),
         link("#/water", "water", "Water tests", lastTest ? "Last test " + daysAgo(lastTest) : "No tests logged"),
         link("#/maint", "maint", "Maintenance", lastChange ? "Last water change " + daysAgo(lastChange) : "No water changes logged")
-      ]) +
+      ].concat(state.hasTreatments ? [link("#/treatments", "pill", "Treatments",
+          (state.treatments || []).filter(trtActive).length + " running" + (dueCount() ? " · " + dueCount() + " due" : ""))] : [])) +
       group("Collection", [
         link("#/browse", "fish", "Species", n(browseCount("species"), "active"), "species"),
         link("#/browse", "gear", "Equipment", n(browseCount("equipment"), "active"), "equipment"),
@@ -1576,7 +1897,7 @@
     return {
       title: t["Tank Name"], back: true,
       html: hero + group("species", "Livestock") + group("equipment", "Equipment") + group("plants", "Plants") +
-            wishSection(id) + waterSection(id) + maintSection(id) + paramsHtml + receiptsSection(id) + detailsSection("tanks", t, "Tank details") + removedHtml
+            wishSection(id) + waterSection(id) + maintSection(id) + (state.hasTreatments ? treatmentSection(id, { showPast: true }) : "") + paramsHtml + receiptsSection(id) + detailsSection("tanks", t, "Tank details") + removedHtml
     };
   }
 
@@ -1619,7 +1940,9 @@
       return '<div class="list-item ' + (isRetired(r) ? "dim" : "") + '" data-act="open-item" data-type="' + type + '" data-id="' + esc(r[T.id]) + '">' +
         (type !== "medications" ? photoHtml(img, "thumb", 160, String(r[T.id]).split("-")[0]) : "") +
         '<div class="body"><div class="title">' + esc(T.title(r)) + '</div><div class="sub">' + esc([r[T.id], T.sub(r)].filter(Boolean).join(" · ")) + '</div></div>' +
-        (isRetired(r) ? '<span class="pill retired">Retired</span>' : "") + '</div>';
+        (isRetired(r) ? '<span class="pill retired">Retired</span>'
+          : type === "medications" ? stockPill(stockOf(r))
+          : inStorage(type, r) ? '<span class="pill">In storage</span>' : "") + '</div>';
     }).join("");
     return {
       title: "Browse",
@@ -1657,6 +1980,10 @@
       photoHtml(img, "big-img", 800, "") +
       '<div class="hero"><h2>' + esc(T.title(r)) + '</h2><div class="meta">' + esc([r[T.id], T.sub(r)].filter(Boolean).join(" · ")) + '</div>' +
       (isRetired(r) ? '<div class="counts"><span class="pill retired">Retired</span></div>' : isWishItem(r) ? '<div class="counts"><span class="pill wishpill">' + ICONS.wish + 'Wishlist</span></div>' : "") +
+      (type === "medications" && state.hasTreatments
+        ? '<div class="counts">' + (stockOf(r) ? stockPill(stockOf(r)) : '<span class="pill">Stock not set</span>') +
+          (canPrices() ? '<button class="btn small" data-act="set-stock" data-id="' + esc(id) + '">Change</button>' : "") + '</div>'
+        : inStorage(type, r) ? '<div class="counts"><span class="pill">In storage</span></div>' : "") +
       (isAdmin() ? '<div class="actions"><button class="btn" data-act="edit-record" data-type="' + type + '" data-id="' + esc(id) + '">Edit</button>' +
         (!isRetired(r) && "Status" in r ? '<button class="btn danger" data-act="retire" data-type="' + type + '" data-id="' + esc(id) + '">Retire</button>' : "") +
         '<button class="btn danger" data-act="delete-record" data-type="' + type + '" data-id="' + esc(id) + '">Delete</button></div>'
@@ -4020,7 +4347,7 @@
             : '<div class="sub">No water changes logged for this tank yet.</div>') + '</div>' +
           (shown.length ? '<div class="card list" style="margin-top:10px">' + shown.map(w => wcRow(w)).join("") + '</div>' : "") +
           (retiredCount ? '<label class="check" style="margin-top:8px"><input type="checkbox" data-act="toggle-retired-maint"' + (state.showRetiredMaint ? " checked" : "") + '> Show retired (' + retiredCount + ')</label>' : "") +
-        '</div>'
+        '</div>' + (state.hasTreatments ? treatmentSection(tankId, { showPast: true }) : "")
     };
   }
 
@@ -4266,6 +4593,19 @@
       case "price-picture": pricePictureForm(d.id); break;
       case "lookup-add": lookupAddForm(d.type); break;
       case "edit-receipt-lines": editReceiptLinesForm(d.id); break;
+      // Treatments and stock
+      case "add-treatment": treatmentForm(d.tank || "", ""); break;
+      case "edit-treatment": treatmentForm("", d.id); break;
+      case "log-dose": logDoseForm(d.id); break;
+      case "edit-dose": editDoseForm(d.id); break;
+      case "delete-treatment": deleteTreatmentForm(d.id); break;
+      case "trt-status": write("setTreatmentStatus", { id: d.id, status: d.status }, d.status === "Active" ? "Treatment started again" : "Treatment stopped"); break;
+      case "set-stock": {
+        const key = d.priceItem ? { priceItemId: d.priceItem } : { recordId: d.id };
+        const rec = d.priceItem ? findPriceItem(d.priceItem) : findRec("medications", d.id);
+        if (rec) stockForm({ key: key, current: stockOf(rec), label: d.priceItem ? priceItemInfo(rec).name : d.id + " " + TYPES.medications.title(rec) });
+        break;
+      }
       case "lookup-edit": lookupEditForm(d.row); break;
       case "price-picture-remove": pricePictureRemoveForm(d.id); break;
     }
@@ -4322,6 +4662,7 @@
       state.maintTank = e.target.value; try { localStorage.setItem("aa_maint_tank", state.maintTank); } catch (err) { /* ignore */ }
       location.hash = "#/maint/" + encodeURIComponent(state.maintTank);
     }
+    if (e.target.matches("[data-act='toggle-past-trt']")) { state.showPastTrt = e.target.checked; render(); return; }
     if (e.target.matches("[data-act='toggle-retired-maint']")) { state.showRetiredMaint = e.target.checked; render(); }
     if (e.target.matches("[data-act='toggle-retired-receipts']")) { state.showRetiredReceipts = e.target.checked; render(); }
     if (e.target.matches("[data-act='toggle-retired']")) { state.showRetired = e.target.checked; render(); }
@@ -4335,7 +4676,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "43";
+  const APP_VERSION = "44";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

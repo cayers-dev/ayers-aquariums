@@ -124,7 +124,7 @@ function apiAddReceiptLines_(receipt, lines, user) {
    const sheet = apiReceiptLinesSheet_();
    const existing = apiReadReceiptLines_();
    let next = existing.reduce((m, r) => { const n = Number(String(r["Line ID"]).replace(/^\D+/, "")); return isNaN(n) ? m : Math.max(m, n); }, 0);
-   const toLink = [], skipped = [], notes = [];
+   const toLink = [], skipped = [], notes = [], onHand = [];
    lines.forEach((line, i) => {
       const info = apiLineItemInfo_(line.item);
       const res = apiApplyLinePrice_(receipt, line, info, user);
@@ -136,6 +136,9 @@ function apiAddReceiptLines_(receipt, lines, user) {
          "Added By": apiWho_(user), "Added At": new Date()
       });
       if (res.note && line.price !== "") notes.push((info.name || "Line " + (i + 1)) + ": not added to prices (" + res.note + ")");
+      // Buying it means it's on hand (Treatments.gs).
+      const stocked = apiStockOnHandFromReceipt_(info, user);
+      if (stocked) onHand.push(stocked);
       if (info.recordId) toLink.push(info.recordId);
    });
    // Link records the person may link; skip the rest.
@@ -145,6 +148,7 @@ function apiAddReceiptLines_(receipt, lines, user) {
    });
    if (allowed.length) linked = apiAddReceiptLinks_(apiEnsureReceiptTabs_(), receipt["Receipt ID"], allowed, user);
    if (skipped.length) notes.push("Not linked (not in your tanks; an admin can link them): " + skipped.join(", "));
+   if (onHand.length) notes.push("Marked on hand: " + onHand.filter((x, i, a) => a.indexOf(x) === i).join(", "));
    apiLog_(user, "Add lines", "Receipt Lines", receipt["Receipt ID"], lines.length + " line" + (lines.length === 1 ? "" : "s"));
    return { lines: lines.length, linked: linked, notes: notes };
 }

@@ -55,6 +55,7 @@ const API_FIELD_LISTS = {
                       "Filter Model": ["Filter Model", false], "Vendor": ["Vendor", false],
                       "Status": ["Status", true] },
    plants:          { "Difficulty": ["Difficulty", true], "Status": ["Status", true] },
+   medications:     { "Stock": ["Stock Status", true] },
    waterParameters: { "Parameter": ["Water Parameter", true] }
 };
 
@@ -139,6 +140,15 @@ function apiRoute_(req, user) {
       case "removeItemPhoto":     return apiWrite_(() => apiRemoveItemPhoto_(req, user));
       case "aiReadLabel":         aiSetCancelId_(req); return apiAiReadLabel_(req, user);
       // Permanent delete, admins only (Delete.gs)
+      // Treatments and stock (Treatments.gs)
+      case "addTreatment":        return apiWrite_(() => apiAddTreatment_(req, user));
+      case "updateTreatment":     return apiWrite_(() => apiUpdateTreatment_(req, user));
+      case "setTreatmentStatus":  return apiWrite_(() => apiSetTreatmentStatus_(req, user));
+      case "deleteTreatment":     return apiWrite_(() => apiDeleteTreatment_(req, user));
+      case "logDose":             return apiWrite_(() => apiLogDose_(req, user));
+      case "updateDose":          return apiWrite_(() => apiUpdateDose_(req, user));
+      case "deleteDose":          return apiWrite_(() => apiDeleteDose_(req, user));
+      case "setStock":            return apiWrite_(() => apiSetStock_(req, user));
       // Dropdown lists (Lists.gs)
       case "addLookup":           return apiWrite_(() => apiAddLookup_(req, user));
       case "updateLookup":        return apiWrite_(() => apiUpdateLookup_(req, user));
@@ -287,6 +297,7 @@ function apiBootstrap_(user) {
    Object.assign(out, apiPricesBootstrap_());
    Object.assign(out, apiLookupsBootstrap_(user));
    Object.assign(out, apiReceiptLinesBootstrap_(user));
+   Object.assign(out, apiTreatmentsBootstrap_());
    if (user.role !== "Admin") apiLimitToAssignedTanks_(out, user);
    API_GRID = null;
    return out;
@@ -314,6 +325,8 @@ function apiLimitToAssignedTanks_(out, user) {
    if (out.waterTests) out.waterTests = out.waterTests.filter(r => visible(r["Tank ID"]));
    if (out.waterChanges) out.waterChanges = out.waterChanges.filter(r => visible(r["Tank ID"]));
    if (out.receiptLinks) out.receiptLinks = out.receiptLinks.filter(l => !allTankIds[l["Item ID"]] || visible(l["Item ID"]));
+   if (out.treatments) out.treatments = out.treatments.filter(r => visible(r["Tank ID"]));
+   if (out.treatmentDoses) out.treatmentDoses = out.treatmentDoses.filter(r => visible(r["Tank ID"]));
 }
 
 // Reads a whole data tab into row objects ({ header: value, _row: sheet row }).
