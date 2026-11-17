@@ -3823,7 +3823,9 @@
         form.addEventListener("change", sync);
         // Each tank's Date added follows the purchase date until it's changed by hand.
         $$("input[name^='date:']", form).forEach(el => el.addEventListener("input", () => { el.dataset.touched = "1"; }));
-        $("[name=purchaseDate]", form).addEventListener("change", e => {
+        // There's no purchase date field when only the tank is being chosen.
+        const pd = $("[name=purchaseDate]", form);
+        if (pd) pd.addEventListener("change", e => {
           $$("input[name^='date:']", form).forEach(el => { if (!el.dataset.touched) el.value = e.target.value; });
         });
         sync();
