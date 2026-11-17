@@ -104,6 +104,9 @@ function apiClearUsersCache_() {
 // trimEmptyRows() to delete it. Both leave 20 spare rows under the last record.
 // ------------------------------------------------------------
 const TRIM_SPARE_ROWS = 20;
+// DropDownOptions is one formula per column spilling down the sheet, so it needs
+// its spare rows to grow into: it's never trimmed.
+const TRIM_SKIP_TABS = ["DropDownOptions"];
 
 function apiRowIsEmpty_(row) {
    return row.every(v => v === "" || v === null || v === false);
@@ -114,7 +117,7 @@ function apiTrimPlan_() {
    return apiSs_().getSheets().map(sheet => {
       const last = sheet.getLastRow(), cols = sheet.getLastColumn();
       const name = sheet.getName();
-      if (last < 2 || cols < 1) return { name: name, rows: last, used: last, cut: 0 };
+      if (last < 2 || cols < 1 || TRIM_SKIP_TABS.indexOf(name) !== -1) return { name: name, rows: last, used: last, cut: 0 };
       const values = sheet.getRange(1, 1, last, cols).getValues();
       let used = 1;
       for (let r = 1; r < values.length; r++) {
