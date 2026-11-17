@@ -779,7 +779,10 @@
   const unitShort = u => u === "count" ? "ct" : u;
   const findPriceItem = id => state.priceItems.find(p => p["Price Item ID"] === id);
   const pricesFor = id => state.prices.filter(p => p["Price Item ID"] === id);
-  const ONE_LABEL = { species: "Species", equipment: "Equipment", plants: "Plant", medications: "Medication" };
+  const ONE_LABEL = { species: "Species", equipment: "Equipment", plants: "Plant", medications: "Medication", tanks: "Tank" };
+  // Categories a receipt line can create a record in. Tanks and equipment get one record per unit.
+  const NEW_RECORD_TYPES = [["tanks", "Tank"], ["species", "Species"], ["equipment", "Equipment"], ["plants", "Plant"], ["medications", "Medication / Supplement"]];
+  const UNIQUE_RECORD_TYPES = ["tanks", "equipment"];
   function priceItemInfo(pi) {
     const rid = pi["Record ID"];
     if (!rid) return { name: String(pi["Item Name"] || pi["Price Item ID"]), linked: false, pill: "Other item", img: String(pi["Picture URL"] || "") };
@@ -968,7 +971,7 @@
     });
     const priced = {};
     state.priceItems.forEach(pi => { if (pi["Record ID"]) priced[pi["Record ID"]] = true; });
-    ["species", "equipment", "plants", "medications"].forEach(ty => {
+    ["species", "equipment", "plants", "medications", "tanks"].forEach(ty => {
       const T = TYPES[ty];
       (state.data[ty] || []).filter(r => !isWishItem(r) && !isRetired(r) && !priced[r[T.id]])
         .sort((a, b) => String(T.title(a)).localeCompare(String(T.title(b))))
@@ -1519,6 +1522,11 @@
         '<button type="button" class="icon-btn rline-remove" data-remove-line aria-label="Remove item ' + (i + 1) + '">' + ICONS.close + '</button></div>' +
       comboHtml({ name: "li_item_" + i, label: "Item", mode: "free", noThumbs: true, value: line.label || "",
                   placeholder: "Choose or type an item", newLabel: "will be added as a new item" }, ch.items) +
+      (isAdmin() ? '<div class="field rline-new" hidden><label for="f_li_new_' + i + '">Add as</label>' +
+        '<select id="f_li_new_' + i + '" name="li_new_' + i + '">' +
+          '<option value="">Other item — price tracker only</option>' +
+          NEW_RECORD_TYPES.map(t => '<option value="' + t[0] + '"' + (line.newType === t[0] ? " selected" : "") + '>' + esc(t[1]) + '</option>').join("") +
+        '</select><span class="hint">A new record is created and this receipt is linked to it. Fill in the rest on its page later.</span></div>' : "") +
       '<div class="rline-grid">' +
         '<div class="field"><label for="f_li_qty_' + i + '">Qty</label><input type="number" step="any" min="0" inputmode="decimal" id="f_li_qty_' + i + '" name="li_qty_' + i + '" value="' + esc(line.qty === undefined ? "" : line.qty) + '" placeholder="1"></div>' +
         '<div class="field"><label for="f_li_price_' + i + '">Price <span class="opt">for the line</span></label><input type="text" inputmode="decimal" id="f_li_price_' + i + '" name="li_price_' + i + '" value="' + esc(line.price === undefined ? "" : line.price) + '" placeholder="0.00" autocomplete="off"></div>' +
@@ -1551,6 +1559,22 @@
     const wireRow = row => {
       $$("[data-combo]", row).forEach(wireCombo);
       const i = row.dataset.line;
+      // "Add as" shows while the typed item isn't already one of your records.
+      const newBox = $(".rline-new", row), newSel = newBox && $("[name=li_new_" + i + "]", row);
+      const refreshNew = () => {
+        if (!newBox) return;
+        const text = String($("input[name=li_item_" + i + "]", row).value || "").trim();
+        const ref = refFor(text);
+        const pi = ref && ref.priceItemId ? findPriceItem(ref.priceItemId) : null;
+        const isRecord = !!(ref && (ref.recordId || (pi && pi["Record ID"])));
+        newBox.hidden = !text || isRecord;
+        if (newBox.hidden) newSel.value = "";
+      };
+      if (newSel) newSel.addEventListener("change", () => {
+        // A record is one thing bought, so its size starts at 1 each.
+        const sizeEl = $("[name=li_size_" + i + "]", row), unitEl = $("[name=li_unit_" + i + "]", row);
+        if (newSel.value && !sizeEl.value && !unitEl.value) { sizeEl.value = "1"; unitEl.value = "each"; refresh(row); }
+      });
       // Picking an item that's been priced fills in its size: this store's latest, else any store's.
       $("input[name=li_item_" + i + "]", row).addEventListener("change", e => {
         const ref = refFor(e.target.value);
@@ -1562,13 +1586,14 @@
                   sum.stores.slice().sort((a, b) => gatheredKey(b.latest).localeCompare(gatheredKey(a.latest)))[0];
         if (s) { sizeEl.value = Number(s.latest["Size"]) || s.latest["Size"]; unitEl.value = s.latest["Unit"]; refresh(row); }
       });
-      row.addEventListener("input", () => refresh(row));
-      row.addEventListener("change", () => refresh(row));
+      row.addEventListener("input", () => { refresh(row); refreshNew(); });
+      row.addEventListener("change", () => { refresh(row); refreshNew(); });
       $("[data-remove-line]", row).addEventListener("click", () => {
         row.remove();
         $$(".rline", box).forEach((r, n) => { $(".rline-no", r).textContent = "Item " + (n + 1); });
       });
       refresh(row);
+      refreshNew();
     };
     $$(".rline", box).forEach(wireRow);
     $("[data-add-line]", form).addEventListener("click", () => {
@@ -1597,7 +1622,13 @@
       const p = String(price || "").replace(/[$,\s]/g, "");
       if (p && isNaN(Number(p))) throw new Error("Item " + (n + 1) + ": the price must be an amount like 24.99.");
       if (String(size || "").trim() && !unit) throw new Error("Item " + (n + 1) + ": choose a unit for the size.");
+      const newType = String(vals["li_new_" + i] || "");
       let ref = refFor(label);
+      // "Add as" set: a new record (or an existing typed item promoted to one).
+      if (newType) {
+        out.push({ item: { newType: newType, name: label }, qty: qty, price: p, size: size, unit: unit });
+        continue;
+      }
       if (!ref) {
         const v = await confirmName(label, Object.keys(names), "item");
         if (v === null) return null;
@@ -1620,8 +1651,19 @@
     const id = r["Receipt ID"];
     const lines = linesFor(id);
     const head = '<div class="section-head"><h3>Items (' + lines.length + ')</h3>' +
-      (isAdmin() ? '<button class="btn small" data-act="edit-receipt-lines" data-id="' + esc(id) + '">' + (lines.length ? "Edit items" : ICONS.plus + "Add items") + '</button>' : "") + '</div>';
+      (canReceipts() ? '<button class="btn small" data-act="edit-receipt-lines" data-id="' + esc(id) + '">' + (lines.length ? "Edit items" : ICONS.plus + "Add items") + '</button>' : "") + '</div>';
     if (!lines.length) return '<div class="section">' + head + '<div class="card"><div class="empty">No items entered.</div></div></div>';
+    // How the lines add up against the receipt's own total.
+    const priced = lines.filter(l => l["Line Price"] !== "" && l["Line Price"] !== undefined);
+    const sum = priced.reduce((t, l) => t + Number(l["Line Price"]), 0);
+    const total = String(r["Total"] || "").replace(/[$,\s]/g, "");
+    const off = total !== "" && !isNaN(Number(total)) ? Math.round((sum - Number(total)) * 100) / 100 : null;
+    const tally = priced.length
+      ? '<div class="rl-tally' + (off !== null && Math.abs(off) >= 0.01 ? " warn" : "") + '">' +
+        esc(priced.length + (priced.length === 1 ? " priced line · " : " priced lines · ") + money(sum) +
+            (off === null ? "" : off === 0 ? " · matches the receipt total" :
+             " of " + money(total) + " · " + money(Math.abs(off)) + (off > 0 ? " more than" : " short of") + " the total")) + '</div>'
+      : "";
     return '<div class="section">' + head + '<div class="card list">' + lines.map(l => {
       const qty = Number(l["Qty"]) || 1;
       const price = l["Line Price"] === "" ? "" : Number(l["Line Price"]);
@@ -1631,11 +1673,11 @@
                    l["Size"] !== "" && l["Unit"] ? fmtSize(l["Size"], l["Unit"]) : "", lineStatusText(l)].filter(Boolean).join(" · ");
       return (pi ? '<a class="list-item" href="#/price/' + encodeURIComponent(pi) + '">' : '<div class="list-item">') +
         '<div class="body"><div class="title">' + esc(name) + '</div><div class="sub">' + esc(sub) + '</div></div>' + (pi ? '</a>' : '</div>');
-    }).join("") + '</div></div>';
+    }).join("") + '</div>' + tally + '</div>';
   }
   function editReceiptLinesForm(id) {
     const r = findReceipt(id);
-    if (!r || !isAdmin()) return;
+    if (!r || !canReceipts()) return;
     const ch = priceItemChoices();
     const lines = linesFor(id).map(l => ({ label: lineItemLabel(l), qty: l["Qty"], price: l["Line Price"], size: l["Size"], unit: l["Unit"] }));
     if (!lines.length) lines.push({});
@@ -4676,7 +4718,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "44";
+  const APP_VERSION = "45";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

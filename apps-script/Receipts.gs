@@ -146,7 +146,7 @@ function apiUploadReceipt_(req, user) {
 
    // Item lines (optional, ReceiptLines.gs): checked before anything is saved.
    const lines = (req.lines || []).map(apiCleanReceiptLine_);
-   lines.forEach(l => apiLineItemInfo_(l.item));
+   lines.forEach(l => apiLineItemInfo_(l.item, user));   // every item is checked before anything is saved
 
    // Records can be assigned at upload time (optional): admins any record, editors items in their tanks.
    const itemIds = (req.itemIds || []).map(s => String(s).trim()).filter(Boolean);

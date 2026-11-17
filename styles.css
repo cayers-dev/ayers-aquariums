@@ -629,3 +629,9 @@ body.syncing::before { content: ""; position: fixed; top: 0; left: 0; right: 0; 
 .trt-dose-hint { margin: -4px 0 12px; }
 .trt-dose-hint[hidden] { display: none; }
 .size-row input[readonly] { flex: 0 0 96px; background: var(--surface-2); color: var(--muted); text-align: center; }
+.rline-new { margin-bottom: 10px; }
+.rline-new[hidden] { display: none; }
+.rline-new .hint { display: block; margin-top: 4px; }
+.rl-tally { margin-top: 8px; font-size: 13px; color: var(--muted); }
+.rl-tally.warn { color: #8a5a00; font-weight: 600; }
+@media (prefers-color-scheme: dark) { .rl-tally.warn { color: #f3c56b; } }

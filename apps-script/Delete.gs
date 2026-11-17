@@ -105,6 +105,7 @@ function apiDeleteRecord_(req, user) {
       counts["receipt links"] = apiDeleteRowsWhere_(apiTabOrNull_(RECEIPTS_CONFIG.linksSheetName), "Item ID", is).count;
       counts["compatibility checks"] = apiDeleteRowsWhere_(apiTabOrNull_(WISH_CONFIG.compatSheetName), "Tank ID", is).count;
       counts["treatments (and their doses)"] = apiDeleteTreatmentsWhere_("Tank ID", id, user);
+      counts["price tracker rows"] = apiDeletePricesForRecord_(id, user);
       // Take the tank off every user's Assigned Tanks list.
       const usersSheet = apiEnsureSupportTabs_().users;
       const col = apiHeaderMap_(usersSheet).map["assigned tanks"];

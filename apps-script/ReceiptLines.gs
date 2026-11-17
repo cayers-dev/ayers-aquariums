@@ -10,6 +10,11 @@
 //   - Editing or deleting a line undoes the price it created (or puts the old date back).
 // ============================================================
 
+// Categories a receipt line can create a record in. Tanks and equipment are one record
+// per unit bought (they have their own serial numbers); the rest are one record whatever the qty.
+const RLINE_NEW_TYPES = ["tanks", "species", "equipment", "plants", "medications"];
+const RLINE_UNIQUE_TYPES = ["tanks", "equipment"];
+
 const RLINE_CONFIG = {
    sheetName: "Receipt Lines",
    prefix: "RL-",
@@ -43,11 +48,34 @@ function apiCleanReceiptLine_(raw) {
    const unit = String(raw.unit || "").trim() ? PRICE_CONFIG.units.find(u => u.toLowerCase() === String(raw.unit).trim().toLowerCase()) : "";
    if (unit === undefined) throw apiError_("INVALID", "Choose a unit: " + PRICE_CONFIG.units.join(", ") + ".");
    if (!item.priceItemId && !item.recordId && !String(item.name || "").trim()) throw apiError_("INVALID", "Every line needs an item.");
+   if (item.newType && RLINE_NEW_TYPES.indexOf(String(item.newType)) === -1) throw apiError_("INVALID", "Choose what kind of record to add the new item as.");
    return { item: item, qty: qty, price: price === "" ? "" : Math.round(price * 100) / 100, size: size, unit: unit || "" };
 }
 
 // The record ID and display name for a line's item (without creating anything).
-function apiLineItemInfo_(item) {
+function apiLineItemInfo_(item, user, receiptId) {
+   // A brand-new record: tank, species, equipment, plant or medication.
+   if (item.newType) {
+      const type = String(item.newType);
+      if (RLINE_NEW_TYPES.indexOf(type) === -1) throw apiError_("INVALID", "Choose what kind of record to add the new item as.");
+      const name = String(item.name || "").replace(/\s+/g, " ").trim();
+      if (!name) throw apiError_("INVALID", "A new " + API_TABLES[type].label.toLowerCase() + " needs a name.");
+      // Only admins add records to the shared lists.
+      if (user.role !== "Admin") throw apiError_("FORBIDDEN", "Only admins can add new records, so “" + name + "” can't be added as a " +
+         API_TABLES[type].label.toLowerCase() + " here. Leave it as a price-tracker item, or ask an admin to add the record.");
+      if (!receiptId) return { recordId: "", priceItemId: "", name: name, newType: type };   // checking only
+      // Tanks and equipment are one record per unit, so two of the same name are expected.
+      // For the rest, a record of that name already there is used instead of a second one.
+      const same = RLINE_UNIQUE_TYPES.indexOf(type) === -1
+         ? apiReadTable_(type).rows.find(r => apiLineRecordName_({ table: type, rec: r }).replace(/\s+/g, " ").trim().toLowerCase() === name.toLowerCase())
+         : null;
+      if (same) return apiLineItemInfo_({ recordId: same[API_TABLES[type].id] }, user, receiptId);
+      const rid = apiCreateLineRecord_(type, name, user, receiptId);
+      // Prices saved earlier against a typed item of the same name move onto the new record.
+      const moved = apiMergeTypedPriceItem_(name, rid, user);
+      const pi = apiReadPriceItems_().find(r => r["Record ID"] === rid);
+      return { recordId: rid, priceItemId: pi ? pi["Price Item ID"] : "", name: name, created: rid, movedPrices: moved };
+   }
    if (item.priceItemId) {
       const pi = apiReadPriceItems_().find(r => r["Price Item ID"] === item.priceItemId);
       if (!pi) throw apiError_("NOT_FOUND", "An item on this receipt is no longer in the price tracker.");
@@ -71,31 +99,33 @@ const apiLineRecordName_ = rec => rec.table === "medications" ? String(rec.rec["
 
 // Puts one line's price into the price tracker. Returns { priceId, action, previousDate, note }.
 function apiApplyLinePrice_(receipt, line, info, user) {
+   // Every line gets an entry in the price tracker, so an item bought without a price
+   // is still there to price later.
+   const item = apiPriceItemFor_(info.priceItemId ? { priceItemId: info.priceItemId } : info.recordId ? { recordId: info.recordId } : { name: info.name }, user);
+   info.priceItemId = item.id;
    if (line.price === "") return { action: "none", note: "no price" };
    if (!line.size || !line.unit) return { action: "none", note: "no size" };
    const vendor = String(receipt["Vendor"] || "").trim();
    const dateText = String(receipt["Purchase Date"] || "").trim();
    if (!vendor) return { action: "none", note: "receipt has no vendor" };
    if (!dateText) return { action: "none", note: "receipt has no purchase date" };
-   const item = apiPriceItemFor_(info.priceItemId ? { priceItemId: info.priceItemId } : info.recordId ? { recordId: info.recordId } : { name: info.name }, user);
-   info.priceItemId = item.id;
    const each = Math.round(line.price / line.qty * 100) / 100;
    const date = apiParseDate_(dateText.slice(0, 10));
    const dkey = Utilities.formatDate(date, apiSs_().getSpreadsheetTimeZone(), "yyyy-MM-dd");
    const key = p => String(p["Date Gathered"] || "") + " " + String(p["Added At"] || "");
-   const latest = apiReadPrices_().filter(p => p["Price Item ID"] === item.id && String(p["Location"]).trim().toLowerCase() === vendor.toLowerCase())
+   const latest = apiReadPrices_().filter(p => p["Price Item ID"] === info.priceItemId && String(p["Location"]).trim().toLowerCase() === vendor.toLowerCase())
       .sort((a, b) => key(b).localeCompare(key(a)))[0];
    const same = latest && Math.abs(Number(latest["Price"]) - each) < 0.005 && Number(latest["Size"]) === Number(line.size) && latest["Unit"] === line.unit;
    if (same) {
       const old = String(latest["Date Gathered"] || "");
       if (dkey > old) {
          const changes = apiWriteChanges_(apiPricesSheet_(), latest._row, latest, { "Date Gathered": date });
-         apiLog_(user, "Edit", "Prices", latest["Price ID"] + " / " + item.id, changes.join("; ") + " — same price on receipt " + receipt["Receipt ID"]);
+         apiLog_(user, "Edit", "Prices", latest["Price ID"] + " / " + info.priceItemId, changes.join("; ") + " — same price on receipt " + receipt["Receipt ID"]);
          return { priceId: latest["Price ID"], action: "date", previousDate: old };
       }
       return { priceId: latest["Price ID"], action: "same" };
    }
-   const added = apiAddPrice_({ item: { priceItemId: item.id }, location: vendor, price: each, size: line.size, unit: line.unit, date: dkey }, user);
+   const added = apiAddPrice_({ item: { priceItemId: info.priceItemId }, location: vendor, price: each, size: line.size, unit: line.unit, date: dkey }, user);
    return { priceId: added.priceId, action: "added" };
 }
 
@@ -124,9 +154,21 @@ function apiAddReceiptLines_(receipt, lines, user) {
    const sheet = apiReceiptLinesSheet_();
    const existing = apiReadReceiptLines_();
    let next = existing.reduce((m, r) => { const n = Number(String(r["Line ID"]).replace(/^\D+/, "")); return isNaN(n) ? m : Math.max(m, n); }, 0);
-   const toLink = [], skipped = [], notes = [], onHand = [];
-   lines.forEach((line, i) => {
-      const info = apiLineItemInfo_(line.item);
+   const toLink = [], skipped = [], notes = [], onHand = [], created = [];
+   // Two of the same new tank or piece of equipment become one line (and one record) each,
+   // with the line's price split between them.
+   const rows = [];
+   lines.forEach(line => {
+      const n = Math.round(Number(line.qty) || 1);
+      if (line.item && line.item.newType && RLINE_UNIQUE_TYPES.indexOf(String(line.item.newType)) !== -1 && n > 1) {
+         for (let k = 0; k < n; k++) {
+            rows.push(Object.assign({}, line, { qty: 1, price: line.price === "" ? "" : Math.round(line.price / n * 100) / 100 }));
+         }
+      } else rows.push(line);
+   });
+   rows.forEach((line, i) => {
+      const info = apiLineItemInfo_(line.item, user, receipt["Receipt ID"]);
+      if (info.created) created.push(info.created + " " + info.name + (info.movedPrices ? " (" + info.movedPrices + " saved price" + (info.movedPrices === 1 ? "" : "s") + " moved over)" : ""));
       const res = apiApplyLinePrice_(receipt, line, info, user);
       const id = RLINE_CONFIG.prefix + (++next);
       apiAppendRow_(sheet, {
@@ -141,6 +183,7 @@ function apiAddReceiptLines_(receipt, lines, user) {
       if (stocked) onHand.push(stocked);
       if (info.recordId) toLink.push(info.recordId);
    });
+   if (created.length) notes.push("Added to your records: " + created.join(", "));
    // Link records the person may link; skip the rest.
    let linked = [];
    const allowed = toLink.filter((id, i) => toLink.indexOf(id) === i).filter(id => {
@@ -149,8 +192,8 @@ function apiAddReceiptLines_(receipt, lines, user) {
    if (allowed.length) linked = apiAddReceiptLinks_(apiEnsureReceiptTabs_(), receipt["Receipt ID"], allowed, user);
    if (skipped.length) notes.push("Not linked (not in your tanks; an admin can link them): " + skipped.join(", "));
    if (onHand.length) notes.push("Marked on hand: " + onHand.filter((x, i, a) => a.indexOf(x) === i).join(", "));
-   apiLog_(user, "Add lines", "Receipt Lines", receipt["Receipt ID"], lines.length + " line" + (lines.length === 1 ? "" : "s"));
-   return { lines: lines.length, linked: linked, notes: notes };
+   apiLog_(user, "Add lines", "Receipt Lines", receipt["Receipt ID"], rows.length + " line" + (rows.length === 1 ? "" : "s"));
+   return { lines: rows.length, linked: linked, notes: notes, created: created };
 }
 
 // Removes a receipt's lines, undoing their prices (newest first).
@@ -164,11 +207,11 @@ function apiRemoveReceiptLines_(receipt, user) {
 
 // req: { id, lines: [...] } — replaces the receipt's lines (Admins).
 function apiSaveReceiptLines_(req, user) {
-   apiRequireAdmin_(user);
+   apiRequireReceipts_(user);
    const receipt = apiReadReceipts_().find(r => r["Receipt ID"] === req.id);
    if (!receipt) throw apiError_("NOT_FOUND", "That receipt no longer exists.");
    const lines = (req.lines || []).map(apiCleanReceiptLine_);
-   lines.forEach(l => apiLineItemInfo_(l.item));   // check every item before changing anything
+   lines.forEach(l => apiLineItemInfo_(l.item, user));   // check every item before changing anything
    const removed = apiRemoveReceiptLines_(receipt, user);
    const out = lines.length ? apiAddReceiptLines_(receipt, lines, user) : { lines: 0, linked: [], notes: [] };
    if (removed && !lines.length) apiLog_(user, "Delete lines", "Receipt Lines", receipt["Receipt ID"], removed + " line" + (removed === 1 ? "" : "s"));
@@ -185,4 +228,57 @@ function apiRedoReceiptLines_(before, after, user) {
    }));
    apiRemoveReceiptLines_(before, user);
    apiAddReceiptLines_(after, lines, user);
+}
+
+
+// Creates the record a receipt line asked for, with just its name; the rest is filled in later.
+function apiCreateLineRecord_(type, name, user, receiptId) {
+   const def = API_TABLES[type];
+   const sheet = apiSheet_(def.sheetKey);
+   const id = apiNextId_(type);
+   const values = {};
+   values[def.id] = id;
+   if (type === "tanks") values["Tank Name"] = name;
+   else if (type === "medications") values["Product Name"] = name;
+   else if (type === "equipment") {
+      // "Fluval M150" becomes Manufacturer "Fluval" + Filter Model "M150" when the
+      // name starts with a manufacturer already on the list; otherwise it all goes in the model.
+      const mans = (apiReadLists_(apiSs_())["Manufacturer"] || []).slice().sort((a, b) => String(b).length - String(a).length);
+      const hit = mans.find(m => String(m) && name.toLowerCase().indexOf(String(m).toLowerCase() + " ") === 0);
+      values["Manufacturer"] = hit || "";
+      values["Filter Model"] = hit ? name.slice(String(hit).length).trim() : name;
+   } else values["Common Name"] = name;
+   if (apiHasHeader_(sheet, "Status")) values["Status"] = "Active";
+   apiAppendRow_(sheet, values);
+   apiLog_(user, "Add", def.label, id, apiDescribe_(values) + " — from receipt " + receiptId);
+   return id;
+}
+
+// Moves a typed price item's prices onto a record's price item, then removes the typed one.
+// Returns how many prices moved.
+function apiMergeTypedPriceItem_(name, recordId, user) {
+   const typed = apiReadPriceItems_().find(r => !r["Record ID"] && String(r["Item Name"]).trim().toLowerCase() === name.toLowerCase());
+   if (!typed) return 0;
+   const target = apiPriceItemFor_({ recordId: recordId }, user);
+   if (target.id === typed["Price Item ID"]) return 0;
+   const prices = apiPricesSheet_();
+   let moved = 0;
+   apiReadPrices_().filter(p => p["Price Item ID"] === typed["Price Item ID"]).forEach(p => {
+      apiWriteChanges_(prices, p._row, p, { "Price Item ID": target.id });
+      moved++;
+   });
+   const lineSheet = apiSs_().getSheetByName(RLINE_CONFIG.sheetName);
+   if (lineSheet) {
+      apiReadReceiptLines_().filter(l => l["Price Item ID"] === typed["Price Item ID"])
+         .forEach(l => apiWriteChanges_(lineSheet, l._row, l, { "Price Item ID": target.id, "Record ID": recordId }));
+   }
+   // The typed item's picture becomes the record's list picture if it hasn't got one.
+   const rec = apiPriceRecord_(recordId);
+   if (typed["Picture URL"] && rec && apiHasHeader_(apiSheet_(API_TABLES[rec.table].sheetKey), "Thumbnail URL") && !String(rec.rec["Thumbnail URL"] || "")) {
+      apiSetThumbnail_(user, rec.table, rec.rec, typed["Picture URL"]);
+   }
+   apiDeleteRowsWhere_(apiPriceItemsSheet_(), "Price Item ID", v => String(v).trim() === typed["Price Item ID"]);
+   apiLog_(user, "Merge", PRICE_CONFIG.itemsSheet, typed["Price Item ID"],
+           "“" + name + "” merged into " + recordId + " (" + target.id + "); " + moved + " price" + (moved === 1 ? "" : "s") + " moved");
+   return moved;
 }
