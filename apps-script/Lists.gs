@@ -136,7 +136,11 @@ function apiLookupValueFor_(f, v, user) {
    const hit = (f.options || []).find(o => String(o).toLowerCase() === String(v).toLowerCase());
    if (hit !== undefined) return hit;
    if (user && user.role === "Admin" && f.lookup && f.name !== "Status") {
-      return f.lookup === "Vendor" ? apiEnsureVendor_(v, user) : apiEnsureLookupValue_(f.lookup, v, user);
+      const added = f.lookup === "Vendor" ? apiEnsureVendor_(v, user) : apiEnsureLookupValue_(f.lookup, v, user);
+      // DropDownOptions reads Lookups by formula, and the sheet's own dropdowns read
+      // DropDownOptions: recalculate now, or writing the new value is refused.
+      SpreadsheetApp.flush();
+      return added;
    }
    if (f.strict) throw apiError_("INVALID", f.name + " must be one of: " + f.options.join(", "));
    return v;

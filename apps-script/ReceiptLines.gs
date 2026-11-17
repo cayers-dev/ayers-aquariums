@@ -256,19 +256,24 @@ function apiCreateLineRecord_(type, name, user, receiptId) {
    const def = API_TABLES[type];
    const sheet = apiSheet_(def.sheetKey);
    const id = apiNextId_(type);
-   const values = {};
-   values[def.id] = id;
-   if (type === "tanks") values["Tank Name"] = name;
-   else if (type === "medications") values["Product Name"] = name;
+   const raw = {};
+   if (type === "tanks") raw["Tank Name"] = name;
+   else if (type === "medications") raw["Product Name"] = name;
    else if (type === "equipment") {
-      // "Fluval M150" becomes Manufacturer "Fluval" + Filter Model "M150" when the
-      // name starts with a manufacturer already on the list; otherwise it all goes in the model.
+      // "Fluval M150" becomes Manufacturer "Fluval" + Filter Model "M150" when the name
+      // starts with a manufacturer already on the list. Anything else is named by its
+      // Category, the way the other gear is ("Stand, Aquarium") — Filter Model is for
+      // filters, and its dropdown shouldn't fill up with specimen containers.
       const mans = (apiReadLists_(apiSs_())["Manufacturer"] || []).slice().sort((a, b) => String(b).length - String(a).length);
       const hit = mans.find(m => String(m) && name.toLowerCase().indexOf(String(m).toLowerCase() + " ") === 0);
-      values["Manufacturer"] = hit || "";
-      values["Filter Model"] = hit ? name.slice(String(hit).length).trim() : name;
-   } else values["Common Name"] = name;
-   if (apiHasHeader_(sheet, "Status")) values["Status"] = "Active";
+      if (hit) { raw["Manufacturer"] = hit; raw["Filter Model"] = name.slice(String(hit).length).trim(); }
+      else raw["Category"] = name;
+   } else raw["Common Name"] = name;
+   if (apiHasHeader_(sheet, "Status")) raw["Status"] = "Active";
+   // The same checks the Add form runs: a value that's new to a dropdown is added to
+   // its list first (Lists.gs), so the sheet's own validation accepts it.
+   const values = apiCleanValues_(type, raw, user);
+   values[def.id] = id;
    apiAppendRow_(sheet, values);
    apiLog_(user, "Add", def.label, id, apiDescribe_(values) + " — from receipt " + receiptId);
    return id;
