@@ -207,11 +207,14 @@ function apiDeletePriceItem_(req, user) {
    const rec = apiReadPriceItems_().find(r => r["Price Item ID"] === req.priceItemId);
    if (!rec) throw apiError_("NOT_FOUND", "That item is no longer in the price tracker.");
    const gone = apiDeleteRowsWhere_(apiSs_().getSheetByName(PRICE_CONFIG.pricesSheet), "Price Item ID", v => String(v) === rec["Price Item ID"]);
+   // Receipt lines that pointed at this item would be left dangling (ReceiptLines.gs).
+   const lines = apiRemoveReceiptLinesFor_("Price Item ID", rec["Price Item ID"]);
    apiPriceItemsSheet_().deleteRow(rec._row);
    apiTrashPricePicture_(rec, rec["Picture URL"]);
    apiLog_(user, "Delete", "Price Items", rec["Price Item ID"],
-           (rec["Record ID"] || rec["Item Name"]) + " — also deleted " + gone.count + " price" + (gone.count === 1 ? "" : "s"));
-   return { deleted: 1, prices: gone.count };
+           (rec["Record ID"] || rec["Item Name"]) + " — also deleted " + gone.count + " price" + (gone.count === 1 ? "" : "s") +
+           (lines ? " and " + lines + " receipt line" + (lines === 1 ? "" : "s") : ""));
+   return { deleted: 1, prices: gone.count, lines: lines };
 }
 
 // Picture for a typed price item (linked items use their record's list picture).

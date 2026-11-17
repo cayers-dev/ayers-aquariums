@@ -59,15 +59,14 @@
   const $ = (sel, el) => (el || document).querySelector(sel);
   const $$ = (sel, el) => Array.from((el || document).querySelectorAll(sel));
 
+  // "2026-11-16" for a date input or an ID; blank for no date.
+  const fmtISO = d => d ? d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0") : "";
   function fmtDate(s) {
     const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || ""));
     if (!m) return s || "";
     return new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
   }
-  function today() {
-    const d = new Date();
-    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
-  }
+  const today = () => fmtISO(new Date());
   function parseJwt(t) {
     try {
       const p = t.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
@@ -1326,7 +1325,7 @@
              html: hero + doseList + medLink + '<div class="section"><div class="section-head"><h3>Details</h3></div><div class="card kv">' +
                kv.map(x => '<div class="k">' + esc(x[0]) + '</div><div>' + esc(x[1]) + '</div>').join("") + '</div></div>' };
   }
-  const fmtISO = d => d ? d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0") : "";
+
 
   // Start or edit a course. tankId preselects a tank; id edits an existing course.
   function treatmentForm(tankId, id) {
@@ -2608,7 +2607,9 @@
         n("water test sessions (and their readings)", state.waterSessions.filter(a => isId(a, "Tank ID")).length) +
         n("water changes", state.waterChanges.filter(a => isId(a, "Tank ID")).length) +
         n("receipt links", state.receiptLinks.filter(a => isId(a, "Item ID")).length) +
-        n("users' tank lists (the tank is taken off)", (state.users || []).filter(u => u.tanks.indexOf(id) !== -1).length);
+        n("users' tank lists (the tank is taken off)", (state.users || []).filter(u => u.tanks.indexOf(id) !== -1).length) +
+        n("receipt item lines", (state.receiptLines || []).filter(l => l["Record ID"] === id).length) +
+        n("treatments (and their doses)", (state.treatments || []).filter(t => t["Tank ID"] === id).length);
     } else {
       const ph = state.photos.filter(p => p["Item ID"] === id).length;
       also = n("tank assignment rows (current and past)", state.data.assignments.filter(a => isId(a, "Item ID")).length) +
@@ -2616,6 +2617,8 @@
         n("wishes (and their compatibility checks)", state.wishes.filter(w => w["Item ID"] === id).length) +
         n("photos (files moved to Drive trash)", ph) +
         n("price tracker prices (and its price item)", (() => { const pi = state.priceItems.find(x => x["Record ID"] === id); return pi ? state.prices.filter(x => x["Price Item ID"] === pi["Price Item ID"]).length || 1 : 0; })()) +
+        n("receipt item lines", (state.receiptLines || []).filter(l => l["Record ID"] === id).length) +
+        n("treatments (and their doses)", type === "medications" ? (state.treatments || []).filter(t => t["Product ID"] === id).length : 0) +
         (driveId(r["Thumbnail URL"]) && !ph ? "<li>its uploaded list picture (moved to Drive trash)</li>" : "");
     }
     openSheet({
@@ -4718,7 +4721,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "45";
+  const APP_VERSION = "46";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

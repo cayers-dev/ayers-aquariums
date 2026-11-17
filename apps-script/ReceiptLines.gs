@@ -282,3 +282,12 @@ function apiMergeTypedPriceItem_(name, recordId, user) {
            "“" + name + "” merged into " + recordId + " (" + target.id + "); " + moved + " price" + (moved === 1 ? "" : "s") + " moved");
    return moved;
 }
+
+
+// Removes receipt lines that point at a record or price item that no longer exists.
+// Their prices are already gone with the record, so nothing is undone here.
+function apiRemoveReceiptLinesFor_(header, id) {
+   const sheet = apiTabOrNull_(RLINE_CONFIG.sheetName);
+   if (!sheet) return 0;
+   return apiDeleteRowsWhere_(sheet, header, v => String(v).trim() === String(id).trim()).count;
+}

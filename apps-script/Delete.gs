@@ -106,6 +106,7 @@ function apiDeleteRecord_(req, user) {
       counts["compatibility checks"] = apiDeleteRowsWhere_(apiTabOrNull_(WISH_CONFIG.compatSheetName), "Tank ID", is).count;
       counts["treatments (and their doses)"] = apiDeleteTreatmentsWhere_("Tank ID", id, user);
       counts["price tracker rows"] = apiDeletePricesForRecord_(id, user);
+      counts["receipt item lines"] = apiRemoveReceiptLinesFor_("Record ID", id);
       // Take the tank off every user's Assigned Tanks list.
       const usersSheet = apiEnsureSupportTabs_().users;
       const col = apiHeaderMap_(usersSheet).map["assigned tanks"];
@@ -141,6 +142,7 @@ function apiDeleteRecord_(req, user) {
       // Price tracker (Prices.gs): its price item and every price gathered for it.
       counts["price tracker rows"] = apiDeletePricesForRecord_(id, user);
       if (table === "medications") counts["treatments (and their doses)"] = apiDeleteTreatmentsWhere_("Product ID", id, user);
+      counts["receipt item lines"] = apiRemoveReceiptLinesFor_("Record ID", id);
    }
 
    // The record itself (found again by ID, since rows above may be on other tabs only).
