@@ -1733,7 +1733,7 @@
   }
 
   function viewLists() {
-    const types = state.lookupTypes || [];
+    const types = (state.lookupTypes || []).slice().sort((a, b) => String(a).localeCompare(String(b)));
     const q = String(state.listQuery || "").trim().toLowerCase();
     const cards = types.map(type => {
       const rows = (state.lookups || []).filter(r => r.type === type)
@@ -5045,7 +5045,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "51";
+  const APP_VERSION = "52";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
