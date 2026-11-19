@@ -403,7 +403,16 @@ function apiReadLists_(ss) {
       if (!lists[name]) lists[name] = lists[k];
       delete lists[k];
    });
+   // Every dropdown reads in alphabetical order, wherever its values came from.
+   Object.keys(lists).forEach(k => lists[k] = apiSortList_(lists[k]));
    return lists;
+}
+
+// A dropdown's values in alphabetical order (capitals ignored), duplicates dropped.
+function apiSortList_(values) {
+   const seen = {}, out = [];
+   (values || []).forEach(v => { const k = String(v).toLowerCase(); if (!seen[k]) { seen[k] = true; out.push(v); } });
+   return out.sort((a, b) => String(a).localeCompare(String(b), undefined, { sensitivity: "base" }));
 }
 
 // Describes each editable field so the app can build its forms.

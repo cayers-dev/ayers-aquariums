@@ -435,7 +435,7 @@
     state.hasReceiptLines = Array.isArray(r.receiptLines);
     state.lookupTypes = r.lookupTypes || [];
     state.prices = r.prices || [];
-    state.priceUnits = r.priceUnits || ["oz", "lb", "g", "kg", "mL", "L", "fl oz", "gal", "count", "each"];
+    state.priceUnits = alpha(r.priceUnits || ["oz", "lb", "g", "kg", "mL", "L", "fl oz", "gal", "count", "each"]);
     state.photosOn = Array.isArray(r.photos);   // false until the server has Photos.gs
     if (r.wishOptions) state.wishOptions = r.wishOptions;
   }
@@ -794,6 +794,8 @@
                       count: ["count", 1], each: ["count", 1] };
   const unitKind = u => (UNIT_INFO[u] || ["other", 1])[0];
   const unitShort = u => u === "count" ? "ct" : u;
+  // Dropdown values always read alphabetically, including a value kept for one record.
+  const alpha = list => (list || []).slice().sort((a, b) => String(a).localeCompare(String(b), undefined, { sensitivity: "base" }));
   const findPriceItem = id => state.priceItems.find(p => p["Price Item ID"] === id);
   const pricesFor = id => state.prices.filter(p => p["Price Item ID"] === id);
   const ONE_LABEL = { species: "Species", equipment: "Equipment", plants: "Plant", medications: "Medication", foods: "Food", tanks: "Tank" };
@@ -1005,7 +1007,7 @@
   }
   // A unit that's been turned off since it was saved stays in the list for that record,
   // so editing it doesn't silently change the unit.
-  const unitChoices = v => state.priceUnits.concat(v && state.priceUnits.indexOf(v) === -1 ? [v] : []);
+  const unitChoices = v => alpha(state.priceUnits.concat(v && state.priceUnits.indexOf(v) === -1 ? [v] : []));
   const unitSelectHtml = (name, v) => '<select id="f_' + name + '" name="' + name + '" required data-label="Unit"><option value="">Unit</option>' +
     unitChoices(v).map(u => '<option value="' + esc(u) + '"' + (u === v ? " selected" : "") + '>' + esc(unitShort(u)) + '</option>').join("") + '</select>';
   function priceFieldsHtml(vals) {
@@ -1358,7 +1360,7 @@
     const meds = state.data.medications.filter(m => !isRetired(m))
       .sort((a, b) => String(TYPES.medications.title(a)).localeCompare(String(TYPES.medications.title(b))))
       .map(m => ({ value: m["Product ID"], label: TYPES.medications.title(m), sub: [m["Product ID"], m["Product Type"], m["Standard Dose"]].filter(Boolean).join(" · ") }));
-    const units = (state.doseUnits || []).map(u => ({ value: u, label: u }));
+    const units = alpha(state.doseUnits || []).map(u => ({ value: u, label: u }));
     openSheet({
       title: t ? "Edit treatment" : "Start treatment",
       submitLabel: t ? "Save" : "Start",
@@ -1496,7 +1498,7 @@
 
   function stockForm(opts) {
     const cur = opts.current || "";
-    const options = (state.stockOptions || []).slice();
+    const options = alpha(state.stockOptions || []);
     if (cur && options.indexOf(cur) === -1) options.unshift(cur);
     openSheet({
       title: "Stock",
@@ -2531,9 +2533,8 @@
     const a = state.data.assignments.find(x => x["Tank ID"] === tankId && x["Item ID"] === itemId && isActiveAssignment(x));
     if (!a) return;
     const food = findRec("foods", itemId);
-    const freqs = (state.feedFrequencies || []).slice();
     const cur = String(a["Feed Frequency"] || "").trim();
-    if (cur && freqs.indexOf(cur) === -1) freqs.push(cur);
+    const freqs = alpha((state.feedFrequencies || []).concat(cur && (state.feedFrequencies || []).indexOf(cur) === -1 ? [cur] : []));
     openSheet({
       title: "Feeding · " + (food ? TYPES.foods.title(food) : itemId),
       submitLabel: "Save",
@@ -4579,9 +4580,9 @@
       if (!canLogTank(tankId)) tankId = loggable[0]["Tank ID"];
     } else tankId = rec["Tank ID"];
     $$(".sheet-backdrop").forEach(b => b.remove()); document.body.style.overflow = "";
-    const types = (state.maintNoteTypes || []).slice();
     const cur = rec || from || {};
-    if (cur["Maintenance Type"] && types.indexOf(cur["Maintenance Type"]) === -1) types.push(cur["Maintenance Type"]);
+    const kept = cur["Maintenance Type"] && (state.maintNoteTypes || []).indexOf(cur["Maintenance Type"]) === -1 ? [cur["Maintenance Type"]] : [];
+    const types = alpha((state.maintNoteTypes || []).concat(kept));
     const editable = !rec || canCorrectBy(rec["Logged By"]);
     // Equipment in the tank, so a note can point at the thing it was about.
     const itemsFor = tank => {
@@ -5048,7 +5049,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "53";
+  const APP_VERSION = "54";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

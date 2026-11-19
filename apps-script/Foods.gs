@@ -99,12 +99,12 @@ function apiUpdateAssignment_(req, user) {
 // The active Lookups values for how often, with the defaults as a fallback.
 function apiFeedFrequencies_() {
    const list = apiReadLookups_().filter(r => r.type === FOOD_CONFIG.frequencyList && !r.inactive).map(r => r.value);
-   return list.length ? list : FOOD_CONFIG.defaultFrequencies.slice();
+   return apiSortList_(list.length ? list : FOOD_CONFIG.defaultFrequencies);
 }
 
 // Sent with the app's startup load, so the form can offer the two lists
 // even though neither is a DropDownOptions column.
 function apiFoodsBootstrap_() {
-   const active = type => apiReadLookups_().filter(r => r.type === type && !r.inactive).map(r => r.value);
+   const active = type => apiSortList_(apiReadLookups_().filter(r => r.type === type && !r.inactive).map(r => r.value));
    return { feedFrequencies: apiFeedFrequencies_(), foodTypes: active(FOOD_CONFIG.typeList) };
 }

@@ -25,7 +25,7 @@ const PRICE_CONFIG = {
 // The units to offer and accept: the list's active values, or the starting values.
 function apiPriceUnits_() {
    const list = apiReadLookups_().filter(r => r.type === PRICE_CONFIG.unitList && !r.inactive).map(r => r.value);
-   return list.length ? list : PRICE_CONFIG.units.slice();
+   return apiSortList_(list.length ? list : PRICE_CONFIG.units);
 }
 
 // Puts the starting units on Lookups the first time, so they can be managed in the app.

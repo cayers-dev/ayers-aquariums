@@ -218,7 +218,7 @@ function apiReadMaintNotes_() {
 // The types to offer in the form: the active Lookups values for this list.
 function apiMaintNoteTypes_() {
    const types = apiReadLookups_().filter(r => r.type === MNOTE_CONFIG.typeList && !r.inactive).map(r => r.value);
-   return types.length ? types : MNOTE_CONFIG.defaultTypes.slice();
+   return apiSortList_(types.length ? types : MNOTE_CONFIG.defaultTypes);
 }
 
 function apiMaintNotesBootstrap_(user) {
