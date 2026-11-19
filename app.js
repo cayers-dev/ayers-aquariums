@@ -39,6 +39,7 @@
     waterChanges: [],
     showRetiredMaint: false,
     showRetiredNotes: false,
+    openLists: {},
     maintNotes: [],
     maintNoteTypes: [],
     feedFrequencies: [],
@@ -1740,8 +1741,14 @@
       const shown = q ? rows.filter(r => (type + " " + r.value + " " + r.description).toLowerCase().indexOf(q) !== -1) : rows;
       if (q && !shown.length) return "";
       const on = rows.filter(r => !r.inactive).length;
-      return '<div class="section"><div class="section-head"><h3>' + esc(type) + ' <span class="list-count">' + on + ' on' + (rows.length - on ? ' · ' + (rows.length - on) + ' off' : "") + '</span></h3>' +
-        '<button class="btn small" data-act="lookup-add" data-type="' + esc(type) + '">' + ICONS.plus + 'Add value</button></div>' +
+      // Lists start closed; a search opens the ones with a match.
+      const open = q ? true : !!(state.openLists || {})[type];
+      return '<div class="section list-section' + (open ? " open" : "") + '">' +
+        '<div class="section-head list-head" data-act="toggle-list" data-type="' + esc(type) + '" role="button" tabindex="0" aria-expanded="' + open + '">' +
+        '<span class="chev" aria-hidden="true">' + (open ? "▾" : "▸") + '</span>' +
+        '<h3>' + esc(type) + ' <span class="list-count">' + on + ' on' + (rows.length - on ? ' · ' + (rows.length - on) + ' off' : "") + '</span></h3>' +
+        (open ? '<button class="btn small" data-act="lookup-add" data-type="' + esc(type) + '">' + ICONS.plus + 'Add value</button>' : "") + '</div>' +
+        (!open ? "" :
         (STATUS_LISTS.indexOf(type) !== -1 ? '<p class="hint">The app knows Active, Retired' + (type === "Tank Status" ? ", Storage" : ", Wishlist") +
           '. Any other status shows as-is and counts as not retired. Status can’t be typed in from forms.</p>' : "") +
         '<div class="card list">' + shown.map(r => {
@@ -1750,12 +1757,12 @@
             '<div class="sub">' + esc([r.description, used ? "used by " + used : "not used"].filter(Boolean).join(" · ")) + '</div></div>' +
             (r.inactive ? '<span class="pill retired">Off</span>' : "") +
             '<button class="btn small" data-act="lookup-edit" data-row="' + r.row + '">Edit</button></div>';
-        }).join("") + '</div></div>';
+        }).join("") + '</div>') + '</div>';
     }).join("");
     return {
       title: "Dropdown lists", back: true, keepScroll: true,
       html: '<input class="search" type="search" placeholder="Search lists and values…" aria-label="Search dropdown lists" value="' + esc(state.listQuery || "") + '" data-act="list-search">' +
-        '<p class="hint">These are the choices in the app’s dropdowns, kept on the sheet’s Lookups tab. Turned-off values are hidden from dropdowns but kept, so old records still show them.</p>' +
+        '<p class="hint">These are the choices in the app’s dropdowns, kept on the sheet’s Lookups tab. Tap a list to open it. Turned-off values are hidden from dropdowns but kept, so old records still show them.</p>' +
         (cards || '<div class="empty">' + (types.length ? "Nothing matches." : "No lists found on the Lookups tab.") + '</div>')
     };
   }
@@ -4903,6 +4910,12 @@
       case "add-user": userForm(); break;
       case "log-water": logWaterForm(d.tank); break;
       case "log-wc": e.stopPropagation(); waterChangeForm(d.tank); break;
+      case "toggle-list": {
+        const o = state.openLists || (state.openLists = {});
+        if (o[d.type]) delete o[d.type]; else o[d.type] = true;
+        render();
+        break;
+      }
       case "feeding": e.stopPropagation(); feedingForm(d.tank, d.item); break;
       case "add-note": e.stopPropagation(); maintNoteForm(d.tank); break;
       case "edit-note": e.stopPropagation(); maintNoteForm(null, d.id); break;
@@ -5032,7 +5045,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "50";
+  const APP_VERSION = "51";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

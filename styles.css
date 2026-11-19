@@ -643,3 +643,9 @@ body.syncing::before { content: ""; position: fixed; top: 0; left: 0; right: 0; 
 /* Feeding line on a food's tank row. */
 .feeding { font-weight: 600; }
 .list-item .body .actions { margin: 6px 0 0; }
+
+/* Dropdown lists: each list opens and closes; they start closed. */
+.list-head { cursor: pointer; align-items: center; gap: 8px; }
+.list-head .chev { width: 14px; color: var(--muted); font-size: 13px; flex: none; }
+.list-section:not(.open) .list-head { margin-bottom: 0; }
+.list-head h3 { flex: 1; }
