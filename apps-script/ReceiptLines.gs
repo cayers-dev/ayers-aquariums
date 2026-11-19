@@ -45,8 +45,9 @@ function apiCleanReceiptLine_(raw) {
    if (price !== "" && (isNaN(price) || price < 0)) throw apiError_("INVALID", "Line prices must be amounts like 24.99.");
    const size = sizeText === "" ? "" : Number(sizeText);
    if (size !== "" && (isNaN(size) || size <= 0)) throw apiError_("INVALID", "Sizes must be numbers like 250.");
-   const unit = String(raw.unit || "").trim() ? PRICE_CONFIG.units.find(u => u.toLowerCase() === String(raw.unit).trim().toLowerCase()) : "";
-   if (unit === undefined) throw apiError_("INVALID", "Choose a unit: " + PRICE_CONFIG.units.join(", ") + ".");
+   const units = apiPriceUnits_();
+   const unit = String(raw.unit || "").trim() ? units.find(u => u.toLowerCase() === String(raw.unit).trim().toLowerCase()) : "";
+   if (unit === undefined) throw apiError_("INVALID", "Choose a unit: " + units.join(", ") + ".");
    if (!item.priceItemId && !item.recordId && !String(item.name || "").trim()) throw apiError_("INVALID", "Every line needs an item.");
    if (item.newType && RLINE_NEW_TYPES.indexOf(String(item.newType)) === -1) throw apiError_("INVALID", "Choose what kind of record to add the new item as.");
    return { item: item, qty: qty, price: price === "" ? "" : Math.round(price * 100) / 100, size: size, unit: unit || "" };

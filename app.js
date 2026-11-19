@@ -1003,8 +1003,11 @@
     });
     return out.sort((a, b) => a.localeCompare(b)).map(v => ({ value: v, label: v }));
   }
+  // A unit that's been turned off since it was saved stays in the list for that record,
+  // so editing it doesn't silently change the unit.
+  const unitChoices = v => state.priceUnits.concat(v && state.priceUnits.indexOf(v) === -1 ? [v] : []);
   const unitSelectHtml = (name, v) => '<select id="f_' + name + '" name="' + name + '" required data-label="Unit"><option value="">Unit</option>' +
-    state.priceUnits.map(u => '<option value="' + esc(u) + '"' + (u === v ? " selected" : "") + '>' + esc(unitShort(u)) + '</option>').join("") + '</select>';
+    unitChoices(v).map(u => '<option value="' + esc(u) + '"' + (u === v ? " selected" : "") + '>' + esc(unitShort(u)) + '</option>').join("") + '</select>';
   function priceFieldsHtml(vals) {
     return comboHtml({ name: "Location", label: "Location", mode: "free", required: true, noThumbs: true, value: vals.loc || "",
                        placeholder: "Choose or type a store", newLabel: "will be added to your Vendor list" }, storeChoices()) +
@@ -1550,7 +1553,7 @@
         '<div class="field"><label for="f_li_size_' + i + '">Size <span class="opt">each</span></label><div class="size-row">' +
           '<input type="number" step="any" inputmode="decimal" id="f_li_size_' + i + '" name="li_size_' + i + '" value="' + esc(line.size === undefined ? "" : line.size) + '">' +
           '<select id="f_li_unit_' + i + '" name="li_unit_' + i + '" aria-label="Unit"><option value="">Unit</option>' +
-            state.priceUnits.map(u => '<option value="' + esc(u) + '"' + (u === line.unit ? " selected" : "") + '>' + esc(unitShort(u)) + '</option>').join("") + '</select></div></div>' +
+            unitChoices(line.unit).map(u => '<option value="' + esc(u) + '"' + (u === line.unit ? " selected" : "") + '>' + esc(unitShort(u)) + '</option>').join("") + '</select></div></div>' +
       '</div><div class="rline-each hint"></div></div>';
   }
   function linesEditorHtml(lines, ch) {
@@ -5045,7 +5048,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "52";
+  const APP_VERSION = "53";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

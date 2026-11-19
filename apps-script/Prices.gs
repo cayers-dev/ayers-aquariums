@@ -15,8 +15,25 @@ const PRICE_CONFIG = {
    pricesSheet: "Prices",
    pricePrefix: "PR-",
    priceHeaders: ["Price ID", "Price Item ID", "Location", "Price", "Size", "Unit", "Date Gathered", "Added By", "Added At"],
+   // Units come from the Lookups tab, so they're managed on the Dropdown lists screen.
+   // These are only the starting values, seeded the first time, and the fallback if
+   // the list is ever emptied.
+   unitList: "Price Unit",
    units: ["oz", "lb", "g", "kg", "mL", "L", "fl oz", "gal", "count", "each"]
 };
+
+// The units to offer and accept: the list's active values, or the starting values.
+function apiPriceUnits_() {
+   const list = apiReadLookups_().filter(r => r.type === PRICE_CONFIG.unitList && !r.inactive).map(r => r.value);
+   return list.length ? list : PRICE_CONFIG.units.slice();
+}
+
+// Puts the starting units on Lookups the first time, so they can be managed in the app.
+function apiSeedPriceUnits_() {
+   if (apiReadLookups_().some(r => r.type === PRICE_CONFIG.unitList)) return;
+   const system = { id: "", email: "", name: "Setup", role: "Admin", tanks: [] };
+   PRICE_CONFIG.units.forEach(u => apiEnsureLookupValue_(PRICE_CONFIG.unitList, u, system));
+}
 
 function apiCanUsePrices_(user) {
    return user.role === "Admin" || user.role === "Editor";
@@ -77,7 +94,8 @@ const apiReadPrices_ = () => apiReadPriceTab_(PRICE_CONFIG.pricesSheet, "Price I
 
 function apiPricesBootstrap_() {
    const strip = r => { const o = Object.assign({}, r); delete o._row; return o; };
-   return { priceItems: apiReadPriceItems_().map(strip), prices: apiReadPrices_().map(strip), priceUnits: PRICE_CONFIG.units };
+   apiSeedPriceUnits_();
+   return { priceItems: apiReadPriceItems_().map(strip), prices: apiReadPrices_().map(strip), priceUnits: apiPriceUnits_() };
 }
 
 function apiNextPriceId_(rows, field, prefix) {
@@ -105,8 +123,9 @@ function apiCleanPrice_(req) {
    if (String(req.price || "").trim() === "" || isNaN(price) || price < 0) throw apiError_("INVALID", "Enter the price as a number, like 12.99.");
    const size = Number(String(req.size === undefined ? "" : req.size).replace(/[,\s]/g, ""));
    if (String(req.size || "").trim() === "" || isNaN(size) || size <= 0) throw apiError_("INVALID", "Enter the size as a number, like 250.");
-   const unit = PRICE_CONFIG.units.find(u => u.toLowerCase() === String(req.unit || "").trim().toLowerCase());
-   if (!unit) throw apiError_("INVALID", "Choose a unit: " + PRICE_CONFIG.units.join(", ") + ".");
+   const units = apiPriceUnits_();
+   const unit = units.find(u => u.toLowerCase() === String(req.unit || "").trim().toLowerCase());
+   if (!unit) throw apiError_("INVALID", "Choose a unit: " + units.join(", ") + ".");
    if (!req.date) throw apiError_("INVALID", "Enter the date the price was gathered.");
    const date = apiParseDate_(req.date);
    return { location: location, price: Math.round(price * 100) / 100, size: size, unit: unit, date: date };
