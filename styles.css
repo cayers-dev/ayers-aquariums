@@ -639,3 +639,7 @@ body.syncing::before { content: ""; position: fixed; top: 0; left: 0; right: 0; 
 /* Maintenance notes: the row's "Done again" button sits under the text. */
 .note-row .body .actions { margin: 6px 0 0; }
 .note-row .body .actions .btn { margin: 0; }
+
+/* Feeding line on a food's tank row. */
+.feeding { font-weight: 600; }
+.list-item .body .actions { margin: 6px 0 0; }

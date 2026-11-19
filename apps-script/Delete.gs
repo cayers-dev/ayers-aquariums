@@ -83,7 +83,7 @@ function apiDeleteRecord_(req, user) {
    apiRequireAdmin_(user);
    const table = req.table;
    const def = API_TABLES[table];
-   if (!def || !def.id || ["tanks", "species", "equipment", "plants", "medications"].indexOf(table) === -1) {
+   if (!def || !def.id || ["tanks", "species", "equipment", "plants", "medications", "foods"].indexOf(table) === -1) {
       throw apiError_("BAD_REQUEST", "That record can't be deleted.");
    }
    const id = String(req.id || "");

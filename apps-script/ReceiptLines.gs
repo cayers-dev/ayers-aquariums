@@ -12,7 +12,7 @@
 
 // Categories a receipt line can create a record in. Tanks and equipment are one record
 // per unit bought (they have their own serial numbers); the rest are one record whatever the qty.
-const RLINE_NEW_TYPES = ["tanks", "species", "equipment", "plants", "medications"];
+const RLINE_NEW_TYPES = ["tanks", "species", "equipment", "plants", "medications", "foods"];
 const RLINE_UNIQUE_TYPES = ["tanks", "equipment"];
 
 const RLINE_CONFIG = {
@@ -258,7 +258,7 @@ function apiCreateLineRecord_(type, name, user, receiptId) {
    const id = apiNextId_(type);
    const raw = {};
    if (type === "tanks") raw["Tank Name"] = name;
-   else if (type === "medications") raw["Product Name"] = name;
+   else if (type === "medications" || type === "foods") raw["Product Name"] = name;
    else if (type === "equipment") {
       // "Fluval M150" becomes Manufacturer "Fluval" + Filter Model "M150" when the name
       // starts with a manufacturer already on the list. Anything else is named by its

@@ -41,6 +41,7 @@
     showRetiredNotes: false,
     maintNotes: [],
     maintNoteTypes: [],
+    feedFrequencies: [],
     maintTank: (function () { try { return localStorage.getItem("aa_maint_tank") || ""; } catch (e) { return ""; } })(),
     wishes: [],
     compat: [],
@@ -200,6 +201,8 @@
     gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="3" width="12" height="18" rx="2"/><path d="M9 7h6M9 11h6"/><circle cx="12" cy="16" r="1.6"/></svg>',
     leaf: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19c0-8 5-14 15-15-1 10-7 15-15 15z"/><path d="M5 19l8-8"/></svg>',
     pill: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8.5" width="18" height="7" rx="3.5" transform="rotate(-40 12 12)"/><path d="M9.6 9.1l5.3 5.3" transform="rotate(0)"/></svg>',
+    // Food: a shaker tin over scattered flakes.
+    food: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4h8l-1 5H9z"/><path d="M9 9h6l1 7a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2z"/><path d="M4.5 19.5h.01M7 21.5h.01M19.5 19.5h.01M17 21.5h.01"/></svg>',
     users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.5 3.3-5.5 6.5-5.5s5.7 2 6.5 5.5"/><path d="M15.5 4.8a3.4 3.4 0 0 1 0 6.4M17.5 14.8c2 .7 3.4 2.4 4 5.2"/></svg>',
     flask: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6M10 3v6l-5.5 9.5A1.7 1.7 0 0 0 6 21h12a1.7 1.7 0 0 0 1.5-2.5L14 9V3"/><path d="M7.5 15h9"/></svg>',
     tag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8" r="1.3"/></svg>',
@@ -250,6 +253,12 @@
       sub: r => [r["Manufacturer"], r["Product Type"]].filter(Boolean).join(" · "),
       img: () => ""
     },
+    foods: {
+      label: "Food", one: "Food", id: "Food ID",
+      title: r => r["Product Name"] || r["Food ID"],
+      sub: r => [r["Manufacturer"], r["Food Type"]].filter(Boolean).join(" · "),
+      img: r => r["Thumbnail URL"]
+    },
     tanks: {
       label: "Tanks", one: "Tank", id: "Tank ID",
       title: r => r["Tank Name"] || r["Tank ID"],
@@ -257,7 +266,7 @@
       img: () => ""
     }
   };
-  const ITEM_TYPES = ["species", "equipment", "plants"];
+  const ITEM_TYPES = ["species", "equipment", "plants", "foods"];
 
   const isAdmin = () => state.me && state.me.role === "Admin";
   const canEditTank = id => isAdmin() || (state.me && state.me.role === "Editor" && state.me.tanks.indexOf(id) !== -1);
@@ -408,6 +417,7 @@
     state.waterChanges = r.waterChanges || [];
     state.maintNotes = r.maintNotes || [];
     state.maintNoteTypes = r.maintNoteTypes || [];
+    state.feedFrequencies = r.feedFrequencies || [];
     state.wishes = r.wishes || [];
     state.compat = r.compat || [];
     state.photos = r.photos || [];
@@ -663,7 +673,7 @@
     } else if (route.name === "item") {
       const type = route.args[0], T = TYPES[type];
       if (!T || !state.data[type]) return null;
-      const all = state.data[type].filter(r => !isWishItem(r))
+      const all = (state.data[type] || []).filter(r => !isWishItem(r))
         .sort((a, b) => String(T.title(a)).localeCompare(String(T.title(b)))).map(r => r[T.id]);
       lists = [browseRows(type, state.browseType === type).map(r => r[T.id]), all];
     } else if (route.name === "receipt") {
@@ -785,9 +795,9 @@
   const unitShort = u => u === "count" ? "ct" : u;
   const findPriceItem = id => state.priceItems.find(p => p["Price Item ID"] === id);
   const pricesFor = id => state.prices.filter(p => p["Price Item ID"] === id);
-  const ONE_LABEL = { species: "Species", equipment: "Equipment", plants: "Plant", medications: "Medication", tanks: "Tank" };
+  const ONE_LABEL = { species: "Species", equipment: "Equipment", plants: "Plant", medications: "Medication", foods: "Food", tanks: "Tank" };
   // Categories a receipt line can create a record in. Tanks and equipment get one record per unit.
-  const NEW_RECORD_TYPES = [["tanks", "Tank"], ["species", "Species"], ["equipment", "Equipment"], ["plants", "Plant"], ["medications", "Medication / Supplement"]];
+  const NEW_RECORD_TYPES = [["tanks", "Tank"], ["species", "Species"], ["equipment", "Equipment"], ["plants", "Plant"], ["medications", "Medication / Supplement"], ["foods", "Food"]];
   const UNIQUE_RECORD_TYPES = ["tanks", "equipment"];
   function priceItemInfo(pi) {
     const rid = pi["Record ID"];
@@ -977,7 +987,7 @@
     });
     const priced = {};
     state.priceItems.forEach(pi => { if (pi["Record ID"]) priced[pi["Record ID"]] = true; });
-    ["species", "equipment", "plants", "medications", "tanks"].forEach(ty => {
+    ["species", "equipment", "plants", "medications", "foods", "tanks"].forEach(ty => {
       const T = TYPES[ty];
       (state.data[ty] || []).filter(r => !isWishItem(r) && !isRetired(r) && !priced[r[T.id]])
         .sort((a, b) => String(T.title(a)).localeCompare(String(T.title(b))))
@@ -1843,6 +1853,7 @@
         link("#/browse", "gear", "Equipment", n(browseCount("equipment"), "active"), "equipment"),
         link("#/browse", "leaf", "Plants", n(browseCount("plants"), "active"), "plants"),
         link("#/browse", "pill", "Medications", n(browseCount("medications"), "active"), "medications"),
+        link("#/browse", "food", "Food", n(browseCount("foods"), "active"), "foods"),
         link("#/wish", "wish", "Wishlist", n(openWishes, "open") +
           (wishesNeedingTank().length ? " · " + wishesNeedingTank().length + " need a tank" : ""))
       ].concat(canReceipts() ? [link("#/receipts", "receipts", "Receipts", n(unassigned, "unassigned"))] : [])
@@ -1852,7 +1863,7 @@
                           link("#/lists", "list", "Dropdown lists", (state.lookupTypes || []).length + " lists")] : []));
     return { title: "Ayers Aquariums", html: html };
   }
-  const browseCount = type => state.data[type].filter(r => !isWishItem(r) && !isRetired(r)).length;
+  const browseCount = type => (state.data[type] || []).filter(r => !isWishItem(r) && !isRetired(r)).length;
 
   // ---------- Tanks ----------
   // The Tanks list, in the order it's shown (also used by Previous / Next).
@@ -1891,7 +1902,8 @@
     if (!t) return { title: "Tank", back: true, html: '<div class="empty">That tank wasn\'t found.</div>' };
     const editable = canEditTank(id);
     const active = tankAssignments(id, true);
-    const groups = { species: [], equipment: [], plants: [] };
+    const groups = {};
+    ITEM_TYPES.forEach(ty => groups[ty] = []);
     active.forEach(a => { const ty = itemType(a["Item ID"]); if (ty) groups[ty].push(a); });
 
     const itemRow = (a, ty) => {
@@ -1902,7 +1914,10 @@
         photoHtml(img, "thumb", 160, a["Item ID"].split("-")[0]) +
         '<div class="body"><div class="title">' + esc(T.title(r)) + '</div>' +
         '<div class="sub">' + esc([a["Item ID"], T.sub(r), a["Date Added"] ? "Added " + fmtDate(a["Date Added"]) : ""].filter(Boolean).join(" · ")) + '</div>' +
-        (a["Notes"] ? '<div class="sub">' + esc(a["Notes"]) + '</div>' : "") + '</div>' +
+        (ty === "foods" ? '<div class="sub feeding">' + esc(feedingText(a)) + '</div>' : "") +
+        (a["Notes"] ? '<div class="sub">' + esc(a["Notes"]) + '</div>' : "") +
+        (ty === "foods" && editable ? '<div class="actions"><button class="btn small" data-act="feeding" data-tank="' + esc(id) + '" data-item="' + esc(a["Item ID"]) + '">' + (feedingSet(a) ? "Change feeding" : "Set feeding") + '</button></div>' : "") +
+        '</div>' +
         (editable ? '<button class="btn small danger" data-act="remove-assignment" data-row="' + a._row + '" data-tank="' + esc(id) + '" data-item="' + esc(a["Item ID"]) + '">Remove</button>' : "") +
         '</div>';
     };
@@ -1946,7 +1961,7 @@
 
     return {
       title: t["Tank Name"], back: true,
-      html: hero + group("species", "Livestock") + group("equipment", "Equipment") + group("plants", "Plants") +
+      html: hero + group("species", "Livestock") + group("equipment", "Equipment") + group("plants", "Plants") + group("foods", "Food") +
             wishSection(id) + waterSection(id) + maintSection(id) + tankNotesSection(id) + (state.hasTreatments ? treatmentSection(id, { showPast: true }) : "") + paramsHtml + receiptsSection(id) + detailsSection("tanks", t, "Tank details") + removedHtml
     };
   }
@@ -1983,7 +1998,7 @@
     const type = state.browseType;
     const T = TYPES[type];
     const rows = browseRows(type, true);
-    const segs = ["species", "equipment", "plants", "medications"].map(t =>
+    const segs = ["species", "equipment", "plants", "medications", "foods"].map(t =>
       '<button class="' + (t === type ? "on" : "") + '" data-act="browse-type" data-type="' + t + '">' + TYPES[t].label + '</button>').join("");
     const list = rows.map(r => {
       const img = T.img(r);
@@ -2020,7 +2035,9 @@
       const addBtn = canAddItemToTank(type, r) ? '<button class="btn small" data-act="item-to-tank" data-type="' + type + '" data-id="' + esc(id) + '">' + ICONS.plus + 'Add to tank</button>' : "";
       inTanks = '<div class="section"><div class="section-head"><h3>In tanks (' + total + ')</h3>' + addBtn + '</div><div class="card list">' +
         (rows.map(a => '<a class="list-item" href="#/tank/' + encodeURIComponent(a["Tank ID"]) + '"><div class="body"><div class="title">' + esc(tankName(a["Tank ID"])) + '</div>' +
-          '<div class="sub">' + esc([a["Tank ID"], a["Date Added"] ? "Added " + fmtDate(a["Date Added"]) : ""].filter(Boolean).join(" · ")) + '</div></div></a>').join("") +
+          '<div class="sub">' + esc([a["Tank ID"], a["Date Added"] ? "Added " + fmtDate(a["Date Added"]) : ""].filter(Boolean).join(" · ")) + '</div>' +
+          // How much and how often it's fed in that tank.
+          (type === "foods" ? '<div class="sub feeding">' + esc(feedingText(a)) + '</div>' : "") + '</div></a>').join("") +
          others.slice().sort((x, y) => String(x["Tank Name"]).localeCompare(String(y["Tank Name"]))).map(a =>
           '<div class="list-item"><div class="body"><div class="title">' + esc(a["Tank Name"]) + '</div>' +
           '<div class="sub">' + esc([a["Tank ID"], a["Date Added"] ? "Added " + fmtDate(a["Date Added"]) : ""].filter(Boolean).join(" · ")) + '</div></div></div>').join("") ||
@@ -2483,13 +2500,55 @@
     });
   }
 
+  // ---------- Feeding (how much, how often) on a food's assignment ----------
+  const feedingSet = a => !!(String(a["Feed Amount"] || "").trim() || String(a["Feed Frequency"] || "").trim());
+  function feedingText(a) {
+    const amount = String(a["Feed Amount"] || "").trim(), freq = String(a["Feed Frequency"] || "").trim();
+    if (!amount && !freq) return "Feeding not set";
+    return [amount, freq].filter(Boolean).join(" · ");
+  }
+  // Every food a tank is fed, for the Food section and the food's own page.
+  const foodTanks = foodId => state.data.assignments.filter(a => a["Item ID"] === foodId && isActiveAssignment(a));
+
+  function feedingForm(tankId, itemId) {
+    const a = state.data.assignments.find(x => x["Tank ID"] === tankId && x["Item ID"] === itemId && isActiveAssignment(x));
+    if (!a) return;
+    const food = findRec("foods", itemId);
+    const freqs = (state.feedFrequencies || []).slice();
+    const cur = String(a["Feed Frequency"] || "").trim();
+    if (cur && freqs.indexOf(cur) === -1) freqs.push(cur);
+    openSheet({
+      title: "Feeding · " + (food ? TYPES.foods.title(food) : itemId),
+      submitLabel: "Save",
+      body: '<p class="meta">' + esc(tankName(tankId)) + '</p>' +
+        '<div class="field"><label for="f_famt">How much</label><input type="text" id="f_famt" maxlength="100" autocomplete="off" value="' + esc(a["Feed Amount"] || "") + '" placeholder="A small pinch"></div>' +
+        comboHtml({ name: "frequency", label: "How often", noThumbs: true, mode: isAdmin() ? "free" : "single",
+                    newLabel: "will be added to the list", value: cur,
+                    placeholder: isAdmin() ? "Choose or type how often" : "Choose how often" },
+                  freqs.map(f => ({ value: f, label: f }))) +
+        '<div class="field"><label for="f_fnotes">Notes</label><textarea id="f_fnotes" placeholder="For the plecos, after lights out">' + esc(a["Notes"] || "") + '</textarea></div>',
+      onReady: form => { $$("[data-combo]", form).forEach(wireCombo); },
+      onSubmit: async (vals, form) => {
+        const amount = $("#f_famt", form).value.replace(/\s+/g, " ").trim();
+        const notes = $("#f_fnotes", form).value;
+        const frequency = String(vals.frequency || "").replace(/\s+/g, " ").trim();
+        const changed = {};
+        if (amount !== String(a["Feed Amount"] || "").trim()) changed.amount = amount;
+        if (frequency !== cur) changed.frequency = frequency;
+        if (notes !== String(a["Notes"] || "")) changed.notes = notes;
+        if (!Object.keys(changed).length) return true;
+        return write("updateAssignment", { tankId: tankId, itemId: itemId, values: changed }, "Feeding saved");
+      }
+    });
+  }
+
   function assignmentForm(tankId) {
     const inTank = new Set(tankAssignments(tankId, true).map(a => a["Item ID"]));
     const items = [];
     ITEM_TYPES.forEach(ty => {
       const T = TYPES[ty];
       // Items already in this tank stay in the list, greyed out and labelled, so nobody thinks they're missing.
-      state.data[ty].filter(r => !isWishItem(r) && (!isRetired(r) || inTank.has(r[T.id])))
+      (state.data[ty] || []).filter(r => !isWishItem(r) && (!isRetired(r) || inTank.has(r[T.id])))
         .sort((a, b) => String(T.title(a)).localeCompare(String(T.title(b))))
         .forEach(r => {
           const there = inTank.has(r[T.id]);
@@ -2716,7 +2775,7 @@
   // ------------------------------------------------------------------
   // Receipts (admins + editors; admins edit and assign)
   // ------------------------------------------------------------------
-  const RECEIPT_LINK_TYPES = ["tanks", "species", "equipment", "plants", "medications"];
+  const RECEIPT_LINK_TYPES = ["tanks", "species", "equipment", "plants", "medications", "foods"];
 
   function recordOf(id) {
     for (const t of RECEIPT_LINK_TYPES) { const r = findRec(t, id); if (r) return { type: t, rec: r }; }
@@ -3217,7 +3276,7 @@
     const items = [];
     RECEIPT_LINK_TYPES.forEach(ty => {
       const T = TYPES[ty];
-      state.data[ty].slice().sort((x, y) => String(T.title(x)).localeCompare(String(T.title(y)))).forEach(rec => {
+      (state.data[ty] || []).slice().sort((x, y) => String(T.title(x)).localeCompare(String(T.title(y)))).forEach(rec => {
         const rid = rec[T.id];
         items.push({ value: rid, label: T.title(rec), group: T.label, img: T.img(rec),
                      sub: [T.sub(rec), isRetired(rec) ? "Retired" : ""].filter(Boolean).join(" · "),
@@ -3268,7 +3327,7 @@
   // ------------------------------------------------------------------
   // Fill with AI (species, plants, equipment, medications)
   // ------------------------------------------------------------------
-  const AI_TYPES = ["species", "plants", "equipment", "medications"];
+  const AI_TYPES = ["species", "plants", "equipment", "medications", "foods"];
   const canUseAi = () => state.me && (state.me.role === "Admin" || state.me.role === "Editor");
   // Editors can fix the details of a wishlist item they added.
   function canEditItem(type, r) {
@@ -3617,7 +3676,7 @@
           const check = () => {
             if (type === "equipment") { matches.hidden = true; return; }
             const q = [$('[name="Common Name"]', details), $('[name="Scientific Name"]', details)].map(el => el ? el.value.trim().toLowerCase() : "").filter(v => v.length >= 3);
-            const hits = !q.length ? [] : state.data[type].filter(r => !isWishItem(r) && q.some(v =>
+            const hits = !q.length ? [] : (state.data[type] || []).filter(r => !isWishItem(r) && q.some(v =>
               String(r["Common Name"] || "").toLowerCase().indexOf(v) !== -1 || String(r["Scientific Name"] || "").toLowerCase().indexOf(v) !== -1)).slice(0, 4);
             matches.hidden = !hits.length;
             const html = hits.length ? '<div class="hint">Already in your list:</div>' + hits.map(r =>
@@ -4837,6 +4896,7 @@
       case "add-user": userForm(); break;
       case "log-water": logWaterForm(d.tank); break;
       case "log-wc": e.stopPropagation(); waterChangeForm(d.tank); break;
+      case "feeding": e.stopPropagation(); feedingForm(d.tank, d.item); break;
       case "add-note": e.stopPropagation(); maintNoteForm(d.tank); break;
       case "edit-note": e.stopPropagation(); maintNoteForm(null, d.id); break;
       case "note-again": e.stopPropagation(); maintNoteForm(null, null, d.id); break;
@@ -4965,7 +5025,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "48";
+  const APP_VERSION = "49";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

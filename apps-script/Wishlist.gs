@@ -229,6 +229,7 @@ function apiCleanWish_(raw, isNew) {
 // Display name of an item: brand + model for equipment, common name otherwise.
 function apiItemTitle_(type, r) {
    if (type === "equipment") return [r["Manufacturer"], r["Filter Model"]].filter(Boolean).join(" ") || r["Category"] || r["Equipment ID"];
+   if (type === "foods" || type === "medications") return r["Product Name"] || r[API_TABLES[type].id];
    return r["Common Name"] || r[API_TABLES[type].id];
 }
 

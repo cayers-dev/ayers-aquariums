@@ -35,9 +35,13 @@ const API_TABLES = {
    equipment:       { sheetKey: "equipment",       label: "Equipment",       id: "Equipment ID", prefix: "EQ-",  required: ["Category"],     shared: true },
    plants:          { sheetKey: "plants",          label: "Plants",          id: "Plant ID",     prefix: "PL-",  required: ["Common Name"],  shared: true },
    medications:     { sheetKey: "medications",     label: "Medication and Supplements", id: "Product ID", prefix: "MED-", required: ["Product Name"], shared: true },
+   foods:           { sheetKey: "foods",           label: "Food",            id: "Food ID",      prefix: "FD-",  required: ["Product Name"], shared: true },
    assignments:     { sheetKey: "tankAssignments", label: "Tank Assignments" },
    waterParameters: { sheetKey: "waterParameters", label: "Water Parameters", required: ["Tank ID", "Parameter"] }
 };
+
+// The record types that are put in a tank (Tank Assignments).
+const API_ASSIGN_TYPES = ["species", "equipment", "plants", "foods"];
 
 // Columns filled by formulas: never written by the app.
 const API_FORMULA_COLUMNS = ["Species Info", "Tank Info", "Equipment Info", "Plant Info"];
@@ -56,6 +60,10 @@ const API_FIELD_LISTS = {
                       "Status": ["Status", true] },
    plants:          { "Difficulty": ["Difficulty", true], "Status": ["Status", true] },
    medications:     { "Stock": ["Stock Status", true] },
+   foods:           { "Food Type": ["Food Type", true], "Manufacturer": ["Manufacturer", false], "Vendor": ["Vendor", false],
+                      "Status": ["Status", true] },
+   // How often a food is fed, on the assignment that puts it in a tank (Foods.gs).
+   assignments:     { "Feed Frequency": ["Feed Frequency", false] },
    waterParameters: { "Parameter": ["Water Parameter", true] }
 };
 
@@ -121,6 +129,7 @@ function apiRoute_(req, user) {
       case "retireTestType":      return apiWrite_(() => apiRetireTestType_(req, user));
       // Maintenance (Maintenance.gs)
       case "logWaterChange":      return apiWrite_(() => apiLogWaterChange_(req, user));
+      case "updateAssignment":    return apiWrite_(() => apiUpdateAssignment_(req, user));
       case "addMaintNote":        return apiWrite_(() => apiAddMaintNote_(req, user));
       case "updateMaintNote":     return apiWrite_(() => apiUpdateMaintNote_(req, user));
       case "retireMaintNote":     return apiWrite_(() => apiRetireMaintNote_(req, user));
@@ -297,6 +306,7 @@ function apiBootstrap_(user) {
    Object.assign(out, apiWaterBootstrap_(user));
    Object.assign(out, apiMaintBootstrap_(user));
    Object.assign(out, apiMaintNotesBootstrap_(user));
+   Object.assign(out, apiFoodsBootstrap_());
    Object.assign(out, apiWishBootstrap_(user, out.data.assignments));
    Object.assign(out, apiPhotosBootstrap_());
    Object.assign(out, apiPricesBootstrap_());
@@ -447,7 +457,7 @@ function apiAdd_(req, user) {
       if (!tankId || !itemId) throw apiError_("INVALID", "Choose a tank and an item.");
       if (!apiCanEditTank_(user, tankId)) throw apiError_("FORBIDDEN", "You can't change that tank.");
       if (!apiFindById_("tanks", tankId)) throw apiError_("INVALID", "Tank " + tankId + " doesn't exist.");
-      const itemRec = ["species", "equipment", "plants"].map(t => apiFindById_(t, itemId)).find(Boolean);
+      const itemRec = API_ASSIGN_TYPES.map(t => apiFindById_(t, itemId)).find(Boolean);
       if (!itemRec) throw apiError_("INVALID", "Item " + itemId + " doesn't exist.");
       if (String(itemRec["Status"]) === "Wishlist") {
          throw apiError_("INVALID", itemId + " is on the wishlist. Use Mark purchased on its wish to add it to a tank.");
@@ -508,7 +518,7 @@ function apiAddAssignments_(req, user) {
 
    // Read each list once.
    const recs = {};
-   ["species", "equipment", "plants"].forEach(t => {
+   API_ASSIGN_TYPES.forEach(t => {
       const idCol = API_TABLES[t].id;
       apiReadTable_(t).rows.forEach(r => { if (r[idCol]) recs[r[idCol]] = { table: t, rec: r }; });
    });
@@ -518,7 +528,8 @@ function apiAddAssignments_(req, user) {
       const h = recs[id];
       if (!h) return id;
       const r = h.rec;
-      const name = h.table === "equipment" ? ([r["Manufacturer"], r["Filter Model"]].filter(Boolean).join(" ") || r["Category"]) : r["Common Name"];
+      const name = h.table === "equipment" ? ([r["Manufacturer"], r["Filter Model"]].filter(Boolean).join(" ") || r["Category"])
+                 : h.table === "foods" ? r["Product Name"] : r["Common Name"];
       return id + (name ? " " + name : "");
    };
 
@@ -781,6 +792,8 @@ function apiSs_() {
 
 // A data tab by its key in SHEET_IDS (Entry Forms.gs), found by tab ID so renaming is safe.
 function apiSheet_(sheetKey) {
+   // Foods came later and has no ID in SHEET_IDS: it's made and found by name (Foods.gs).
+   if (sheetKey === "foods") return apiEnsureFoodsTab_();
    const sheet = apiSs_().getSheetById(SHEET_IDS[sheetKey]);
    if (!sheet) throw apiError_("SETUP", "A data tab is missing (" + sheetKey + ").");
    return sheet;

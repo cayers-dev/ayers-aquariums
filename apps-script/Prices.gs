@@ -90,7 +90,7 @@ function apiNextPriceId_(rows, field, prefix) {
 
 // The record (species, equipment, plant, medication) with this ID, or null.
 function apiPriceRecord_(id) {
-   for (const t of ["species", "equipment", "plants", "medications", "tanks"]) {
+   for (const t of ["species", "equipment", "plants", "medications", "foods", "tanks"]) {
       const r = apiFindById_(t, id);
       if (r) return { table: t, rec: r };
    }
