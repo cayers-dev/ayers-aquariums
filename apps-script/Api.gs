@@ -380,14 +380,28 @@ function apiReadTable_(table) {
 function apiReadLists_(ss) {
    const sheet = ss.getSheetByName("DropDownOptions");
    const lists = {};
-   if (!sheet) return lists;
-   const values = apiGrid_(sheet).values;
-   if (!values.length) return lists;
-   const headers = values[0];
-   headers.forEach((h, c) => {
-      const name = String(h).trim();
-      if (!name || lists[name]) return;
-      lists[name] = values.slice(1).map(r => String(r[c]).trim()).filter(v => v !== "");
+   if (sheet) {
+      const values = apiGrid_(sheet).values;
+      if (values.length) {
+         values[0].forEach((h, c) => {
+            const name = String(h).trim();
+            if (!name || lists[name]) return;
+            lists[name] = values.slice(1).map(r => String(r[c]).trim()).filter(v => v !== "");
+         });
+      }
+   }
+   // Newer lists (Food Type, Feed Frequency, Maintenance Type) live on Lookups only,
+   // with no DropDownOptions column of their own: take those straight from Lookups,
+   // in the order they're listed there, skipping any turned off.
+   apiReadLookups_().forEach(r => {
+      if (r.inactive || lists[r.type]) return;
+      (lists["_lk_" + r.type] = lists["_lk_" + r.type] || []).push(r.value);
+   });
+   Object.keys(lists).forEach(k => {
+      if (k.indexOf("_lk_") !== 0) return;
+      const name = k.slice(4);
+      if (!lists[name]) lists[name] = lists[k];
+      delete lists[k];
    });
    return lists;
 }
