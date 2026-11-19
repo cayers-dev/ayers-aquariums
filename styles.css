@@ -649,3 +649,8 @@ body.syncing::before { content: ""; position: fixed; top: 0; left: 0; right: 0; 
 .list-head .chev { width: 14px; color: var(--muted); font-size: 13px; flex: none; }
 .list-section:not(.open) .list-head { margin-bottom: 0; }
 .list-head h3 { flex: 1; }
+
+/* A record form opened from another form: where the name came from. */
+.from-note { margin: 0 0 12px; }
+.rline-new { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.rline-new .hint { margin: 0; }

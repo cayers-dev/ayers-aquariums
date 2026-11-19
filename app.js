@@ -470,7 +470,7 @@
     }
     toast((typeof successMsg === "function" ? successMsg(res) : successMsg) || "Saved");
     refreshInBackground();
-    return true;
+    return res || true;
   }
 
   // Reloads all data without blocking the screen. If several saves happen quickly,
@@ -745,6 +745,27 @@
           back.addEventListener("click", e => { if (e.target === back) finish(null); });
         },
         onSubmit: () => { finish(match); return true; }
+      });
+    });
+  }
+  // A yes/no question in its own sheet. Resolves true for yes; closing it means no.
+  function confirmSheet(opts) {
+    return new Promise(resolve => {
+      let done = false;
+      const finish = v => { if (!done) { done = true; resolve(v); } };
+      openSheet({
+        title: opts.title,
+        submitLabel: opts.yes || "Yes",
+        noCancel: true,
+        body: opts.body + '<div class="actions"><button type="button" class="btn" data-no>' + esc(opts.no || "No") + '</button></div>',
+        onReady: form => {
+          const back = form.parentElement;
+          const shut = () => { back.remove(); document.body.style.overflow = $(".sheet-backdrop") ? "hidden" : ""; };
+          $("[data-no]", form).addEventListener("click", () => { finish(false); shut(); });
+          $$("[data-close]", form).forEach(b => b.addEventListener("click", () => finish(false)));
+          back.addEventListener("click", e => { if (e.target === back) finish(false); });
+        },
+        onSubmit: () => { finish(true); return true; }
       });
     });
   }
@@ -1544,11 +1565,9 @@
         '<button type="button" class="icon-btn rline-remove" data-remove-line aria-label="Remove item ' + (i + 1) + '">' + ICONS.close + '</button></div>' +
       comboHtml({ name: "li_item_" + i, label: "Item", mode: "free", noThumbs: true, value: line.label || "",
                   placeholder: "Choose or type an item", newLabel: "will be added as a new item" }, ch.items) +
-      (isAdmin() ? '<div class="field rline-new" hidden><label for="f_li_new_' + i + '">Add as</label>' +
-        '<select id="f_li_new_' + i + '" name="li_new_' + i + '">' +
-          '<option value="">Other item — price tracker only</option>' +
-          NEW_RECORD_TYPES.map(t => '<option value="' + t[0] + '"' + (line.newType === t[0] ? " selected" : "") + '>' + esc(t[1]) + '</option>').join("") +
-        '</select><span class="hint">A new record is created and this receipt is linked to it. Fill in the rest on its page later.</span></div>' : "") +
+      (isAdmin() ? '<div class="field rline-new" hidden>' +
+        '<span class="hint">Not one of your records — it will be tracked in Prices only.</span>' +
+        '<button type="button" class="btn small" data-new-record>' + ICONS.plus + 'Add it as a record…</button></div>' : "") +
       '<div class="rline-grid">' +
         '<div class="field"><label for="f_li_qty_' + i + '">Qty</label><input type="number" step="any" min="0" inputmode="decimal" id="f_li_qty_' + i + '" name="li_qty_' + i + '" value="' + esc(line.qty === undefined ? "" : line.qty) + '" placeholder="1"></div>' +
         '<div class="field"><label for="f_li_price_' + i + '">Price <span class="opt">for the line</span></label><input type="text" inputmode="decimal" id="f_li_price_' + i + '" name="li_price_' + i + '" value="' + esc(line.price === undefined ? "" : line.price) + '" placeholder="0.00" autocomplete="off"></div>' +
@@ -1566,6 +1585,7 @@
   // getVendor() gives the store typed on the form (for filling in sizes).
   function wireLinesEditor(form, ch, getVendor) {
     const box = $("[data-rlines]", form);
+    let rowsApi = null;
     const refFor = makePriceItemRef(ch);
     let next = $$(".rline", box).length;
     const refresh = row => {
@@ -1582,7 +1602,7 @@
       $$("[data-combo]", row).forEach(wireCombo);
       const i = row.dataset.line;
       // "Add as" shows while the typed item isn't already one of your records.
-      const newBox = $(".rline-new", row), newSel = newBox && $("[name=li_new_" + i + "]", row);
+      const newBox = $(".rline-new", row);
       const refreshNew = () => {
         if (!newBox) return;
         const text = String($("input[name=li_item_" + i + "]", row).value || "").trim();
@@ -1590,12 +1610,27 @@
         const pi = ref && ref.priceItemId ? findPriceItem(ref.priceItemId) : null;
         const isRecord = !!(ref && (ref.recordId || (pi && pi["Record ID"])));
         newBox.hidden = !text || isRecord;
-        if (newBox.hidden) newSel.value = "";
       };
-      if (newSel) newSel.addEventListener("change", () => {
-        // A record is one thing bought, so its size starts at 1 each.
-        const sizeEl = $("[name=li_size_" + i + "]", row), unitEl = $("[name=li_unit_" + i + "]", row);
-        if (newSel.value && !sizeEl.value && !unitEl.value) { sizeEl.value = "1"; unitEl.value = "each"; refresh(row); }
+      // "Add it as a record…": the new item's own form opens on top of this one, and
+      // the line picks it up when it's saved. Nothing typed here is lost.
+      const newBtn = newBox && $("[data-new-record]", newBox);
+      if (newBtn) newBtn.addEventListener("click", () => {
+        const typed = String($("input[name=li_item_" + i + "]", row).value || "").trim();
+        newRecordFlow(typed, (newId, newType) => {
+          const rec = findRec(newType, newId);
+          const label = newId + (rec ? " " + TYPES[newType].title(rec) : "");
+          // So this line (and the other lines) can find it straight away.
+          ch.map[label.toLowerCase()] = { recordId: newId };
+          ch.items.push({ value: label, label: label, sub: rec ? TYPES[newType].sub(rec) : "", group: TYPES[newType].label });
+          setComboValue(form, "li_item_" + i, label);
+          // A record is one thing bought, so its size starts at 1 each.
+          const sizeEl = $("[name=li_size_" + i + "]", row), unitEl = $("[name=li_unit_" + i + "]", row);
+          if (!sizeEl.value && !unitEl.value) { sizeEl.value = "1"; unitEl.value = "each"; }
+          refresh(row);
+          refreshNew();
+          // Once the record's form has closed, offer one record per unit for a qty over 1.
+          setTimeout(() => offerUnitCopies(newType, newId, row, i, ch, rowsApi), 60);
+        });
       });
       // Picking an item that's been priced fills in its size: this store's latest, else any store's.
       $("input[name=li_item_" + i + "]", row).addEventListener("change", e => {
@@ -1618,15 +1653,69 @@
       refreshNew();
     };
     $$(".rline", box).forEach(wireRow);
-    $("[data-add-line]", form).addEventListener("click", () => {
+    const addRow = line => {
       const tmp = document.createElement("div");
-      tmp.innerHTML = rlineRowHtml(next++, {}, ch);
+      tmp.innerHTML = rlineRowHtml(next++, line || {}, ch);
       const row = tmp.firstElementChild;
       $(".rline-no", row).textContent = "Item " + ($$(".rline", box).length + 1);
       box.appendChild(row);
       wireRow(row);
+      return row;
+    };
+    rowsApi = { addRow: addRow, refresh: refresh };
+    $("[data-add-line]", form).addEventListener("click", () => {
+      const row = addRow({});
       const inp = $(".combo-input", row); if (inp) inp.focus();
     });
+  }
+
+  // A line for several of the same new tank or piece of equipment: offer one record
+  // per unit, copied from the one just filled in, with the line's price split.
+  async function offerUnitCopies(type, firstId, row, i, ch, rowsApi) {
+    if (UNIQUE_RECORD_TYPES.indexOf(type) === -1 || !rowsApi) return;
+    const qty = Math.round(Number($("[name=li_qty_" + i + "]", row).value) || 1);
+    if (qty < 2) return;
+    const rec = findRec(type, firstId);
+    if (!rec) return;
+    const T = TYPES[type];
+    const label = id => id + " " + (findRec(type, id) ? T.title(findRec(type, id)) : "");
+    const want = await confirmSheet({
+      title: "More of the same?",
+      body: '<p>This line is qty ' + qty + '. ' + esc(label(firstId)) + ' is one of them.</p>' +
+        '<p>Make ' + (qty - 1) + ' more like it, so each one has its own record? They copy ' +
+        esc(T.one.toLowerCase()) + ' details (not tanks or serial numbers), and the line\'s price is split between them.</p>',
+      yes: "Make " + (qty - 1) + " more", no: "Just this one"
+    });
+    if (!want) return;
+    // Copy every editable field of the one just made.
+    const copy = {};
+    (state.schema[type] || []).forEach(f => {
+      if (f.readOnly || f.name === "Serial Number" || f.name === "QR Code URL") return;
+      if (rec[f.name] !== "" && rec[f.name] !== undefined && rec[f.name] !== null) copy[f.name] = rec[f.name];
+    });
+    const made = [firstId];
+    for (let k = 1; k < qty; k++) {
+      try {
+        const res = await api("add", { table: type, values: copy });
+        if (res && res.added && res.added.id) made.push(res.added.id);
+      } catch (err) { toast("Couldn't make them all: " + err.message, true); break; }
+    }
+    await refreshInBackground();
+    // One line each, with the price split and the size at 1.
+    const priceText = String($("[name=li_price_" + i + "]", row).value).replace(/[$,\s]/g, "");
+    const total = priceText === "" || isNaN(Number(priceText)) ? null : Number(priceText);
+    const each = total === null ? "" : String(Math.round(total / made.length * 100) / 100);
+    $("[name=li_qty_" + i + "]", row).value = "1";
+    if (total !== null) $("[name=li_price_" + i + "]", row).value = each;
+    rowsApi.refresh(row);
+    made.slice(1).forEach(id => {
+      const l = label(id);
+      ch.map[l.toLowerCase()] = { recordId: id };
+      ch.items.push({ value: l, label: l, group: T.label });
+      const r2 = rowsApi.addRow({ label: l, qty: 1, price: each, size: 1, unit: "each" });
+      rowsApi.refresh(r2);
+    });
+    toast(made.length + " " + T.label.toLowerCase() + " records, one per unit");
   }
   // Reads the lines from the form. Asks "Did you mean…?" for new item names; null = go back to the form.
   async function collectLines(vals, form, ch) {
@@ -1644,13 +1733,7 @@
       const p = String(price || "").replace(/[$,\s]/g, "");
       if (p && isNaN(Number(p))) throw new Error("Item " + (n + 1) + ": the price must be an amount like 24.99.");
       if (String(size || "").trim() && !unit) throw new Error("Item " + (n + 1) + ": choose a unit for the size.");
-      const newType = String(vals["li_new_" + i] || "");
       let ref = refFor(label);
-      // "Add as" set: a new record (or an existing typed item promoted to one).
-      if (newType) {
-        out.push({ item: { newType: newType, name: label }, qty: qty, price: p, size: size, unit: unit });
-        continue;
-      }
       if (!ref) {
         const v = await confirmName(label, Object.keys(names), "item");
         if (v === null) return null;
@@ -2248,20 +2331,30 @@
 
   // prefill (optional): { suggestions: { field: value }, notes, source } from Read label;
   // fills blank fields only, outlined so they can be checked before saving.
-  function recordForm(type, id, prefill) {
+  // opts: { seed: { field: value }, note: "shown at the top", onCreated: fn(id) }
+  // Opened from another form (a receipt line, say), it stacks on top: the form
+  // underneath keeps everything typed into it, and onCreated hands back the new ID.
+  function recordForm(type, id, prefill, opts) {
+    opts = opts || {};
     const T = TYPES[type];
     const editing = !!id;
     const rec = editing ? findRec(type, id) : {};
     const fields = state.schema[type].filter(f => (editing || !f.readOnly) && (isAdmin() || f.name !== "Status"));
     const values = {};
     fields.forEach(f => {
-      values[f.name] = editing ? rec[f.name] : (f.name === "Status" ? "Active" : "");
+      values[f.name] = editing ? rec[f.name] : ((opts.seed || {})[f.name] || (f.name === "Status" ? "Active" : ""));
     });
+    // A new item can go into tanks right away, so nothing has to be done twice.
+    const tanks = !editing && ITEM_TYPES.indexOf(type) !== -1 ? tanksICanAddTo() : [];
     const ai = AI_TYPES.indexOf(type) !== -1 && (isAdmin() || canEditItem(type, rec));
     openSheet({
       title: (editing ? "Edit " : "Add ") + T.one.toLowerCase(),
       submitLabel: editing ? "Save" : "Add",
-      body: (ai ? aiBarHtml() : "") + fields.map(f => fieldHtml(f, values[f.name])).join(""),
+      body: (opts.note ? '<p class="hint from-note">' + esc(opts.note) + '</p>' : "") +
+        (ai ? aiBarHtml() : "") + fields.map(f => fieldHtml(f, values[f.name])).join("") +
+        (tanks.length ? '<div class="form-section"><h3>Add to tanks <span class="opt">optional</span></h3>' +
+          comboHtml({ name: "__tanks", label: "Tanks", mode: "multi", noThumbs: true, placeholder: "Tap to choose tanks" },
+                    tanks.map(t => ({ value: t["Tank ID"], label: t["Tank Name"], sub: t["Tank ID"] }))) + '</div>' : ""),
       onReady: form => {
         $$("[data-combo]", form).forEach(wireCombo);
         if (prefill) applyPrefill(form, prefill);
@@ -2285,7 +2378,55 @@
           if (!Object.keys(changed).length) { toast("No changes"); return true; }
           return write("update", { table: type, id: id, values: changed }, "Saved");
         }
-        return write("add", { table: type, values: vals }, T.one + " added");
+        const tankIds = String(vals.__tanks || "").split(",").map(x => x.trim()).filter(Boolean);
+        delete vals.__tanks;
+        const res = await write("add", { table: type, values: vals }, T.one + " added");
+        const newId = res && res.added ? res.added.id : "";
+        // Put it in the tanks that were picked, then tell whoever opened this form.
+        if (newId && tankIds.length) {
+          try {
+            await api("addAssignments", { tankId: tankIds[0], itemIds: [newId] });
+            for (let i = 1; i < tankIds.length; i++) await api("addAssignments", { tankId: tankIds[i], itemIds: [newId] });
+            toast("Added to " + tankIds.map(tankName).join(", "));
+          } catch (err) { toast("Saved, but not added to a tank: " + err.message, true); }
+        }
+        if (newId && opts.onCreated) { await refreshInBackground(); opts.onCreated(newId, type); }
+        return res;
+      }
+    });
+  }
+
+  // "It's not in the list": pick what kind of record it is, fill in that record's own
+  // form, and come back to the form underneath with the new item chosen.
+  // onCreated(id, type) runs once it's saved.
+  function newRecordFlow(typed, onCreated, types) {
+    const choices = (types || NEW_RECORD_TYPES).filter(t => state.schema[t[0]]);
+    const seedFor = (type, name) => {
+      // Only where there's one obvious name field; equipment is named by its own
+      // convention (manufacturer, model, category), so that's left to the form.
+      if (!name) return {};
+      if (type === "species" || type === "plants") return { "Common Name": name };
+      if (type === "medications" || type === "foods") return { "Product Name": name };
+      if (type === "tanks") return { "Tank Name": name };
+      return {};
+    };
+    openSheet({
+      title: "Add a new record",
+      submitLabel: "Next",
+      body: (typed ? '<p class="hint">From what you typed: <b>' + esc(typed) + '</b></p>' : "") +
+        '<div class="field"><label for="f_newtype">What kind of item is it?</label><select id="f_newtype" name="newType" required data-label="Kind">' +
+        '<option value=""></option>' + choices.map(t => '<option value="' + t[0] + '">' + esc(t[1]) + '</option>').join("") + '</select></div>' +
+        '<p class="hint">Its own form opens next, so everything lands in the right place. Nothing you have already typed is lost.</p>',
+      onSubmit: async vals => {
+        const type = String(vals.newType || "");
+        if (!state.schema[type]) throw new Error("Choose what kind of item it is.");
+        // Let this sheet close first, then open the record's own form on top of the one underneath.
+        setTimeout(() => recordForm(type, null, null, {
+          seed: seedFor(type, typed),
+          note: typed ? "From what you typed: " + typed : "",
+          onCreated: onCreated
+        }), 0);
+        return true;
       }
     });
   }
@@ -5049,7 +5190,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "54";
+  const APP_VERSION = "55";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
