@@ -23,11 +23,17 @@
 
 // Model choice and limits for the Gemini calls.
 const AI_CONFIG = {
-   // gemini-3.5-flash answers reliably on the free tier; the newer Flash models
-   // are often "busy" there. Set GEMINI_MODEL to try another one.
+   // Set GEMINI_MODEL in Project Settings to use a different one.
+   // The 2.5 models are retired (404 for new users), and "…-latest" aliases have been
+   // seen to hang for minutes rather than answer, so neither is listed here.
    defaultModel: "gemini-3.5-flash",
    // Tried in order when the model above is busy (503) or out of free quota (429).
-   fallbackModels: ["gemini-flash-latest", "gemini-3.8-flash"],
+   fallbackModels: ["gemini-3.8-flash", "gemini-3.5-flash-lite"],
+   // A whole lookup has to finish well inside Apps Script's 6-minute limit, or the
+   // request dies with nothing to show. When the free tier is congested a single call
+   // can take over a minute, so once this much time has gone on busy models, stop
+   // trying more and say so.
+   modelBudgetMs: 120000,
    apiBase: "https://generativelanguage.googleapis.com/v1beta/models/",
    maxRefChars: 12000,
    userAgent: "AyersAquariums/1.0 (Google Apps Script; personal aquarium database)",
@@ -43,7 +49,8 @@ const AI_TABLES = {
    species:     { name: "Common Name",  kind: "aquarium livestock (fish, shrimp, snail or other aquatic animal)" },
    plants:      { name: "Common Name",  kind: "aquarium plant" },
    equipment:   { name: "Filter Model", kind: "aquarium equipment (filter, heater, light, pump, stand, etc.)" },
-   medications: { name: "Product Name", kind: "aquarium medication, water treatment or supplement" }
+   medications: { name: "Product Name", kind: "aquarium medication, water treatment or supplement" },
+   foods:       { name: "Product Name", kind: "aquarium fish food (flake, pellet, wafer, frozen, freeze-dried or live)" }
 };
 
 // Run from the editor after adding GEMINI_API_KEY: checks the key and
@@ -121,8 +128,11 @@ function aiGenerateJson_(parts) {
    const ready = all.filter(m => !cache.get("ai_busy_" + m));
    const models = ready.length ? ready : all;
    let lastErr = null;
+   const started = Date.now();
    for (let i = 0; i < models.length; i++) {
       aiCheckCancelled_();   // skip the next model if the person cancelled
+      // Out of time: better a clear "busy" message than a request that dies at 6 minutes.
+      if (i > 0 && Date.now() - started > AI_CONFIG.modelBudgetMs) break;
       try {
          const out = aiGenerateOnce_(parts, models[i]);
          AI_LAST_MODEL = models[i];
