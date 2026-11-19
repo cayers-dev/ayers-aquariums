@@ -1833,10 +1833,17 @@
       .sort((a, b) => (parseDT(b) || 0) - (parseDT(a) || 0))[0];
     const lastTest = latest(state.waterSessions || [], "Tested At");
     const lastChange = latest(state.waterChanges || [], "Performed At");
-    const link = (href, icon, label, info, act) => '<a class="home-link" href="' + href + '"' + (act ? ' data-act="home-browse" data-type="' + act + '"' : "") + '>' +
-      '<span class="home-icon">' + ICONS[icon] + '</span><span class="home-text"><span class="home-label">' + esc(label) + '</span>' +
-      (info ? '<span class="home-info">' + esc(info) + '</span>' : "") + '</span></a>';
-    const group = (title, links) => '<div class="section"><div class="section-head"><h3>' + esc(title) + '</h3></div><div class="home-grid">' + links.join("") + '</div></div>';
+    // A link carries its label, so a group can be put in order by name.
+    const link = (href, icon, label, info, act) => ({ label: label,
+      html: '<a class="home-link" href="' + href + '"' + (act ? ' data-act="home-browse" data-type="' + act + '"' : "") + '>' +
+        '<span class="home-icon">' + ICONS[icon] + '</span><span class="home-text"><span class="home-label">' + esc(label) + '</span>' +
+        (info ? '<span class="home-info">' + esc(info) + '</span>' : "") + '</span></a>' });
+    // `pinned` links stay at the front (Tanks, My account); the rest are alphabetical.
+    const group = (title, links, pinned) => {
+      const rest = links.slice(pinned || 0).sort((a, b) => a.label.localeCompare(b.label));
+      return '<div class="section"><div class="section-head"><h3>' + esc(title) + '</h3></div><div class="home-grid">' +
+        links.slice(0, pinned || 0).concat(rest).map(l => l.html).join("") + '</div></div>';
+    };
     const n = (k, word) => k + " " + word;
     const openWishes = state.wishes.filter(wishIsOpen).length;
     const unassigned = state.receipts.filter(r => !isRetired(r) && receiptLinksFor(r["Receipt ID"]).length === 0).length;
@@ -1847,7 +1854,7 @@
         link("#/maint", "maint", "Maintenance", (lastChange ? "Last water change " + daysAgo(lastChange) : "No water changes logged") +
           (notesDue().length ? " · " + notesDue().length + " note" + (notesDue().length === 1 ? "" : "s") + " due" : ""))
       ].concat(state.hasTreatments ? [link("#/treatments", "pill", "Treatments",
-          (state.treatments || []).filter(trtActive).length + " running" + (dueCount() ? " · " + dueCount() + " due" : ""))] : [])) +
+          (state.treatments || []).filter(trtActive).length + " running" + (dueCount() ? " · " + dueCount() + " due" : ""))] : []), 1) +
       group("Collection", [
         link("#/browse", "fish", "Species", n(browseCount("species"), "active"), "species"),
         link("#/browse", "gear", "Equipment", n(browseCount("equipment"), "active"), "equipment"),
@@ -1860,7 +1867,7 @@
        .concat([link("#/prices", "tag", "Prices", n(state.priceItems.length, state.priceItems.length === 1 ? "item" : "items") + " · " + n(state.prices.length, state.prices.length === 1 ? "price" : "prices"))])) +
       group("Account", [link("#/account", "account", "My account", state.me ? state.me.name || state.me.email : "")]
         .concat(isAdmin() ? [link("#/users", "users", "Users", ""), link("#/testtypes", "flask", "Test types", ""),
-                          link("#/lists", "list", "Dropdown lists", (state.lookupTypes || []).length + " lists")] : []));
+                          link("#/lists", "list", "Dropdown lists", (state.lookupTypes || []).length + " lists")] : []), 1);
     return { title: "Ayers Aquariums", html: html };
   }
   const browseCount = type => (state.data[type] || []).filter(r => !isWishItem(r) && !isRetired(r)).length;
@@ -5025,7 +5032,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "49";
+  const APP_VERSION = "50";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
