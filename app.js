@@ -5205,7 +5205,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "57";
+  const APP_VERSION = "58";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
