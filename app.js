@@ -2381,7 +2381,7 @@
           if (thumb.value.trim()) return;
           thumb.value = p.url; thumb.classList.add("ai-filled");
         } : null;
-        wireAiFill(form, type, () => { const l = $('[name="Vendor Link"], [name="Product Page"]', form); return l ? l.value.trim() : ""; }, { onPhoto: onPhoto });
+        wireAiFill(form, type, () => { const l = $('[name="Manufacturer Link"], [name="Vendor Link"], [name="Product Page"]', form); return l ? l.value.trim() : ""; }, { onPhoto: onPhoto });
       },
       onSubmit: async (vals, form) => {
         if (!(await checkListFields(vals, form, fields))) return false;
@@ -3158,7 +3158,7 @@
   // ---------- Item photos (species, equipment, plants) ----------
   // Several photos per item (e.g. the whole filter, its serial label). Admins add, caption,
   // remove and pick the list picture; everyone signed in can view them.
-  const PHOTO_TYPES = ["species", "equipment", "plants", "medications"];
+  const PHOTO_TYPES = ["species", "equipment", "plants", "medications", "foods"];
   const photosFor = id => state.photos.filter(p => p["Item ID"] === id)
     .sort((a, b) => String(a["Added At"]).localeCompare(String(b["Added At"])));
   function photosSection(type, r) {

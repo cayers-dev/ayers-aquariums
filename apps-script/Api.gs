@@ -56,11 +56,10 @@ const API_FIELD_LISTS = {
                       "Group Type": ["Group Type", true], "Difficulty": ["Difficulty", true],
                       "Status": ["Status", true] },
    equipment:       { "Category": ["Equipment Type", true], "Manufacturer": ["Manufacturer", false],
-                      "Filter Model": ["Filter Model", false], "Vendor": ["Vendor", false],
-                      "Status": ["Status", true] },
+                      "Filter Model": ["Filter Model", false], "Status": ["Status", true] },
    plants:          { "Difficulty": ["Difficulty", true], "Status": ["Status", true] },
    medications:     { "Stock": ["Stock Status", true] },
-   foods:           { "Food Type": ["Food Type", true], "Manufacturer": ["Manufacturer", false], "Vendor": ["Vendor", false],
+   foods:           { "Food Type": ["Food Type", true], "Manufacturer": ["Manufacturer", false],
                       "Status": ["Status", true] },
    // How often a food is fed, on the assignment that puts it in a tank (Foods.gs).
    assignments:     { "Feed Frequency": ["Feed Frequency", false] },

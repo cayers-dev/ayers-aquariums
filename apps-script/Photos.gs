@@ -1,9 +1,9 @@
 // ============================================================
 // AYERS AQUARIUMS - ITEM PHOTOS
 //
-// Several photos per species, equipment, plant or medication: for
-// example the whole filter, its serial/model label, the box, or the
-// dosing panel on the back of a bottle.
+// Several photos per species, equipment, plant, medication or food:
+// for example the whole filter, its serial/model label, the box, the
+// dosing panel on the back of a bottle, or a tub's feeding chart.
 //
 // Files go to the private "Item Photos" Drive folder (see Wishlist.gs)
 // and are shown in the app through this script (apiItemPhoto_), so
@@ -22,7 +22,7 @@
 const PHOTO_CONFIG = {
    sheetName: "Item Photos",
    prefix: "PH-",
-   types: ["species", "equipment", "plants", "medications"],
+   types: ["species", "equipment", "plants", "medications", "foods"],
    headers: ["Photo ID", "Item ID", "Item Type", "Caption", "Photo URL", "Added By", "Added At", "Status", "Removed By", "Removed At"]
 };
 
@@ -190,4 +190,77 @@ function apiPhotoBytes_(p) {
       throw apiError_("NOT_FOUND", "The photo couldn't be found in Drive (it may have been moved or deleted).");
    }
    return { mimeType: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()) };
+}
+
+
+// ------------------------------------------------------------
+// One-off (Nov 2026): where something was bought lives on the receipt and in
+// the price tracker, so Equipment and Food lose their Vendor column and
+// Medications loses Stores. Equipment's "Vendor Link" and the medication
+// "Product Page" become one "Manufacturer Link" — the maker's page for the
+// product — and Food gains the same. Run once from the editor, then delete.
+// ------------------------------------------------------------
+function zzMigrateManufacturerFields() {
+   const ss = apiSs_();
+   const log = [];
+   const headers = sh => sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0].map(h => String(h).trim());
+   const col = (sh, name) => headers(sh).indexOf(name) + 1;
+   const rename = (sh, from, to) => {
+      const c = col(sh, from);
+      if (!c) return log.push(sh.getName() + ": no \"" + from + "\" column");
+      if (col(sh, to)) return log.push(sh.getName() + ": already has \"" + to + "\"");
+      sh.getRange(1, c).setValue(to);
+      log.push(sh.getName() + ": \"" + from + "\" is now \"" + to + "\"");
+   };
+   const drop = (sh, name) => {
+      const c = col(sh, name);
+      if (!c) return log.push(sh.getName() + ": no \"" + name + "\" column");
+      sh.deleteColumn(c);
+      log.push(sh.getName() + ": \"" + name + "\" column deleted");
+   };
+   const addAfter = (sh, after, name) => {
+      if (col(sh, name)) return log.push(sh.getName() + ": already has \"" + name + "\"");
+      const c = col(sh, after) || Math.max(1, sh.getLastColumn());
+      sh.insertColumnAfter(c);
+      sh.getRange(1, c + 1).setValue(name).setFontWeight("bold").setBackground("#d9d9d9");
+      log.push(sh.getName() + ": \"" + name + "\" column added");
+   };
+   // One label row of an old menu entry form (labels are column A from row 3).
+   // to = "" deletes the row.
+   const formRow = (sheetKey, from, to) => {
+      const sh = ss.getSheetById(SHEET_IDS[sheetKey]);
+      if (!sh) return log.push(sheetKey + ": tab not found");
+      const last = sh.getLastRow();
+      if (last < 3) return log.push(sheetKey + ": no form rows");
+      const norm = v => String(v).replace(/[\s*:]+$/, "").trim().toLowerCase();
+      const labels = sh.getRange(3, 1, last - 2, 1).getValues().map(r => norm(r[0]));
+      const i = labels.indexOf(norm(from));
+      if (i === -1) return log.push(sheetKey + ": no \"" + from + "\" row");
+      if (to) { sh.getRange(i + 3, 1).setValue(to); log.push(sheetKey + ": \"" + from + "\" row is now \"" + to + "\""); }
+      else { sh.deleteRow(i + 3); log.push(sheetKey + ": \"" + from + "\" row deleted"); }
+   };
+
+   const eq = apiSheet_("equipment");
+   rename(eq, "Vendor Link", "Manufacturer Link");
+   drop(eq, "Vendor");
+
+   const med = apiSheet_("medications");
+   rename(med, "Product Page", "Manufacturer Link");
+   drop(med, "Stores");
+
+   const food = apiEnsureFoodsTab_();
+   addAfter(food, "Manufacturer", "Manufacturer Link");
+   drop(food, "Vendor");
+
+   formRow("addEquipment", "Vendor Link", "Manufacturer Link");
+   formRow("addEquipment", "Vendor", "");
+   formRow("addMedication", "Product Page", "Manufacturer Link");
+   formRow("addMedication", "Stores", "");
+
+   SpreadsheetApp.flush();
+   const out = log.join("\n") + "\n\nEquipment: " + headers(eq).join(", ") +
+               "\n\nMedications: " + headers(med).join(", ") +
+               "\n\nFood: " + headers(food).join(", ");
+   Logger.log(out);
+   return out;
 }

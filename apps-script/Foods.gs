@@ -23,8 +23,10 @@ const FOOD_CONFIG = {
 };
 
 // Columns of the Foods tab, in order.
-const FOOD_HEADERS = ["Food ID", "Product Name", "Manufacturer", "Food Type", "Feeding Notes",
-                      "Ingredients", "Vendor", "Notes", "Thumbnail URL", "Status"];
+// Where it was bought isn't kept here: that's on the receipt and in the price
+// tracker. "Manufacturer Link" is the maker's own page for the product.
+const FOOD_HEADERS = ["Food ID", "Product Name", "Manufacturer", "Manufacturer Link", "Food Type",
+                      "Feeding Notes", "Ingredients", "Notes", "Thumbnail URL", "Status"];
 
 
 // The Foods tab, made the first time it's needed. Unlike the older data tabs
@@ -39,7 +41,7 @@ function apiEnsureFoodsTab_() {
       sh.setFrozenRows(1);
       sh.getRange("J2:J").setDataValidation(SpreadsheetApp.newDataValidation()
          .requireValueInList(["Active", "Retired"], true).setAllowInvalid(false).build());
-      sh.setColumnWidth(2, 240); sh.setColumnWidth(5, 280); sh.setColumnWidth(6, 280); sh.setColumnWidth(8, 240);
+      sh.setColumnWidth(2, 240); sh.setColumnWidth(6, 280); sh.setColumnWidth(7, 280); sh.setColumnWidth(8, 240);
       apiSeedFoodLists_();
    }
    apiEnsureFeedColumns_();

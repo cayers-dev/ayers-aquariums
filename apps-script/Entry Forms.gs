@@ -83,9 +83,9 @@ function addNewEquipment() {
            excludeFields: ["Notes"] }   // equipment notes stay on Equipment
       ],
       clearFields: [
-         "Tank", "Category", "Manufacturer", "Filter Model", "Vendor",
+         "Tank", "Category", "Manufacturer", "Filter Model",
          "Width", "Height", "Depth", "Measurement Notes", "Notes",
-         "Purchase Date", "Serial Number", "Vendor Link",
+         "Purchase Date", "Serial Number", "Manufacturer Link",
          "Equipment Doc URL", "Thumbnail URL", "QR Code URL"
       ],
       confirmationFields: ["Equipment ID", "Category"]
@@ -131,7 +131,7 @@ function addNewMedication() {
          "Snail Safe", "Plant Safe", "Biofilter Safe",
          "Remove Carbon / Chemical Media", "UV Sterilizer",
          "Water Change Requirements", "Active / Key Ingredients",
-         "Important Warnings / Notes", "Stores", "Product Page"
+         "Important Warnings / Notes", "Manufacturer Link"
       ],
       confirmationFields: ["Product Name"]
    });
