@@ -281,6 +281,8 @@ function apiRequireAdmin_(user) {
 // Everything the app needs on load: the person, form layouts (schema), all tables,
 // plus receipts, water tests, maintenance and wishlist data.
 function apiBootstrap_(user) {
+   // Any column a newer feature needs, before the snapshot is taken (Photos.gs).
+   apiEnsureMedThumbColumn_();
    // Read every tab in one request first (Speed.gs); the readers below use that snapshot.
    apiPrefetchGrids_();
    const ss = apiSs_();

@@ -252,7 +252,7 @@
       label: "Medications", one: "Medication / Supplement", id: "Product ID",
       title: r => r["Product Name"] || r["Product ID"],
       sub: r => [r["Manufacturer"], r["Product Type"]].filter(Boolean).join(" · "),
-      img: () => ""
+      img: r => r["Thumbnail URL"]
     },
     foods: {
       label: "Food", one: "Food", id: "Food ID",
@@ -847,7 +847,7 @@
     if (!x) return { name: rid + " (record deleted)", linked: true, pill: rid, rid: rid, img: "" };
     // Linked items show their record's list picture.
     return { name: String(TYPES[x.type].title(x.rec)), linked: true, pill: rid + " · " + (ONE_LABEL[x.type] || TYPES[x.type].label), rid: rid, type: x.type,
-             img: x.type === "medications" ? "" : String(TYPES[x.type].img(x.rec) || "") };
+             img: String(TYPES[x.type].img(x.rec) || "") };
   }
   const byPriceName = (a, b) => priceItemInfo(a).name.localeCompare(priceItemInfo(b).name);
   const gatheredKey = p => String(p["Date Gathered"] || "") + " " + String(p["Added At"] || "");
@@ -2122,7 +2122,7 @@
     const list = rows.map(r => {
       const img = T.img(r);
       return '<div class="list-item ' + (isRetired(r) ? "dim" : "") + '" data-act="open-item" data-type="' + type + '" data-id="' + esc(r[T.id]) + '">' +
-        (type !== "medications" ? photoHtml(img, "thumb", 160, String(r[T.id]).split("-")[0]) : "") +
+        photoHtml(img, "thumb", 160, String(r[T.id]).split("-")[0]) +
         '<div class="body"><div class="title">' + esc(T.title(r)) + '</div><div class="sub">' + esc([r[T.id], T.sub(r)].filter(Boolean).join(" · ")) + '</div></div>' +
         (isRetired(r) ? '<span class="pill retired">Retired</span>'
           : type === "medications" ? stockPill(stockOf(r))
@@ -3158,7 +3158,7 @@
   // ---------- Item photos (species, equipment, plants) ----------
   // Several photos per item (e.g. the whole filter, its serial label). Admins add, caption,
   // remove and pick the list picture; everyone signed in can view them.
-  const PHOTO_TYPES = ["species", "equipment", "plants"];
+  const PHOTO_TYPES = ["species", "equipment", "plants", "medications"];
   const photosFor = id => state.photos.filter(p => p["Item ID"] === id)
     .sort((a, b) => String(a["Added At"]).localeCompare(String(b["Added At"])));
   function photosSection(type, r) {
@@ -5205,7 +5205,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "56";
+  const APP_VERSION = "57";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

@@ -1,8 +1,9 @@
 // ============================================================
 // AYERS AQUARIUMS - ITEM PHOTOS
 //
-// Several photos per species, equipment or plant: for example the
-// whole filter, its serial/model label, or the box.
+// Several photos per species, equipment, plant or medication: for
+// example the whole filter, its serial/model label, the box, or the
+// dosing panel on the back of a bottle.
 //
 // Files go to the private "Item Photos" Drive folder (see Wishlist.gs)
 // and are shown in the app through this script (apiItemPhoto_), so
@@ -21,7 +22,7 @@
 const PHOTO_CONFIG = {
    sheetName: "Item Photos",
    prefix: "PH-",
-   types: ["species", "equipment", "plants"],
+   types: ["species", "equipment", "plants", "medications"],
    headers: ["Photo ID", "Item ID", "Item Type", "Caption", "Photo URL", "Added By", "Added At", "Status", "Removed By", "Removed At"]
 };
 
@@ -76,7 +77,7 @@ function apiPhotosBootstrap_() {
    };
 }
 
-// The species, equipment or plant record a photo belongs to: { type, rec } or throws.
+// The record a photo belongs to (PHOTO_CONFIG.types): { type, rec } or throws.
 function apiPhotoItem_(itemId) {
    for (let i = 0; i < PHOTO_CONFIG.types.length; i++) {
       const rec = apiFindById_(PHOTO_CONFIG.types[i], itemId);
@@ -101,10 +102,22 @@ function apiNextPhotoId_() {
    return PHOTO_CONFIG.prefix + (max + 1);
 }
 
+// Medications came to pictures after the tab was built, so their Thumbnail URL
+// column is made the first time the app loads after this change (once, ever).
+function apiEnsureMedThumbColumn_() {
+   const props = PropertiesService.getScriptProperties();
+   if (props.getProperty("medThumbColumn") === "done") return;
+   apiEnsureColumn_(apiSheet_(API_TABLES.medications.sheetKey), "Thumbnail URL");
+   props.setProperty("medThumbColumn", "done");
+}
+
 // Sets an item's list picture (Thumbnail URL) and logs the change.
 function apiSetThumbnail_(user, type, rec, url) {
    const def = API_TABLES[type];
-   const changes = apiWriteChanges_(apiSheet_(def.sheetKey), rec._row, rec, { "Thumbnail URL": url });
+   const sheet = apiSheet_(def.sheetKey);
+   // Medications came late to pictures: make the column if the tab hasn't got one.
+   apiEnsureColumn_(sheet, "Thumbnail URL");
+   const changes = apiWriteChanges_(sheet, rec._row, rec, { "Thumbnail URL": url });
    if (changes.length) apiLog_(user, "Edit", def.label, rec[def.id], changes.join("; "));
    CacheService.getScriptCache().remove("item_photo_ids");
 }

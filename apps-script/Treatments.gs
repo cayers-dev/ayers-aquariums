@@ -252,6 +252,8 @@ function apiEnsureColumn_(sheet, header) {
    const last = Math.max(sheet.getLastColumn(), 1);
    const have = sheet.getRange(1, 1, 1, last).getValues()[0].map(h => String(h).trim());
    if (have.indexOf(header) !== -1) return have.indexOf(header) + 1;
+   // A tab trimmed to exactly its columns has no spare one to write in.
+   if (sheet.getMaxColumns() <= last) sheet.insertColumnAfter(last);
    sheet.getRange(1, last + 1).setValue(header).setFontWeight("bold").setBackground("#d9d9d9");
    return last + 1;
 }
