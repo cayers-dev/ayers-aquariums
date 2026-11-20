@@ -38,7 +38,7 @@ const AI_CONFIG = {
    maxRefChars: 12000,
    userAgent: "AyersAquariums/1.0 (Google Apps Script; personal aquarium database)",
    // Change this when the lookup changes, so lookups saved in the last 6 hours aren't reused.
-   cacheVersion: "2"
+   cacheVersion: "3"
 };
 
 // Fields the AI never fills (links, IDs, dates, purchase details, status).
@@ -850,7 +850,9 @@ function aiFill_(req) {
    // Ask, then keep only valid suggestions for fields that were blank.
    // The AI is only asked when something is left for it (blank fields, or entered values to check).
    const ai = (aiBlanks.length || (credible && aiCheckable.length)) ? aiGenerateJson_([{ text: prompt }]) : {};
-   const suggestions = aiCleanSuggestions_(aiBlanks, ai.fields || {});
+   // Dropdown answers that aren't one of the field's values: left blank, and reported.
+   const rejected = {};
+   const suggestions = aiCleanSuggestions_(aiBlanks, ai.fields || {}, rejected);
    // Where each value came from. With credible sources, anything not traced to one is dropped.
    const fieldSources = {};
    const rawSources = ai.fieldSources || {};
@@ -899,6 +901,7 @@ function aiFill_(req) {
       credible: credible,
       fallback: fallback,
       notFound: missing,
+      rejected: rejected,
       scientificName: sci,
       nameFrom: nameHow,
       filled: Object.keys(suggestions).length,
@@ -929,7 +932,27 @@ function aiExampleRows_(table, fields) {
 
 // Keeps only usable suggestions: numbers for number fields, exact list values for
 // strict dropdowns, matching spelling for other lists, trimmed text.
-function aiCleanSuggestions_(fields, raw) {
+// Matches the AI's wording to one of a dropdown's values. Exact first, then
+// ignoring case, punctuation and plurals ("Pellets" -> "Pellet",
+// "freeze dried" -> "Freeze-dried"), then an answer that contains one of the
+// values ("Sinking pellet" -> "Pellet"; the longest match wins).
+function aiMatchOption_(options, v) {
+   const opts = (options || []).map(String);
+   const words = s => String(s).toLowerCase().split(/[^a-z0-9]+/i).filter(Boolean).map(w => w.replace(/s$/, ""));
+   const flat = s => words(s).join(" ");
+   let m = opts.find(o => o.toLowerCase() === String(v).toLowerCase());
+   if (m) return m;
+   m = opts.find(o => flat(o) === flat(v));
+   if (m) return m;
+   const hay = " " + flat(v) + " ";
+   const hits = opts.filter(o => flat(o) && hay.indexOf(" " + flat(o) + " ") !== -1);
+   if (hits.length) return hits.sort((a, b) => flat(b).length - flat(a).length)[0];
+   return null;
+}
+
+// rejected (optional): filled in with { field: what the AI said } for strict
+// dropdown answers that aren't one of the field's values, so the app can say so.
+function aiCleanSuggestions_(fields, raw, rejected) {
    const out = {};
    fields.forEach(f => {
       let v = raw[f.name];
@@ -943,11 +966,11 @@ function aiCleanSuggestions_(fields, raw) {
          if (v.replace(/[^0-9.\-]/g, "") === "" || isNaN(n)) return;
          v = n;
       } else if (f.type === "list" && f.strict) {
-         const match = (f.options || []).find(o => o.toLowerCase() === v.toLowerCase());
-         if (!match) return;
+         const match = aiMatchOption_(f.options, v);
+         if (!match) { if (rejected) rejected[f.name] = v.slice(0, 100); return; }
          v = match;
       } else if (f.type === "list") {
-         const match = (f.options || []).find(o => o.toLowerCase() === v.toLowerCase());
+         const match = aiMatchOption_(f.options, v);
          if (match) v = match;
       }
       if (typeof v === "string") v = v.slice(0, 1000);

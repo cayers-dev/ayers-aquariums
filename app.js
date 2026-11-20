@@ -787,6 +787,23 @@
     }
     return true;
   }
+  // Puts a value into a form field, whatever kind it is, and outlines it.
+  // Dropdowns an admin can type into are pickers: the value lives in a hidden
+  // field, so the text box beside it has to be set too or the field looks empty.
+  function fillField(el, v, classes) {
+    const box = el.closest && el.closest(".combo");
+    el.value = v;
+    if (box) {
+      const inp = $(".combo-input", box);
+      if (inp) { inp.value = v; classes.forEach(c => inp.classList.add(c)); }
+      const clear = $(".combo-clear", box);
+      if (clear) clear.hidden = false;
+    } else {
+      classes.forEach(c => el.classList.add(c));
+    }
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
   // Sets a free-text picker's value (hidden field and the text shown).
   function setComboValue(form, name, v) {
     const h = $("input[type=hidden][name='" + name + "']", form);
@@ -2317,8 +2334,7 @@
       if (!el || String(el.value).trim() !== "") return;
       const v = String(prefill.suggestions[name]);
       if (el.tagName === "SELECT" && !$$("option", el).some(o => o.value === v || o.textContent === v)) return;
-      el.value = v;
-      el.classList.add("ai-filled", "ai-unverified");
+      fillField(el, v, ["ai-filled", "ai-unverified"]);
       filled.push(name);
     });
     const note = document.createElement("div");
@@ -3544,11 +3560,9 @@
           if (!el || String(el.value).trim() !== "") return;
           const v = String(res.suggestions[name]);
           if (el.tagName === "SELECT" && !$$("option", el).some(o => o.value === v || o.textContent === v)) return;
-          el.value = v;
-          el.classList.add("ai-filled");
-          if (res.fallback || (res.unverified || []).indexOf(name) !== -1) el.classList.add("ai-unverified");
-          el.dispatchEvent(new Event("input", { bubbles: true }));
-          el.dispatchEvent(new Event("change", { bubbles: true }));
+          const cls = ["ai-filled"];
+          if (res.fallback || (res.unverified || []).indexOf(name) !== -1) cls.push("ai-unverified");
+          fillField(el, v, cls);
           n++;
         });
         // Corrections to values you entered (a credible source disagreed), outlined in pink.
@@ -3558,10 +3572,7 @@
           const c = res.corrections[name];
           if (!el) return;
           if (el.tagName === "SELECT" && !$$("option", el).some(o => o.value === c.to || o.textContent === c.to)) return;
-          el.value = c.to;
-          el.classList.add("ai-corrected");
-          el.dispatchEvent(new Event("input", { bubbles: true }));
-          el.dispatchEvent(new Event("change", { bubbles: true }));
+          fillField(el, c.to, ["ai-corrected"]);
           fixed.push('<div class="meta"><b>' + esc(name) + ':</b> “' + esc(c.from) + '” → “' + esc(c.to) + '” <span class="src">(' +
                      esc(String(c.source).split(":")[0]) + (c.reason ? ": " + esc(c.reason) : "") + ')</span></div>');
         });
@@ -3589,6 +3600,10 @@
           perSource +
           (fixed.length ? '<div class="ai-fixes"><div class="meta"><b>Corrected ' + fixed.length + ' value' + (fixed.length === 1 ? "" : "s") + ' you entered</b> (outlined in pink):</div>' + fixed.join("") + '</div>' : "") +
           ((res.notFound || []).length ? '<div class="meta">Not in the sources, left blank: ' + esc(res.notFound.join(", ")) + '</div>' : "") +
+          // Dropdown answers that aren't one of the field's values: left blank, but worth saying so.
+          (Object.keys(res.rejected || {}).length ? '<div class="meta">Left blank, not one of the list values: ' +
+            Object.keys(res.rejected).map(f => esc(f) + ' “' + esc(res.rejected[f]) + '”').join(", ") +
+            '. Add it on the Dropdown lists screen if it belongs there.</div>' : "") +
           (res.photo && opts.onPhoto ? '<div class="meta">Thumbnail: free photo from <a href="' + esc(res.photo.page || res.photo.url) + '" target="_blank" rel="noopener">Wikimedia Commons</a> (' + esc(res.photo.license) + ').</div>' : "") +
           (n ? '<div class="meta">AI-filled fields are highlighted.</div>' : "");
         box.hidden = false;
@@ -5190,7 +5205,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "55";
+  const APP_VERSION = "56";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
