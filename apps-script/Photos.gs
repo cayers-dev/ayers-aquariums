@@ -192,6 +192,21 @@ function apiPhotoBytes_(p) {
    return { mimeType: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()) };
 }
 
+// One-off: dumps the Tank Lookup tab's formulas so they can be checked
+// against the data tabs' columns. Run from the editor, then delete.
+function zzDumpTankLookup() {
+   const sh = apiSs_().getSheetByName("Tank Lookup");
+   if (!sh) return "no Tank Lookup tab";
+   const rows = Math.min(sh.getLastRow(), 40), cols = Math.min(sh.getLastColumn(), 20);
+   const f = sh.getRange(1, 1, rows, cols).getFormulas();
+   const out = [];
+   f.forEach((row, r) => row.forEach((v, c) => { if (v) out.push("r" + (r + 1) + "c" + (c + 1) + ": " + v); }));
+   const text = out.join("\n");
+   Logger.log(text);
+   return text;
+}
+
+
 // ------------------------------------------------------------
 // One-off (Nov 2026), after the Vendor/Stores columns went: the old menu
 // entry forms take their field labels from the data tab's header row, so the
