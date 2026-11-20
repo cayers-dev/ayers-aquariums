@@ -192,75 +192,36 @@ function apiPhotoBytes_(p) {
    return { mimeType: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()) };
 }
 
-
 // ------------------------------------------------------------
-// One-off (Nov 2026): where something was bought lives on the receipt and in
-// the price tracker, so Equipment and Food lose their Vendor column and
-// Medications loses Stores. Equipment's "Vendor Link" and the medication
-// "Product Page" become one "Manufacturer Link" — the maker's page for the
-// product — and Food gains the same. Run once from the editor, then delete.
+// One-off (Nov 2026), after the Vendor/Stores columns went: the old menu
+// entry forms take their field labels from the data tab's header row, so the
+// label that pointed at a deleted column is now #REF!. This drops those label
+// rows and reports any other #REF! left in the spreadsheet. Run once, then delete.
 // ------------------------------------------------------------
-function zzMigrateManufacturerFields() {
+function zzFixFormRefs() {
    const ss = apiSs_();
    const log = [];
-   const headers = sh => sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0].map(h => String(h).trim());
-   const col = (sh, name) => headers(sh).indexOf(name) + 1;
-   const rename = (sh, from, to) => {
-      const c = col(sh, from);
-      if (!c) return log.push(sh.getName() + ": no \"" + from + "\" column");
-      if (col(sh, to)) return log.push(sh.getName() + ": already has \"" + to + "\"");
-      sh.getRange(1, c).setValue(to);
-      log.push(sh.getName() + ": \"" + from + "\" is now \"" + to + "\"");
-   };
-   const drop = (sh, name) => {
-      const c = col(sh, name);
-      if (!c) return log.push(sh.getName() + ": no \"" + name + "\" column");
-      sh.deleteColumn(c);
-      log.push(sh.getName() + ": \"" + name + "\" column deleted");
-   };
-   const addAfter = (sh, after, name) => {
-      if (col(sh, name)) return log.push(sh.getName() + ": already has \"" + name + "\"");
-      const c = col(sh, after) || Math.max(1, sh.getLastColumn());
-      sh.insertColumnAfter(c);
-      sh.getRange(1, c + 1).setValue(name).setFontWeight("bold").setBackground("#d9d9d9");
-      log.push(sh.getName() + ": \"" + name + "\" column added");
-   };
-   // One label row of an old menu entry form (labels are column A from row 3).
-   // to = "" deletes the row.
-   const formRow = (sheetKey, from, to) => {
-      const sh = ss.getSheetById(SHEET_IDS[sheetKey]);
-      if (!sh) return log.push(sheetKey + ": tab not found");
+   // The label rows of the old entry forms (column A, from row 3).
+   ["addTank", "addSpecies", "addEquipment", "addPlant", "addMedication", "addWaterParameter"].forEach(key => {
+      const sh = SHEET_IDS[key] ? ss.getSheetById(SHEET_IDS[key]) : null;
+      if (!sh) return log.push(key + ": tab not found");
       const last = sh.getLastRow();
-      if (last < 3) return log.push(sheetKey + ": no form rows");
-      const norm = v => String(v).replace(/[\s*:]+$/, "").trim().toLowerCase();
-      const labels = sh.getRange(3, 1, last - 2, 1).getValues().map(r => norm(r[0]));
-      const i = labels.indexOf(norm(from));
-      if (i === -1) return log.push(sheetKey + ": no \"" + from + "\" row");
-      if (to) { sh.getRange(i + 3, 1).setValue(to); log.push(sheetKey + ": \"" + from + "\" row is now \"" + to + "\""); }
-      else { sh.deleteRow(i + 3); log.push(sheetKey + ": \"" + from + "\" row deleted"); }
-   };
-
-   const eq = apiSheet_("equipment");
-   rename(eq, "Vendor Link", "Manufacturer Link");
-   drop(eq, "Vendor");
-
-   const med = apiSheet_("medications");
-   rename(med, "Product Page", "Manufacturer Link");
-   drop(med, "Stores");
-
-   const food = apiEnsureFoodsTab_();
-   addAfter(food, "Manufacturer", "Manufacturer Link");
-   drop(food, "Vendor");
-
-   formRow("addEquipment", "Vendor Link", "Manufacturer Link");
-   formRow("addEquipment", "Vendor", "");
-   formRow("addMedication", "Product Page", "Manufacturer Link");
-   formRow("addMedication", "Stores", "");
-
-   SpreadsheetApp.flush();
-   const out = log.join("\n") + "\n\nEquipment: " + headers(eq).join(", ") +
-               "\n\nMedications: " + headers(med).join(", ") +
-               "\n\nFood: " + headers(food).join(", ");
+      if (last < 3) return;
+      const labels = sh.getRange(3, 1, last - 2, 1).getValues().map(r => String(r[0]).trim());
+      for (let i = labels.length - 1; i >= 0; i--) {
+         if (labels[i] === "#REF!") { sh.deleteRow(i + 3); log.push(sh.getName() + ": #REF! label row " + (i + 3) + " deleted"); }
+      }
+   });
+   // Anything else left broken anywhere in the spreadsheet.
+   ss.getSheets().forEach(sh => {
+      const rows = Math.min(sh.getLastRow(), 200), cols = Math.min(sh.getLastColumn(), 40);
+      if (rows < 1 || cols < 1) return;
+      const values = sh.getRange(1, 1, rows, cols).getValues();
+      values.forEach((row, r) => row.forEach((v, c) => {
+         if (String(v).indexOf("#REF!") !== -1) log.push("still broken: " + sh.getName() + " r" + (r + 1) + "c" + (c + 1));
+      }));
+   });
+   const out = log.length ? log.join("\n") : "nothing to fix";
    Logger.log(out);
    return out;
 }
