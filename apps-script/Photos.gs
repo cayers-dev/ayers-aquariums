@@ -191,3 +191,24 @@ function apiPhotoBytes_(p) {
    }
    return { mimeType: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()) };
 }
+
+
+// One-off (Nov 2026): the sheet's old menu forms and the Tank Lookup report
+// are not part of the app, so their tabs go. Run once, then delete.
+function zzRemoveUnusedTabs() {
+   const ss = apiSs_();
+   const names = ["Add Species", "Add Tank", "Add Equipment", "Add Plant",
+                  "Add Medication", "Add Water Parameter", "Tank Lookup"];
+   const log = [];
+   names.forEach(n => {
+      const sh = ss.getSheetByName(n);
+      if (!sh) return log.push("no tab named " + n);
+      ss.deleteSheet(sh);
+      log.push("deleted " + n);
+   });
+   SpreadsheetApp.flush();
+   const left = ss.getSheets().map(s => s.getName());
+   const out = log.join("\n") + "\n\n" + left.length + " tabs left: " + left.join(", ");
+   Logger.log(out);
+   return out;
+}

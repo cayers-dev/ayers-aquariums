@@ -9,10 +9,22 @@
 // Deploy as: Web app, Execute as: Me, Who has access: Anyone.
 // (The sign-in check below is what protects the data.)
 //
-// Uses SHEET_IDS from Entry Forms.gs.
 // Nothing here ever deletes rows: records are retired (Status) or
 // removed from tanks (Date Removed).
 // ============================================================
+
+// Tab IDs (the number after #gid= in the tab's URL), so tabs can be renamed
+// without breaking anything. Tabs added later (Foods, Maintenance Notes,
+// Item Photos and the rest) are found by name instead.
+const SHEET_IDS = {
+   species:           526685297,
+   tank:              1037277526,
+   equipment:         1741790309,
+   plants:            547150186,
+   medications:       1839526114,
+   waterParameters:   767978537,
+   tankAssignments:   1509314986
+};
 
 // Sign-in client, tab names and app name used throughout the API.
 const API_CONFIG = {

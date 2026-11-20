@@ -12,9 +12,7 @@ All of these live in the sheet's Apps Script project ("Aquarium Database"); GitH
 
 | File | What it does |
 |---|---|
-| `OnOpen.gs` | Adds the sheet's **Processing** menu. |
-| `Entry Forms.gs` | The sheet's Add Species / Tank / Equipment / Plant / Medication / Water Parameter forms, and `SHEET_IDS` (tab IDs used everywhere). |
-| `Api.gs` | Web app entry point (`doPost`), sign-in check, roles, reading and writing records, Change Log. |
+| `Api.gs` | Web app entry point (`doPost`), sign-in check, roles, reading and writing records, Change Log, and `SHEET_IDS` (tab IDs used everywhere). |
 | `Receipts.gs` | Receipt photo uploads (Drive) and linking receipts to records. |
 | `WaterTests.gs` | Test types, water test sessions and readings. |
 | `Maintenance.gs` | Water changes. |
