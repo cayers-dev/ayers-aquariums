@@ -191,3 +191,69 @@ function apiPhotoBytes_(p) {
    }
    return { mimeType: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()) };
 }
+
+
+// ------------------------------------------------------------
+// One-off (Nov 2026): two foods were filed as medications. MED-11
+// "Bloodworms, Hikari Jumbo" merges into FD-2 Bio-Pure Blood Worms, and
+// MED-10 "Vita Bites" becomes a food record of its own. Their receipts,
+// receipt lines and price items follow them. Run once, then delete.
+// ------------------------------------------------------------
+function zzMoveFoodsOutOfMeds() {
+   const ss = apiSs_();
+   const user = { id: "", email: "", name: "Setup", role: "Admin", tanks: [] };
+   const log = [];
+   const foods = apiEnsureFoodsTab_();
+   const meds = apiSheet_("medications");
+
+   // The food record MED-10 becomes: the next free Food ID.
+   const foodRows = apiReadSheetRows_(foods, "Food ID");
+   const maxN = foodRows.reduce((m, r) => Math.max(m, Number(String(r["Food ID"]).replace(/^\D+/, "")) || 0), 0);
+   const newId = "FD-" + (maxN + 1);
+   const med10 = apiReadSheetRows_(meds, "Product ID").find(r => r["Product ID"] === "MED-10");
+   if (!med10) { log.push("MED-10 not found"); }
+   else {
+      apiAppendRow_(foods, { "Food ID": newId, "Product Name": med10["Product Name"],
+                             "Manufacturer": med10["Manufacturer"] || "", "Status": "Active" });
+      apiLog_(user, "Add", "Foods", newId, "Moved from " + API_TABLES.medications.label + " MED-10");
+      log.push("MED-10 \"" + med10["Product Name"] + "\" is now " + newId);
+   }
+
+   // Where each old ID now points.
+   const moves = { "MED-11": "FD-2", "MED-10": newId };
+
+   // Receipt lines, receipt links and price items follow the record.
+   const repoint = (sheet, idHeader, label) => {
+      if (!sheet) return log.push(label + ": tab not found");
+      const hm = apiHeaderMap_(sheet);
+      const c = hm.map[idHeader.toLowerCase()];
+      if (!c) return log.push(label + ": no \"" + idHeader + "\" column");
+      const last = apiLastDataRow_(sheet);
+      for (let r = 2; r <= last; r++) {
+         const v = String(sheet.getRange(r, c).getValue()).trim();
+         if (moves[v] && moves[v] !== "FD-") {
+            sheet.getRange(r, c).setValue(moves[v]);
+            log.push(label + " row " + r + ": " + v + " -> " + moves[v]);
+         }
+      }
+   };
+   repoint(apiTabOrNull_(RLINE_CONFIG.sheetName), "Record ID", "Receipt Lines");
+   repoint(apiTabOrNull_(RECEIPTS_CONFIG.linksSheetName), "Item ID", "Receipt Links");
+   repoint(apiTabOrNull_(PRICE_CONFIG.itemsSheet), "Record ID", "Price Items");
+
+   // The medication rows go (highest row first, so the row numbers hold).
+   const medRows = apiReadSheetRows_(meds, "Product ID")
+      .filter(r => r["Product ID"] === "MED-10" || r["Product ID"] === "MED-11")
+      .sort((a, b) => b._row - a._row);
+   medRows.forEach(r => {
+      meds.deleteRow(r._row);
+      apiLog_(user, "Delete", API_TABLES.medications.label, r["Product ID"],
+              "Moved to Foods as " + moves[r["Product ID"]]);
+      log.push("deleted " + r["Product ID"] + " \"" + r["Product Name"] + "\" (now " + moves[r["Product ID"]] + ")");
+   });
+
+   SpreadsheetApp.flush();
+   const out = log.join("\n");
+   Logger.log(out);
+   return out;
+}
