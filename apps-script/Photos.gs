@@ -192,18 +192,34 @@ function apiPhotoBytes_(p) {
    return { mimeType: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()) };
 }
 
-// One-off: dumps the Tank Lookup tab's formulas so they can be checked
-// against the data tabs' columns. Run from the editor, then delete.
-function zzDumpTankLookup() {
+// One-off: the Tank Lookup report reads Equipment columns by number, so
+// dropping the Vendor column shifted its equipment block by one. This puts it
+// back (and drops Vendor from that block's headings). Run once, then delete.
+function zzFixTankLookupEquipment() {
    const sh = apiSs_().getSheetByName("Tank Lookup");
    if (!sh) return "no Tank Lookup tab";
-   const rows = Math.min(sh.getLastRow(), 40), cols = Math.min(sh.getLastColumn(), 20);
-   const f = sh.getRange(1, 1, rows, cols).getFormulas();
-   const out = [];
-   f.forEach((row, r) => row.forEach((v, c) => { if (v) out.push("r" + (r + 1) + "c" + (c + 1) + ": " + v); }));
-   const text = out.join("\n");
-   Logger.log(text);
-   return text;
+   const cell = sh.getRange("A4");
+   let f = cell.getFormula();
+   if (!f) return "A4 has no formula";
+   const swaps = [
+      ['Equipment!$A$2:$Q,{2,3,4,5},FALSE', 'Equipment!$A$2:$Q,{2,3,4},FALSE'],
+      ['Equipment!$A$2:$Q,11,FALSE', 'Equipment!$A$2:$Q,10,FALSE'],
+      ['Equipment!$A$2:$Q,{12,17},FALSE', 'Equipment!$A$2:$Q,{11,16},FALSE'],
+      ['{"Equipment ID","Category","Manufacturer","Model","Vendor","Purchase Date"',
+       '{"Equipment ID","Category","Manufacturer","Model","Purchase Date"']
+   ];
+   const log = [];
+   swaps.forEach(pair => {
+      if (f.indexOf(pair[0]) === -1) { log.push("not found: " + pair[0]); return; }
+      let n = 0;
+      while (f.indexOf(pair[0]) !== -1) { f = f.replace(pair[0], pair[1]); n++; }
+      log.push("replaced x" + n + ": " + pair[0]);
+   });
+   if (log.every(l => l.indexOf("not found") === 0)) return log.join("\n");
+   cell.setFormula(f);
+   SpreadsheetApp.flush();
+   Logger.log(log.join("\n"));
+   return log.join("\n");
 }
 
 
