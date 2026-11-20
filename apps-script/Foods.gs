@@ -26,7 +26,7 @@ const FOOD_CONFIG = {
 // Where it was bought isn't kept here: that's on the receipt and in the price
 // tracker. "Manufacturer Link" is the maker's own page for the product.
 const FOOD_HEADERS = ["Food ID", "Product Name", "Manufacturer", "Manufacturer Link", "Food Type",
-                      "Feeding Notes", "Ingredients", "Notes", "Thumbnail URL", "Status"];
+                      "Feeding Notes", "Ingredients", "Notes", "Thumbnail URL", "Status", "Stock"];
 
 
 // The Foods tab, made the first time it's needed. Unlike the older data tabs
@@ -46,6 +46,15 @@ function apiEnsureFoodsTab_() {
    }
    apiEnsureFeedColumns_();
    return sh;
+}
+
+// Food joined the stock list (Treatments.gs) after the tab was built, so its
+// Stock column is made the first time the app loads after that change.
+function apiEnsureFoodStockColumn_() {
+   const props = PropertiesService.getScriptProperties();
+   if (props.getProperty("foodStockColumn") === "done") return;
+   apiEnsureColumn_(apiEnsureFoodsTab_(), "Stock");
+   props.setProperty("foodStockColumn", "done");
 }
 
 // Starting values for the two lists, if they're not on Lookups yet.

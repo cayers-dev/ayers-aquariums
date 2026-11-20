@@ -654,3 +654,24 @@ body.syncing::before { content: ""; position: fixed; top: 0; left: 0; right: 0; 
 .from-note { margin: 0 0 12px; }
 .rline-new { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .rline-new .hint { margin: 0; }
+
+/* Need to order: rows you tick, and the bar that acts on them. */
+.order-row { cursor: pointer; }
+.order-row.picked { background: var(--primary-soft); }
+.order-row .tickbox {
+  flex: 0 0 auto; width: 24px; height: 24px; border-radius: 7px;
+  border: 2px solid var(--line); display: flex; align-items: center; justify-content: center;
+  color: #fff; background: var(--surface);
+}
+.order-row.picked .tickbox { background: var(--primary); border-color: var(--primary); }
+.order-row .tickbox svg { width: 16px; height: 16px; }
+.order-row .icon-btn { flex: 0 0 auto; }
+.order-bar {
+  position: sticky; bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 10px); z-index: 5;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 12px 0 4px; padding: 10px 12px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.18);
+}
+.order-bar .meta { flex: 1; margin: 0; }
+.order-row .order-pill { margin-top: 4px; }

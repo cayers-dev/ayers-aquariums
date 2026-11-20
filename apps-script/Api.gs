@@ -72,7 +72,7 @@ const API_FIELD_LISTS = {
    plants:          { "Difficulty": ["Difficulty", true], "Status": ["Status", true] },
    medications:     { "Stock": ["Stock Status", true] },
    foods:           { "Food Type": ["Food Type", true], "Manufacturer": ["Manufacturer", false],
-                      "Status": ["Status", true] },
+                      "Status": ["Status", true], "Stock": ["Stock Status", true] },
    // How often a food is fed, on the assignment that puts it in a tank (Foods.gs).
    assignments:     { "Feed Frequency": ["Feed Frequency", false] },
    waterParameters: { "Parameter": ["Water Parameter", true] }
@@ -173,6 +173,7 @@ function apiRoute_(req, user) {
       case "updateDose":          return apiWrite_(() => apiUpdateDose_(req, user));
       case "deleteDose":          return apiWrite_(() => apiDeleteDose_(req, user));
       case "setStock":            return apiWrite_(() => apiSetStock_(req, user));
+      case "setStockMany":        return apiWrite_(() => apiSetStockMany_(req, user));
       // Dropdown lists (Lists.gs)
       case "addLookup":           return apiWrite_(() => apiAddLookup_(req, user));
       case "updateLookup":        return apiWrite_(() => apiUpdateLookup_(req, user));
@@ -292,8 +293,10 @@ function apiRequireAdmin_(user) {
 // Everything the app needs on load: the person, form layouts (schema), all tables,
 // plus receipts, water tests, maintenance and wishlist data.
 function apiBootstrap_(user) {
-   // Any column a newer feature needs, before the snapshot is taken (Photos.gs).
-   apiEnsureMedThumbColumn_();
+   // Anything a newer feature needs, before the snapshot is taken.
+   apiEnsureMedThumbColumn_();          // Photos.gs
+   apiEnsureFoodStockColumn_();         // Foods.gs
+   apiSeedOrderedStatus_();             // Treatments.gs
    // Read every tab in one request first (Speed.gs); the readers below use that snapshot.
    apiPrefetchGrids_();
    const ss = apiSs_();

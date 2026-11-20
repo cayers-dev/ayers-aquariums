@@ -218,8 +218,39 @@ function apiDeleteTreatmentsWhere_(header, id, user) {
 
 
 // ------------------------------------------------------------
-// Stock (medications and typed price-tracker items)
+// Stock (medications, food and typed price-tracker items)
 // ------------------------------------------------------------
+
+// Record types that keep a stock status.
+const STOCK_TABLES = ["medications", "foods"];
+
+// "Ordered" joined the Stock Status list later: added once, and never again
+// (so turning it off on the Dropdown lists screen sticks).
+function apiSeedOrderedStatus_() {
+   const props = PropertiesService.getScriptProperties();
+   if (props.getProperty("stockOrderedSeeded") === "done") return;
+   const rows = apiReadLookups_().filter(r => r.type === TRT_CONFIG.stockList);
+   if (rows.length && !rows.some(r => /^ordered$/i.test(String(r.value).trim()))) {
+      apiEnsureLookupValue_(TRT_CONFIG.stockList, "Ordered", { id: "", email: "", name: "Setup", role: "Admin", tanks: [] });
+   }
+   props.setProperty("stockOrderedSeeded", "done");
+}
+
+// req: { items: [{ recordId } | { priceItemId }], stock } -> sets them all at once
+// (the Need to order screen ticks several and presses one button).
+function apiSetStockMany_(req, user) {
+   const items = Array.isArray(req.items) ? req.items.slice(0, 200) : [];
+   if (!items.length) throw apiError_("INVALID", "Tick at least one item.");
+   let updated = 0;
+   const failed = [];
+   items.forEach(it => {
+      try {
+         const one = apiSetStock_({ recordId: it.recordId, priceItemId: it.priceItemId, stock: req.stock }, user);
+         updated += one.updated || 0;
+      } catch (e) { failed.push(String(it.recordId || it.priceItemId || "?")); }
+   });
+   return { updated: updated, failed: failed };
+}
 
 // req: { recordId } or { priceItemId }, plus { stock }
 function apiSetStock_(req, user) {
@@ -238,12 +269,13 @@ function apiSetStock_(req, user) {
       return { updated: changes.length };
    }
    const id = String(req.recordId || "").trim();
-   const med = apiFindById_("medications", id);
-   if (!med) throw apiError_("INVALID", "Stock is kept for medications and typed price-tracker items.");
-   const sheet = apiSheet_(API_TABLES.medications.sheetKey);
+   let table = "", rec = null;
+   STOCK_TABLES.forEach(t => { if (!rec) { const r = apiFindById_(t, id); if (r) { table = t; rec = r; } } });
+   if (!rec) throw apiError_("INVALID", "Stock is kept for medications, food and typed price-tracker items.");
+   const sheet = apiSheet_(API_TABLES[table].sheetKey);
    apiEnsureColumn_(sheet, "Stock");
-   const changes = apiWriteChanges_(sheet, med._row, med, { "Stock": value });
-   if (changes.length) apiLog_(user, "Edit", API_TABLES.medications.label, id, changes.join("; "));
+   const changes = apiWriteChanges_(sheet, rec._row, rec, { "Stock": value });
+   if (changes.length) apiLog_(user, "Edit", API_TABLES[table].label, id, changes.join("; "));
    return { updated: changes.length };
 }
 
@@ -258,15 +290,16 @@ function apiEnsureColumn_(sheet, header) {
    return last + 1;
 }
 
-// A receipt line for a medication or a typed price item marks it as on hand (ReceiptLines.gs).
+// A receipt line for a medication, a food or a typed price item marks it as on hand (ReceiptLines.gs).
 function apiStockOnHandFromReceipt_(info, user) {
    const list = apiReadLists_(apiSs_())[TRT_CONFIG.stockList] || [];
    const onHand = list.find(o => /on hand/i.test(String(o)));
    if (!onHand) return "";
    try {
       if (info.recordId) {
-         const med = apiFindById_("medications", info.recordId);
-         if (!med || String(med["Stock"] || "") === onHand) return "";
+         let rec = null;
+         STOCK_TABLES.forEach(t => { if (!rec) rec = apiFindById_(t, info.recordId); });
+         if (!rec || String(rec["Stock"] || "") === onHand) return "";
          apiSetStock_({ recordId: info.recordId, stock: onHand }, user);
          return info.name || info.recordId;
       }

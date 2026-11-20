@@ -49,7 +49,7 @@
     photos: [],
     priceItems: [], prices: [], priceUnits: [], priceQuery: "", priceFilter: "all", priceOpen: {},
     lookups: [], lookupTypes: [], listQuery: "", receiptLines: [],
-    treatments: [], treatmentDoses: [], doseUnits: [], stockOptions: [], showPastTrt: false,
+    treatments: [], treatmentDoses: [], doseUnits: [], stockOptions: [], showPastTrt: false, orderPicked: {},
     wishOptions: { priorities: ["High", "Medium", "Low"], statuses: ["Researching", "Want", "Purchased", "Not getting"] },
     wishFilter: "open",
     wishTank: "",
@@ -222,7 +222,10 @@
     maint: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.2L3.5 17.3a1.8 1.8 0 0 0 2.5 2.5l5.8-5.8a4 4 0 0 0 5.2-5.4l-2.6 2.6-2.3-.4-.4-2.3z"/></svg>',
     wish: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/></svg>',
     sparkle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>',
-    plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>'
+    plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+    // Need to order: a shopping basket.
+    cart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16l-1.6 11.2a2 2 0 0 1-2 1.8H7.6a2 2 0 0 1-2-1.8z"/><path d="M8.5 7V5.5a3.5 3.5 0 0 1 7 0V7"/></svg>',
+    check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>'
   };
 
   // ------------------------------------------------------------------
@@ -630,6 +633,7 @@
       case "maint": view = viewMaintenance(route.args[0]); break;
       case "receipt": view = canReceipts() ? viewReceipt(route.args[0]) : viewTanks(); break;
       case "prices": view = viewPrices(); break;
+      case "toorder": view = viewToOrder(); break;
       case "treatments": view = viewTreatments(); break;
       case "treatment": view = viewTreatment(route.args[0]); break;
       case "price": view = viewPriceItem(route.args[0]); break;
@@ -637,7 +641,7 @@
     }
     const nav = stepNav(route);
     const tab = route.name === "tank" ? "tanks" : route.name === "item" ? "browse" : route.name === "receipt" ? "receipts" :
-                route.name === "testtypes" ? "water" : (route.name === "users" || route.name === "account" || route.name === "prices" || route.name === "price" || route.name === "lists" || route.name === "treatments" || route.name === "treatment") ? "home" : route.name;
+                route.name === "testtypes" ? "water" : (route.name === "users" || route.name === "account" || route.name === "prices" || route.name === "price" || route.name === "lists" || route.name === "treatments" || route.name === "treatment" || route.name === "toorder") ? "home" : route.name;
     const tabs = [["home", "Home"], ["tanks", "Tanks"], ["water", "Test"], ["maint", "Maint."], ["browse", "Browse"], ["wish", "Wishlist"]]
       .concat(canReceipts() ? [["receipts", "Receipts"]] : []);
 
@@ -1525,9 +1529,12 @@
       "T" + String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
   }
 
-  // ---------- Stock (medications and typed price-tracker items) ----------
+  // ---------- Stock (medications, food and typed price-tracker items) ----------
+  const STOCK_TYPES = ["medications", "foods"];
   const stockOf = r => String((r && r["Stock"]) || "").trim();
-  const stockClass = v => /out of/i.test(v) ? "retired" : /need|order|low/i.test(v) ? "warn" : /on hand/i.test(v) ? "good" : "edit";
+  // "Ordered" is checked first: it would otherwise read as "needs ordering".
+  const stockClass = v => /^ordered\b/i.test(v) ? "edit" : /out of/i.test(v) ? "retired"
+                        : /need|order|low/i.test(v) ? "warn" : /on hand/i.test(v) ? "good" : "edit";
   const stockPill = v => v ? '<span class="pill ' + stockClass(v) + '">' + esc(v) + '</span>' : "";
   // Equipment isn't counted: anything active and not in a tank is in storage.
   const inStorage = (type, r) => type === "equipment" && !isRetired(r) && !isWishItem(r) &&
@@ -1547,6 +1554,66 @@
         '<p class="hint">Set by hand. Entering a receipt line for this item marks it on hand. Admins can change the choices under Home › Dropdown lists.</p>',
       onSubmit: vals => write("setStock", Object.assign({ stock: vals.stock }, opts.key), "Stock saved")
     });
+  }
+
+  // ---------- Need to order ----------
+  // Everything whose stock isn't "On hand": what to order, then what's already
+  // ordered. Tick any number of rows and set them all with one button.
+  function stockRows() {
+    const out = [];
+    STOCK_TYPES.forEach(type => (state.data[type] || []).forEach(r => {
+      const T = TYPES[type];
+      if (isRetired(r) || isWishItem(r) || !stockOf(r)) return;
+      out.push({ kind: "record", id: r[T.id], type: type, name: T.title(r), sub: T.sub(r), img: T.img(r), stock: stockOf(r) });
+    }));
+    // Price-tracker items that aren't linked to a record keep their own stock.
+    (state.priceItems || []).forEach(p => {
+      const v = String(p["Stock"] || "").trim();
+      if (p["Record ID"] || !v) return;
+      const info = priceItemInfo(p);
+      out.push({ kind: "price", id: p["Price Item ID"], type: "price", name: info.name, sub: "Price tracker", img: info.img, stock: v });
+    });
+    return out.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  }
+  const needsOrdering = v => /out of stock/i.test(v) || (/need|low/i.test(v) && !/^ordered\b/i.test(v));
+  const isOnOrder = v => /^ordered\b/i.test(v);
+  const toOrderCount = () => stockRows().filter(r => needsOrdering(r.stock)).length;
+
+  function viewToOrder() {
+    const rows = stockRows();
+    const toOrder = rows.filter(r => needsOrdering(r.stock));
+    const onOrder = rows.filter(r => isOnOrder(r.stock));
+    const can = canPrices();
+    const href = r => r.kind === "price" ? "#/price/" + encodeURIComponent(r.id) : "#/item/" + r.type + "/" + encodeURIComponent(r.id);
+    const rowHtml = r =>
+      '<div class="list-item order-row' + (state.orderPicked[r.id] ? " picked" : "") + '"' +
+        (can ? ' data-act="order-tick" data-id="' + esc(r.id) + '"' : "") + '>' +
+        (can ? '<span class="tickbox" aria-hidden="true">' + (state.orderPicked[r.id] ? ICONS.check : "") + '</span>' : "") +
+        photoHtml(r.img, "thumb", 160, String(r.id).split("-")[0]) +
+        '<div class="body"><div class="title">' + esc(r.name) + '</div>' +
+        '<div class="sub">' + esc([r.id, r.sub].filter(Boolean).join(" \u00b7 ")) + '</div>' +
+        '<div class="order-pill">' + stockPill(r.stock) + '</div></div>' +
+        '<a class="icon-btn" href="' + href(r) + '" aria-label="Open ' + esc(r.name) + '">' + ICONS.next + '</a>' +
+      '</div>';
+    const section = (title, list, empty) =>
+      '<div class="section"><div class="section-head"><h3>' + esc(title) + ' (' + list.length + ')</h3>' +
+        (can && list.length ? '<button class="btn small" data-act="order-all" data-which="' + (title === "To order" ? "toorder" : "ordered") + '">Select all</button>' : "") +
+        '</div><div class="card list">' + (list.map(rowHtml).join("") || '<div class="empty">' + esc(empty) + '</div>') + '</div></div>';
+    const picked = rows.filter(r => state.orderPicked[r.id]);
+    const bar = can && picked.length
+      ? '<div class="order-bar"><span class="meta">' + picked.length + ' picked</span>' +
+          '<button class="btn" data-act="order-set" data-stock="Ordered">Mark ordered</button>' +
+          '<button class="btn primary" data-act="order-set" data-stock="On hand">Mark on hand</button></div>'
+      : "";
+    return {
+      title: "Need to order",
+      html:
+        (rows.length ? "" : '<div class="card"><div class="empty">Nothing is marked for ordering. Set a stock status on a medication, a food or a price-tracker item and it shows up here.</div></div>') +
+        (rows.length ? section("To order", toOrder, "Nothing to order right now.") : "") +
+        (rows.length ? section("Ordered", onOrder, "Nothing on its way.") : "") +
+        bar +
+        (can ? "" : '<p class="hint">Admins and editors can change stock.</p>')
+    };
   }
 
   // ---------- Receipt item lines ----------
@@ -1976,6 +2043,8 @@
         link("#/wish", "wish", "Wishlist", n(openWishes, "open") +
           (wishesNeedingTank().length ? " · " + wishesNeedingTank().length + " need a tank" : ""))
       ].concat(canReceipts() ? [link("#/receipts", "receipts", "Receipts", n(unassigned, "unassigned"))] : [])
+       .concat([link("#/toorder", "cart", "Need to order", toOrderCount() + " to order" +
+          (stockRows().filter(r => isOnOrder(r.stock)).length ? " \u00b7 " + stockRows().filter(r => isOnOrder(r.stock)).length + " ordered" : ""))])
        .concat([link("#/prices", "tag", "Prices", n(state.priceItems.length, state.priceItems.length === 1 ? "item" : "items") + " · " + n(state.prices.length, state.prices.length === 1 ? "price" : "prices"))])) +
       group("Account", [link("#/account", "account", "My account", state.me ? state.me.name || state.me.email : "")]
         .concat(isAdmin() ? [link("#/users", "users", "Users", ""), link("#/testtypes", "flask", "Test types", ""),
@@ -2125,7 +2194,7 @@
         photoHtml(img, "thumb", 160, String(r[T.id]).split("-")[0]) +
         '<div class="body"><div class="title">' + esc(T.title(r)) + '</div><div class="sub">' + esc([r[T.id], T.sub(r)].filter(Boolean).join(" · ")) + '</div></div>' +
         (isRetired(r) ? '<span class="pill retired">Retired</span>'
-          : type === "medications" ? stockPill(stockOf(r))
+          : STOCK_TYPES.indexOf(type) !== -1 ? stockPill(stockOf(r))
           : inStorage(type, r) ? '<span class="pill">In storage</span>' : "") + '</div>';
     }).join("");
     return {
@@ -2166,7 +2235,7 @@
       photoHtml(img, "big-img", 800, "") +
       '<div class="hero"><h2>' + esc(T.title(r)) + '</h2><div class="meta">' + esc([r[T.id], T.sub(r)].filter(Boolean).join(" · ")) + '</div>' +
       (isRetired(r) ? '<div class="counts"><span class="pill retired">Retired</span></div>' : isWishItem(r) ? '<div class="counts"><span class="pill wishpill">' + ICONS.wish + 'Wishlist</span></div>' : "") +
-      (type === "medications" && state.hasTreatments
+      (STOCK_TYPES.indexOf(type) !== -1 && state.hasTreatments
         ? '<div class="counts">' + (stockOf(r) ? stockPill(stockOf(r)) : '<span class="pill">Stock not set</span>') +
           (canPrices() ? '<button class="btn small" data-act="set-stock" data-id="' + esc(id) + '">Change</button>' : "") + '</div>'
         : inStorage(type, r) ? '<div class="counts"><span class="pill">In storage</span></div>' : "") +
@@ -5123,8 +5192,32 @@
       case "trt-status": write("setTreatmentStatus", { id: d.id, status: d.status }, d.status === "Active" ? "Treatment started again" : "Treatment stopped"); break;
       case "set-stock": {
         const key = d.priceItem ? { priceItemId: d.priceItem } : { recordId: d.id };
-        const rec = d.priceItem ? findPriceItem(d.priceItem) : findRec("medications", d.id);
-        if (rec) stockForm({ key: key, current: stockOf(rec), label: d.priceItem ? priceItemInfo(rec).name : d.id + " " + TYPES.medications.title(rec) });
+        const x = d.priceItem ? null : recordOf(d.id);
+        const rec = d.priceItem ? findPriceItem(d.priceItem) : (x && x.rec);
+        if (rec) stockForm({ key: key, current: stockOf(rec), label: d.priceItem ? priceItemInfo(rec).name : d.id + " " + TYPES[x.type].title(rec) });
+        break;
+      }
+      // Need to order: tick rows, then set them all at once
+      case "order-tick": {
+        if (e.target.closest("a")) return;
+        state.orderPicked[d.id] = !state.orderPicked[d.id];
+        render();
+        break;
+      }
+      case "order-all": {
+        const rows = stockRows().filter(r => d.which === "toorder" ? needsOrdering(r.stock) : isOnOrder(r.stock));
+        const allOn = rows.every(r => state.orderPicked[r.id]);
+        rows.forEach(r => { if (allOn) delete state.orderPicked[r.id]; else state.orderPicked[r.id] = true; });
+        render();
+        break;
+      }
+      case "order-set": {
+        const picked = stockRows().filter(r => state.orderPicked[r.id]);
+        if (!picked.length) break;
+        const items = picked.map(r => r.kind === "price" ? { priceItemId: r.id } : { recordId: r.id });
+        state.orderPicked = {};
+        write("setStockMany", { items: items, stock: d.stock },
+              picked.length + " item" + (picked.length === 1 ? "" : "s") + " marked " + String(d.stock).toLowerCase());
         break;
       }
       case "lookup-edit": lookupEditForm(d.row); break;
@@ -5205,7 +5298,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "58";
+  const APP_VERSION = "59";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
