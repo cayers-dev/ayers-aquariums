@@ -103,6 +103,10 @@ img { max-width: 100%; }
   background: var(--surface-2); color: var(--text);
 }
 .pill.edit { background: var(--primary-soft); color: var(--primary); }
+/* The tanks an item is in, on a Browse row: kept to the right, never crowding the name. */
+.list-item .pills { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; flex: none; max-width: 46%; }
+.pill.tankpill { font-size: 12px; padding: 2px 8px; color: var(--muted); white-space: nowrap; max-width: 130px; overflow: hidden; text-overflow: ellipsis; display: inline-block; }
+.pill.tankpill.more { font-weight: 600; }
 .pill.retired { background: var(--danger-soft); color: var(--danger); }
 .dim { opacity: .6; }
 

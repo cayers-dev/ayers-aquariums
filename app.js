@@ -2185,6 +2185,22 @@
       .filter(r => !q || Object.keys(r).some(k => k !== "_row" && String(r[k]).toLowerCase().indexOf(q) !== -1))
       .sort((a, b) => String(T.title(a)).localeCompare(String(T.title(b))));
   }
+  // The tanks a Browse row's item is in: the first two by name, then how many more.
+  // Tanks the person doesn't manage count too, so the number is the real one.
+  function tankPills(type, r) {
+    if (["species", "equipment", "plants"].indexOf(type) === -1) return "";
+    const id = r[TYPES[type].id];
+    const names = state.data.assignments.filter(a => a["Item ID"] === id && isActiveAssignment(a)).map(a => tankName(a["Tank ID"]))
+      .concat((state.otherAssignments || []).filter(a => a["Item ID"] === id).map(a => a["Tank Name"]))
+      .filter(Boolean)
+      .sort((a, b) => String(a).localeCompare(String(b)));
+    if (!names.length) return "";
+    return '<span class="pills">' +
+      names.slice(0, 2).map(n => '<span class="pill tankpill">' + esc(n) + '</span>').join("") +
+      (names.length > 2 ? '<span class="pill tankpill more">+' + (names.length - 2) + '</span>' : "") +
+      '</span>';
+  }
+
   function viewBrowse() {
     const type = state.browseType;
     const T = TYPES[type];
@@ -2200,7 +2216,8 @@
           // Wished for, not owned yet: same pill the item's own page uses.
           : isWishItem(r) ? '<span class="pill wishpill">' + ICONS.wish + 'Wishlist</span>'
           : STOCK_TYPES.indexOf(type) !== -1 ? stockPill(stockOf(r))
-          : inStorage(type, r) ? '<span class="pill">In storage</span>' : "") + '</div>';
+          : tankPills(type, r) ||
+            (inStorage(type, r) ? '<span class="pill">In storage</span>' : "")) + '</div>';
     }).join("");
     return {
       title: "Browse",
@@ -5428,7 +5445,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "65";
+  const APP_VERSION = "66";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
