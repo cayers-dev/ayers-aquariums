@@ -2195,9 +2195,11 @@
       .filter(Boolean)
       .sort((a, b) => String(a).localeCompare(String(b)));
     if (!names.length) return "";
+    const rest = names.slice(2);
     return '<span class="pills">' +
       names.slice(0, 2).map(n => '<span class="pill tankpill">' + esc(n) + '</span>').join("") +
-      (names.length > 2 ? '<span class="pill tankpill more">+' + (names.length - 2) + '</span>' : "") +
+      // The ones that didn't fit are named on hover, and on a long press on a touch screen.
+      (rest.length ? '<span class="pill tankpill more" title="' + esc(rest.join(", ")) + '">+' + rest.length + '</span>' : "") +
       '</span>';
   }
 
@@ -5445,7 +5447,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "66";
+  const APP_VERSION = "67";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
