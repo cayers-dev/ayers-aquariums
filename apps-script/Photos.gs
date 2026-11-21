@@ -198,7 +198,7 @@ function zzTimeLog() {
    const ss = apiSs_();
    const log = ss.getSheetByName(API_CONFIG.logSheetName);
    const out = [];
-   const t = (label, fn) => { const s = Date.now(); fn(); out.push(label + ": " + (Date.now() - s) + " ms"); };
+   const t = (label, fn) => { const s = Date.now(); fn(); const line = label + ": " + (Date.now() - s) + " ms"; out.push(line); Logger.log(line); };
    out.push("Change Log: " + log.getLastRow() + " rows x " + log.getLastColumn() + " cols");
    t("find the last row (read #1)", () => apiLastDataRow_(log));
    t("find the last row (read #2)", () => apiLastDataRow_(log));
@@ -209,7 +209,7 @@ function zzTimeLog() {
    t("flush", () => SpreadsheetApp.flush());
    const after = apiLastDataRow_(log);
    if (after > before) { log.deleteRow(after); out.push("test row removed (row " + after + ")"); }
-   const tank = apiSheet_("tanks");
+   const tank = apiSheet_("tank");
    out.push("Tank tab: " + tank.getLastRow() + " rows");
    t("find the last row on Tank", () => apiLastDataRow_(tank));
    SpreadsheetApp.flush();
