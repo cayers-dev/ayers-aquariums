@@ -798,6 +798,7 @@
   // Dropdowns an admin can type into are pickers: the value lives in a hidden
   // field, so the text box beside it has to be set too or the field looks empty.
   function fillField(el, v, classes) {
+    classes = classes || [];
     const box = el.closest && el.closest(".combo");
     el.value = v;
     if (box) {
@@ -2234,6 +2235,26 @@
           '<div class="sub">' + esc([a["Tank ID"], a["Date Added"] ? "Added " + fmtDate(a["Date Added"]) : ""].filter(Boolean).join(" · ")) + '</div></div></div>').join("") ||
           '<div class="empty">Not in any tank</div>') + '</div></div>';
     }
+    // Open wishes for this item: they decide both the section below the hero and
+    // whether "Add to wishlist" is worth offering.
+    const openWishes = state.wishes.filter(w => w["Item ID"] === id && wishIsOpen(w));
+    const acts = [];
+    if (isAdmin()) {
+      acts.push('<button class="btn" data-act="edit-record" data-type="' + type + '" data-id="' + esc(id) + '">Edit</button>');
+      // Several of the same filter or heater: copy the one that's already filled in.
+      if (type === "equipment") acts.push('<button class="btn" data-act="duplicate-record" data-type="' + type + '" data-id="' + esc(id) + '">' + ICONS.copy + 'Duplicate</button>');
+    } else if (canEditItem(type, r)) {
+      acts.push('<button class="btn" data-act="edit-record" data-type="' + type + '" data-id="' + esc(id) + '">Edit details</button>');
+    }
+    // Another one of something already on the list: the wish opens with this record chosen.
+    if (WISH_TYPES.indexOf(type) !== -1 && !openWishes.length && !isWishItem(r) && !isRetired(r) &&
+        (isAdmin() || wishTanksAllowed().length > 0)) {
+      acts.push('<button class="btn" data-act="wish-item" data-type="' + type + '" data-id="' + esc(id) + '">' + ICONS.wish + 'Add to wishlist</button>');
+    }
+    if (isAdmin()) {
+      if (!isRetired(r) && "Status" in r) acts.push('<button class="btn danger" data-act="retire" data-type="' + type + '" data-id="' + esc(id) + '">Retire</button>');
+      acts.push('<button class="btn danger" data-act="delete-record" data-type="' + type + '" data-id="' + esc(id) + '">Delete</button>');
+    }
     const hero = '<div class="card">' +
       photoHtml(img, "big-img", 800, "") +
       '<div class="hero"><h2>' + esc(T.title(r)) + '</h2><div class="meta">' + esc([r[T.id], T.sub(r)].filter(Boolean).join(" · ")) + '</div>' +
@@ -2242,16 +2263,13 @@
         ? '<div class="counts">' + (stockOf(r) ? stockPill(stockOf(r)) : '<span class="pill">Stock not set</span>') +
           (canPrices() ? '<button class="btn small" data-act="set-stock" data-id="' + esc(id) + '">Change</button>' : "") + '</div>'
         : inStorage(type, r) ? '<div class="counts"><span class="pill">In storage</span></div>' : "") +
-      (isAdmin() ? '<div class="actions"><button class="btn" data-act="edit-record" data-type="' + type + '" data-id="' + esc(id) + '">Edit</button>' +
-        // Several of the same filter or heater: copy the one that's already filled in.
-        (type === "equipment" ? '<button class="btn" data-act="duplicate-record" data-type="' + type + '" data-id="' + esc(id) + '">' + ICONS.copy + 'Duplicate</button>' : "") +
-        (!isRetired(r) && "Status" in r ? '<button class="btn danger" data-act="retire" data-type="' + type + '" data-id="' + esc(id) + '">Retire</button>' : "") +
-        '<button class="btn danger" data-act="delete-record" data-type="' + type + '" data-id="' + esc(id) + '">Delete</button></div>'
-        : canEditItem(type, r) ? '<div class="actions"><button class="btn" data-act="edit-record" data-type="' + type + '" data-id="' + esc(id) + '">Edit details</button></div>' : "") +
+      (acts.length ? '<div class="actions">' + acts.join("") + '</div>' : "") +
       '</div></div>';
-    const wishes = state.wishes.filter(w => w["Item ID"] === id && wishIsOpen(w));
-    const wishNote = wishes.length ? '<div class="section"><div class="card list">' + wishes.map(wishRow).join("") + '</div></div>' : "";
-    return { title: T.title(r), back: true, html: hero + photosSection(type, r) + wishNote + inTanks + itemNotesSection(id) +
+    const wishNote = openWishes.length
+      ? '<div class="section"><div class="section-head"><h3>On the wishlist (' + openWishes.length + ')</h3></div>' +
+        '<div class="card list">' + openWishes.map(wishRow).join("") + '</div></div>'
+      : "";
+    return { title: T.title(r), back: true, html: hero + wishNote + photosSection(type, r) + inTanks + itemNotesSection(id) +
       receiptsSection(id, canItemReceipts(type, r) ? type : "") + detailsSection(type, r, "Details") };
   }
 
@@ -3902,10 +3920,13 @@
       ["Status", "Vendor", "Serial Number"].indexOf(f.name) === -1);
   }
 
-  function addWishForm(prefTank) {
+  // preset (optional): { type, id } from an item's own page — the wish opens with that
+  // record already chosen, so nothing about the item has to be typed again.
+  function addWishForm(prefTank, preset) {
     const tanks = wishTanksAllowed();
     if (!tanks.length && !isAdmin()) { toast("You don’t manage any tanks yet.", true); return; }
-    let image = null, commons = null, reuseId = "", type = "species";
+    const pre = preset && WISH_TYPES.indexOf(preset.type) !== -1 && findRec(preset.type, preset.id) ? preset : null;
+    let image = null, commons = null, reuseId = "", type = pre ? pre.type : "species";
     const pri = state.wishOptions.priorities, sts = ["Researching", "Want"];
     openSheet({
       title: "Add to wishlist",
@@ -3971,6 +3992,32 @@
           setReuse(""); renderDetails();
         }));
         renderDetails();
+        if (pre) {
+          const rec = findRec(pre.type, pre.id);
+          if (pre.type === "equipment") {
+            // An equipment wish always buys another piece, so the details are copied
+            // rather than the record reused, and the new one gets its own ID.
+            wishItemFields("equipment").forEach(f => {
+              const el = $('[name="' + f.name + '"]', details);
+              const v = rec[f.name];
+              if (el && v !== undefined && v !== null && String(v) !== "") fillField(el, String(v));
+            });
+            reuse.hidden = false;
+            reuse.innerHTML = '<div class="notice">Copied from <b>' + esc(pre.id + " " + TYPES.equipment.title(rec)) +
+              '</b>. Each piece of equipment is its own record, so this one gets a new Equipment ID.</div>';
+          } else {
+            setReuse(pre.id);
+            // A wish can't ask for a tank the item is already in, so those are off the table.
+            const already = state.data.assignments.filter(a => a["Item ID"] === pre.id && isActiveAssignment(a)).map(a => a["Tank ID"]);
+            $$("input[name^='tank:']", form).forEach(el => {
+              if (already.indexOf(el.name.slice(5)) === -1) return;
+              el.checked = false;
+              el.disabled = true;
+              const lab = el.closest("label");
+              if (lab) lab.insertAdjacentHTML("beforeend", ' <span class="meta">already in this tank</span>');
+            });
+          }
+        }
         wireAiFill(form, () => type, () => ($('[name="w_link"]', form).value || "").trim(),
                    { scope: () => details, onPhoto: p => { if (!image) commons = p; } });
 
@@ -5202,6 +5249,7 @@
         break;
       case "edit-user": userForm(d.id); break;
       case "add-wish": addWishForm(d.tank); break;
+      case "wish-item": addWishForm("", { type: d.type, id: d.id }); break;
       case "wish-filter": state.wishFilter = d.f; render(); break;
       case "edit-wish": editWishForm(d.id); break;
       case "close-wish": closeWishForm(d.id); break;
@@ -5338,7 +5386,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "61";
+  const APP_VERSION = "62";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
