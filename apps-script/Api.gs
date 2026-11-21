@@ -102,6 +102,7 @@ function doPost(e) {
       // Signed in either with the app's session (normal) or a fresh Google sign-in (first time / after it lapsed).
       const user = req.session ? apiVerifySession_(req.session) : apiVerifyUser_(req.idToken);
       const result = apiRoute_(req, user);
+      apiFlushLog_();   // anything logged outside a save (the one-time setups on load)
       // Every successful request renews the session for another hour of use.
       return apiJson_(Object.assign({ ok: true }, result, { session: apiIssueSession_(user) }));
    } catch (err) {
@@ -174,6 +175,7 @@ function apiRoute_(req, user) {
       case "deleteDose":          return apiWrite_(() => apiDeleteDose_(req, user));
       case "setStock":            return apiWrite_(() => apiSetStock_(req, user));
       case "setStockMany":        return apiWrite_(() => apiSetStockMany_(req, user));
+      case "setChangeLog":        return apiWrite_(() => apiSetChangeLog_(req, user));
       // Dropdown lists (Lists.gs)
       case "addLookup":           return apiWrite_(() => apiAddLookup_(req, user));
       case "updateLookup":        return apiWrite_(() => apiUpdateLookup_(req, user));
@@ -313,7 +315,7 @@ function apiBootstrap_(user) {
       schema: schema,
       data: data
    };
-   if (user.role === "Admin") out.users = apiGetUsers_();
+   if (user.role === "Admin") { out.users = apiGetUsers_(); out.changeLog = apiLogOn_(); }
    // User ID -> name, so the app can show who uploaded or changed things.
    if (user.role === "Admin" || user.role === "Editor") {
       out.people = apiGetUsers_().map(u => ({ id: u.id, name: u.name || u.email }));
@@ -476,9 +478,12 @@ function apiWrite_(fn) {
    lock.waitLock(20000);
    try {
       const result = fn();
+      apiFlushLog_();            // the save's log rows, in one write
       SpreadsheetApp.flush();
       return result;
    } finally {
+      // Changes already written deserve their log rows even if the save threw.
+      apiFlushLog_();
       lock.releaseLock();
    }
 }
@@ -1020,12 +1025,49 @@ function apiEnsureSupportTabs_() {
    return { users: users, log: log };
 }
 
-// Adds a row to the Change Log: when, who, what action, which tab and record, what changed.
-function apiLog_(user, action, table, record, changes) {
-   const log = apiEnsureSupportTabs_().log;
-   const row = apiLastDataRow_(log) + 1;
-   if (row > log.getMaxRows()) log.insertRowAfter(log.getMaxRows());
-   log.getRange(row, 1, 1, 6).setValues([[new Date(), apiWho_(user), action, table, record, changes || ""]]);
+// Change Log entries wait here until the end of the save, so a save that changes
+// several things writes once instead of once per change (one write is ~0.4s).
+let API_LOG_QUEUE = [];
+
+// Admins can turn routine logging off (Home > My account). Permanent deletes are
+// recorded whatever the setting, so there is always a trail of what was destroyed.
+function apiLogOn_() {
+   return PropertiesService.getScriptProperties().getProperty("changeLogOff") !== "1";
+}
+
+// req: { on } -> turns the Change Log on or off (admins).
+function apiSetChangeLog_(req, user) {
+   apiRequireAdmin_(user);
+   const on = !!req.on;
+   // The switch itself is always recorded, so the log says who stopped it and when.
+   apiLog_(user, "Edit", API_CONFIG.logSheetName, "Logging", on ? "Turned on" : "Turned off", true);
+   PropertiesService.getScriptProperties().setProperty("changeLogOff", on ? "" : "1");
+   apiFlushLog_();
+   return { changeLog: on };
+}
+
+// Queues a Change Log row: when, who, what action, which tab and record, what changed.
+// Permanent deletes, and the switch itself (always), are recorded even while logging is off.
+function apiLog_(user, action, table, record, changes, always) {
+   if (!always && action !== "Delete" && !apiLogOn_()) return;
+   API_LOG_QUEUE.push([new Date(), apiWho_(user), action, table, record, changes || ""]);
+}
+
+// Writes everything queued, in one go. Called at the end of each save (apiWrite_),
+// while the script lock is still held, so two saves can't pick the same row.
+function apiFlushLog_() {
+   if (!API_LOG_QUEUE.length) return;
+   const rows = API_LOG_QUEUE.splice(0, API_LOG_QUEUE.length);
+   try {
+      const log = apiEnsureSupportTabs_().log;
+      const start = apiLastDataRow_(log) + 1;
+      const need = start + rows.length - 1;
+      if (need > log.getMaxRows()) log.insertRowsAfter(log.getMaxRows(), need - log.getMaxRows());
+      log.getRange(start, 1, rows.length, 6).setValues(rows);
+   } catch (e) {
+      // The log is a record of the save, never the point of it: never fail a save over it.
+      console.warn("Change Log write failed: " + e);
+   }
 }
 
 

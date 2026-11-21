@@ -191,3 +191,26 @@ function apiPhotoBytes_(p) {
    }
    return { mimeType: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()) };
 }
+
+
+// One-off: proves the batched Change Log writes once however many rows there are.
+// Run once, then delete.
+function zzTimeBatchLog() {
+   const user = { id: "", email: "", name: "Timing test", role: "Admin", tanks: [] };
+   const log = apiSs_().getSheetByName(API_CONFIG.logSheetName);
+   const before = apiLastDataRow_(log);
+   const out = [];
+   const t = (label, fn) => { const s = Date.now(); fn(); const line = label + ": " + (Date.now() - s) + " ms"; out.push(line); Logger.log(line); };
+   t("queue 8 entries", () => { for (let i = 1; i <= 8; i++) apiLog_(user, "Test", "Change Log", "batch " + i, "temporary row, removed straight away", true); });
+   t("write all 8 in one go", () => apiFlushLog_());
+   t("flush", () => SpreadsheetApp.flush());
+   const after = apiLastDataRow_(log);
+   out.push("rows written: " + (after - before));
+   for (let r = after; r > before; r--) log.deleteRow(r);
+   SpreadsheetApp.flush();
+   out.push("test rows removed; log back to " + apiLastDataRow_(log) + " rows");
+   out.push("logging on: " + apiLogOn_());
+   const text = out.join("\n");
+   Logger.log(text);
+   return text;
+}

@@ -432,6 +432,8 @@
     state.treatmentDoses = r.treatmentDoses || [];
     state.doseUnits = r.doseUnits || [];
     state.stockOptions = r.stockOptions || [];
+    // Admins only: whether routine changes are being written to the Change Log.
+    state.changeLog = r.changeLog !== false;
     // Treatments need the matching server update; until then their screens stay hidden.
     state.hasTreatments = Array.isArray(r.treatments);
     // Item lines need the matching server update; until then the section stays hidden.
@@ -2283,7 +2285,10 @@
         '<div class="k">Can edit</div><div>' + esc(tankList) + '</div>' +
         '<div class="k">Can log tests</div><div>' + esc(testList) + '</div>' +
         '<div class="k">App version</div><div>' + esc(APP_VERSION) + '</div></div>' +
-        (isAdmin() ? '<div class="actions"><a class="btn primary" href="#/users">' + ICONS.users + 'Manage users</a></div>' : "") +
+        (isAdmin() ? '<div class="actions"><a class="btn primary" href="#/users">' + ICONS.users + 'Manage users</a></div>' +
+          '<div class="card"><label class="check switch-row"><input type="checkbox" data-act="toggle-changelog"' + (state.changeLog ? " checked" : "") + '> ' +
+            '<span><b>Change log</b><span class="hint">Every add, edit and link is written to the Change Log tab. Turning it off makes saving a little quicker ' +
+            '(about half a second on a receipt with several lines). Permanent deletes are recorded either way.</span></span></label></div>' : "") +
         '<div class="actions"><button class="btn" data-act="refresh">Refresh data</button><button class="btn danger" data-act="sign-out">Sign out</button></div>' +
         '<p class="hint" style="margin-top:16px"><b>Add to your home screen:</b> on iPhone, tap Share → Add to Home Screen. On Android, tap the ⋮ menu → Add to Home screen (or Install app).</p>'
     };
@@ -5220,6 +5225,12 @@
               picked.length + " item" + (picked.length === 1 ? "" : "s") + " marked " + String(d.stock).toLowerCase());
         break;
       }
+      case "toggle-changelog": {
+        const on = !state.changeLog;
+        state.changeLog = on;                     // show the new position straight away
+        write("setChangeLog", { on: on }, on ? "Change log on" : "Change log off");
+        break;
+      }
       case "lookup-edit": lookupEditForm(d.row); break;
       case "price-picture-remove": pricePictureRemoveForm(d.id); break;
     }
@@ -5298,7 +5309,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "59";
+  const APP_VERSION = "60";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

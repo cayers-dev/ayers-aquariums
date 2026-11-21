@@ -675,3 +675,9 @@ body.syncing::before { content: ""; position: fixed; top: 0; left: 0; right: 0; 
 }
 .order-bar .meta { flex: 1; margin: 0; }
 .order-row .order-pill { margin-top: 4px; }
+
+/* A setting with a checkbox and an explanation under its name. */
+.switch-row { align-items: flex-start; gap: 10px; padding: 12px; }
+.switch-row input { margin-top: 2px; }
+.switch-row span { display: block; }
+.switch-row .hint { display: block; margin: 4px 0 0; }
