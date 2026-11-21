@@ -681,7 +681,7 @@
     } else if (route.name === "item") {
       const type = route.args[0], T = TYPES[type];
       if (!T || !state.data[type]) return null;
-      const all = (state.data[type] || []).filter(r => !isWishItem(r))
+      const all = (state.data[type] || [])
         .sort((a, b) => String(T.title(a)).localeCompare(String(T.title(b)))).map(r => r[T.id]);
       lists = [browseRows(type, state.browseType === type).map(r => r[T.id]), all];
     } else if (route.name === "receipt") {
@@ -2181,7 +2181,6 @@
     const T = TYPES[type];
     const q = useSearch ? state.query.trim().toLowerCase() : "";
     return state.data[type]
-      .filter(r => !isWishItem(r))
       .filter(r => state.showRetired || !isRetired(r))
       .filter(r => !q || Object.keys(r).some(k => k !== "_row" && String(r[k]).toLowerCase().indexOf(q) !== -1))
       .sort((a, b) => String(T.title(a)).localeCompare(String(T.title(b))));
@@ -2198,6 +2197,8 @@
         photoHtml(img, "thumb", 160, String(r[T.id]).split("-")[0]) +
         '<div class="body"><div class="title">' + esc(T.title(r)) + '</div><div class="sub">' + esc([r[T.id], T.sub(r)].filter(Boolean).join(" · ")) + '</div></div>' +
         (isRetired(r) ? '<span class="pill retired">Retired</span>'
+          // Wished for, not owned yet: same pill the item's own page uses.
+          : isWishItem(r) ? '<span class="pill wishpill">' + ICONS.wish + 'Wishlist</span>'
           : STOCK_TYPES.indexOf(type) !== -1 ? stockPill(stockOf(r))
           : inStorage(type, r) ? '<span class="pill">In storage</span>' : "") + '</div>';
     }).join("");
@@ -5427,7 +5428,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "64";
+  const APP_VERSION = "65";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
