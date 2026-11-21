@@ -3880,6 +3880,7 @@
         (manage ? '<button class="btn" data-act="edit-wish" data-id="' + esc(id) + '">Edit wish</button>' : "") +
         (r && canEditItem(type, r) && (isWishItem(r) || isAdmin()) ? '<button class="btn" data-act="edit-record" data-type="' + type + '" data-id="' + esc(w["Item ID"]) + '">Edit item</button>' : "") +
         (open && canCloseWish(w) ? '<button class="btn danger" data-act="close-wish" data-id="' + esc(id) + '">Not getting</button>' : "") +
+        (isAdmin() ? '<button class="btn danger" data-act="delete-wish" data-id="' + esc(id) + '">Delete</button>' : "") +
       '</div></div></div>';
 
     const tankBlock = (tankId, extra) => {
@@ -3933,7 +3934,7 @@
       submitLabel: "Add wish",
       body:
         '<div class="segmented wish-type">' + WISH_TYPES.map(t => '<button type="button" class="' + (t === type ? "on" : "") + '" data-wtype="' + t + '">' + TYPES[t].label + '</button>').join("") + '</div>' +
-        '<div class="field"><label>Photo <span class="opt">optional</span></label>' +
+        '<div class="field wish-photo"><label>Photo <span class="opt">optional</span></label>' +
           photoPickerHtml("f_wphoto") +
           '<div class="hint">The AI will try to identify it. The photo becomes the item’s picture.</div>' +
           '<div class="id-result" hidden></div></div>' +
@@ -3971,6 +3972,8 @@
           // Hidden isn't enough: the sheet's own check still counts required fields
           // unless they're disabled, and the item's details aren't being asked for.
           $$("input[name], select[name], textarea[name]", sect).forEach(el => { el.disabled = !!r; });
+          // Nothing above the notice applies to a record that's already chosen.
+          $$(".wish-type, .wish-photo", form).forEach(el => { el.hidden = !!r; });
         };
         reuse.addEventListener("click", e => { if (e.target.closest("[data-unreuse]")) setReuse(""); });
         {
@@ -4173,6 +4176,39 @@
         (w["New Item"] === true && r && isWishItem(r) ? ', and ' + esc(w["Item ID"]) + ' (added just for this wish) is marked Retired' : "") +
         '. Nothing is deleted.</p>',
       onSubmit: () => write("closeWish", { wishId: id }, "Wish closed")
+    });
+  }
+
+  // Admins only. The item record is kept; what goes is the wish itself, its
+  // compatibility checks and the tank placeholders it created.
+  function deleteWishForm(id) {
+    const w = findWish(id);
+    if (!w) return;
+    const r = wishItem(w);
+    const mine = state.data.assignments.filter(a => a["Wish ID"] === id);
+    const placeholders = mine.filter(a => !a["Date Added"]).length;
+    const kept = mine.length - placeholders;
+    const checks = state.compat.filter(c => c["Wish ID"] === id).length;
+    const n = (one, many, v) => v ? "<li>" + v + " " + (v === 1 ? one : many) + "</li>" : "";
+    openSheet({
+      title: "Delete wish",
+      submitLabel: "Delete permanently",
+      danger: true,
+      body: '<p>Permanently delete <b>' + esc(id + " " + wishTitle(w)) + '</b>? This can’t be undone from the app.</p>' +
+        '<p>This also deletes:</p><ul>' +
+          (n("compatibility check", "compatibility checks", checks) +
+           n("tank row it was waiting on", "tank rows it was waiting on", placeholders) || "<li>nothing else</li>") +
+        '</ul>' +
+        '<p>' + (r ? esc(w["Item ID"] + " " + TYPES[w["Item Type"]].title(r)) : esc(String(w["Item ID"] || "The item"))) +
+          ' is kept' + (isWishItem(r) ? ", still marked Wishlist" : "") + '.' +
+          (kept ? ' Its ' + kept + ' tank row' + (kept > 1 ? "s stay" : " stays") + ' as history, with the reference to this wish cleared.' : "") +
+        '</p>' +
+        '<p class="hint">Use “Not getting” instead to close it but keep the record of it. The delete is noted in the Change Log.</p>',
+      onSubmit: async () => {
+        const ok = await write("deleteWish", { wishId: id }, "Wish deleted");
+        location.hash = "#/wish";
+        return ok;
+      }
     });
   }
 
@@ -5257,6 +5293,7 @@
       case "wish-filter": state.wishFilter = d.f; render(); break;
       case "edit-wish": editWishForm(d.id); break;
       case "close-wish": closeWishForm(d.id); break;
+      case "delete-wish": deleteWishForm(d.id); break;
       case "purchase-wish": purchaseWishForm(d.id); break;
       case "check-wish": checkWishNow(d.id); break;
       // Price tracker
@@ -5390,7 +5427,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "63";
+  const APP_VERSION = "64";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

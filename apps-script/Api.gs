@@ -155,6 +155,7 @@ function apiRoute_(req, user) {
       case "addWish":             return apiAddWish_(req, user);
       case "updateWish":          return apiWrite_(() => apiUpdateWish_(req, user));
       case "closeWish":           return apiWrite_(() => apiCloseWish_(req, user));
+      case "deleteWish":          return apiWrite_(() => apiDeleteWish_(req, user));
       case "purchaseWish":        return apiWrite_(() => apiPurchaseWish_(req, user));
       case "checkWish":           aiSetCancelId_(req); return apiCheckWish_(req, user);
       case "itemPhoto":           return apiItemPhoto_(req, user);

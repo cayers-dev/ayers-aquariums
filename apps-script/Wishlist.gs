@@ -803,3 +803,36 @@ function apiWishLabel_(w) {
    const rec = apiFindById_(w["Item Type"], w["Item ID"]);
    return rec ? apiItemTitle_(w["Item Type"], rec) : String(w["Item ID"] || "");
 }
+
+// ------------------------------------------------------------
+// Delete a wish (admins). The item record is left alone: only the wish, its
+// compatibility checks and the tank placeholders it created go. A tank row the
+// item was actually added to is history, so it stays with its wish reference cleared.
+// req: { wishId }
+// ------------------------------------------------------------
+function apiDeleteWish_(req, user) {
+   apiRequireAdmin_(user);
+   const tabs = apiEnsureWishTabs_();
+   const wish = apiFindWish_(req.wishId);
+   const id = wish["Wish ID"];
+   const is = v => String(v === undefined || v === null ? "" : v).trim() === id;
+   const counts = {};
+
+   counts["compatibility checks"] = apiDeleteRowsWhere_(apiTabOrNull_(WISH_CONFIG.compatSheetName), "Wish ID", is).count;
+
+   // Tank rows: clear the reference on the ones that are real history, then drop the placeholders.
+   const aSheet = apiSheet_("tankAssignments");
+   const mine = apiReadTable_("assignments").rows.filter(r => is(r["Wish ID"]));
+   let kept = 0;
+   mine.forEach(r => { if (r["Date Added"]) { apiWriteChanges_(aSheet, r._row, r, { "Wish ID": "" }); kept++; } });
+   const drop = mine.filter(r => !r["Date Added"]).map(r => r._row).sort((a, b) => b - a);
+   drop.forEach(row => aSheet.deleteRow(row));
+   counts["tank placeholders"] = drop.length;
+   counts["tank rows kept, wish reference cleared"] = kept;
+
+   apiDeleteRowsWhere_(tabs.wishes, "Wish ID", is);
+   const also = apiCountsText_(counts);
+   apiLog_(user, "Delete", "Wishlist", id + " / " + wish["Item ID"],
+           (wish["Item ID"] ? wish["Item ID"] + " kept. " : "") + (also ? also : "Nothing else referred to it."));
+   return { deleted: id, also: counts };
+}
