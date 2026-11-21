@@ -191,3 +191,29 @@ function apiPhotoBytes_(p) {
    }
    return { mimeType: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()) };
 }
+
+
+// One-off: times what the Change Log costs on a save. Run once, then delete.
+function zzTimeLog() {
+   const ss = apiSs_();
+   const log = ss.getSheetByName(API_CONFIG.logSheetName);
+   const out = [];
+   const t = (label, fn) => { const s = Date.now(); fn(); out.push(label + ": " + (Date.now() - s) + " ms"); };
+   out.push("Change Log: " + log.getLastRow() + " rows x " + log.getLastColumn() + " cols");
+   t("find the last row (read #1)", () => apiLastDataRow_(log));
+   t("find the last row (read #2)", () => apiLastDataRow_(log));
+   t("find the last row (read #3)", () => apiLastDataRow_(log));
+   const before = apiLastDataRow_(log);
+   t("a whole apiLog_ call", () => apiLog_({ id: "", email: "", name: "Timing test", role: "Admin", tanks: [] },
+                                           "Test", "Change Log", "timing", "temporary row, removed straight away"));
+   t("flush", () => SpreadsheetApp.flush());
+   const after = apiLastDataRow_(log);
+   if (after > before) { log.deleteRow(after); out.push("test row removed (row " + after + ")"); }
+   const tank = apiSheet_("tanks");
+   out.push("Tank tab: " + tank.getLastRow() + " rows");
+   t("find the last row on Tank", () => apiLastDataRow_(tank));
+   SpreadsheetApp.flush();
+   const text = out.join("\n");
+   Logger.log(text);
+   return text;
+}
