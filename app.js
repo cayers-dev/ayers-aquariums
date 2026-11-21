@@ -2612,7 +2612,11 @@
       (mode === "multi" ? '<div class="chips"></div>' : "") +
       '<div class="combo-box"><input type="text" id="' + id + '_q" class="combo-input" role="combobox" aria-expanded="false" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="' + esc(f.placeholder || "Tap to choose or type to search") + '" value="' + esc(mode === "multi" ? "" : (f.value || "")) + '">' +
       '<button type="button" class="combo-clear" aria-label="Clear"' + (f.value && mode !== "multi" ? "" : " hidden") + '>' + ICONS.close + '</button></div>' +
-      '<div class="combo-list" role="listbox" hidden>' + (mode === "free" ? '<div class="combo-new" hidden></div>' : "") + opts + '<div class="combo-empty"' + (opts ? " hidden" : "") + '>No matches</div></div>' +
+      '<div class="combo-list" role="listbox" hidden>' + (mode === "free" ? '<div class="combo-new" hidden></div>' : "") + opts +
+        '<div class="combo-empty"' + (opts ? " hidden" : "") + '>No matches</div>' +
+        // "It isn't in the list": the record's own form opens on top of this one.
+        (f.newRecord ? '<button type="button" class="combo-add">' + ICONS.plus + esc(f.newRecord) + '</button>' : "") +
+      '</div>' +
     '</div>';
   }
 
@@ -2706,9 +2710,31 @@
     });
     list.addEventListener("click", e => {
       if (newRow && e.target === newRow) { close(); input.blur(); return; }
+      // The caller opens whatever form it wants and hands the record back to comboAddPick.
+      if (e.target.closest(".combo-add")) {
+        close(); input.blur();
+        root.dispatchEvent(new CustomEvent("combo-add-record", { bubbles: true, detail: { typed: input.value.trim() } }));
+        return;
+      }
       const o = e.target.closest(".combo-opt");
       if (o && !o.disabled) pick(o);
     });
+    // Adds a record that didn't exist when the picker was built, and chooses it.
+    root.comboAddPick = it => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "combo-opt";
+      b.setAttribute("role", "option");
+      b.dataset.value = it.value;
+      b.dataset.label = it.label;
+      b.dataset.search = [it.label, it.value, it.sub, it.group].filter(Boolean).join(" ").toLowerCase();
+      b.innerHTML = '<span class="body"><span class="title">' + esc(it.label) + '</span>' +
+        '<span class="sub">' + esc([it.value, it.sub].filter(Boolean).join(" · ")) + '</span></span>' +
+        '<span class="tick" aria-hidden="true">✓</span>';
+      list.insertBefore(b, empty);
+      opts.push(b);
+      pick(b);
+    };
     if (chips) chips.addEventListener("click", e => {
       const b = e.target.closest("[data-chip]");
       if (!b) return;
@@ -2877,11 +2903,27 @@
       title: "Add to " + tankName(tankId),
       submitLabel: "Add",
       body:
-        comboHtml({ name: "Item IDs", label: "Items", mode: "multi", required: true, placeholder: "Tap to choose, or type to search. Pick as many as you like" }, items) +
+        comboHtml({ name: "Item IDs", label: "Items", mode: "multi", required: true,
+                    placeholder: "Tap to choose, or type to search. Pick as many as you like",
+                    newRecord: isAdmin() ? "Add one that isn't in the list…" : "" }, items) +
         fieldHtml({ name: "Date Added", type: "date" }, today()) +
         fieldHtml({ name: "Notes", type: "longtext" }, "") +
-        '<p class="hint">The date and notes are saved on every item you pick. Only admins can add new species, equipment or plants to the lists. Ask Chris if something is missing.</p>',
-      onReady: form => $$("[data-combo]", form).forEach(wireCombo),
+        '<p class="hint">The date and notes are saved on every item you pick.' +
+          (isAdmin() ? ' Anything missing can be added from the list itself.'
+                     : ' Only admins can add new species, equipment, plants or food to the lists. Ask Chris if something is missing.') + '</p>',
+      onReady: form => {
+        $$("[data-combo]", form).forEach(wireCombo);
+        const combo = $("[data-combo]", form);
+        if (!combo || !isAdmin()) return;
+        combo.addEventListener("combo-add-record", e => {
+          newRecordFlow(e.detail.typed, (newId, newType) => {
+            const rec = findRec(newType, newId);
+            if (!rec) return;
+            const T = TYPES[newType];
+            combo.comboAddPick({ value: newId, label: T.title(rec), sub: T.sub(rec), group: T.label });
+          }, NEW_RECORD_TYPES.filter(t => ITEM_TYPES.indexOf(t[0]) !== -1));
+        });
+      },
       onSubmit: vals => {
         const ids = String(vals["Item IDs"] || "").split(",").map(x => x.trim()).filter(Boolean);
         if (!ids.length) throw new Error("Choose at least one item.");
@@ -5452,7 +5494,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "68";
+  const APP_VERSION = "69";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
