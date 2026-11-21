@@ -194,7 +194,7 @@ function apiPhotoBytes_(p) {
 
 // TEMPORARY: one-off data audit applier. Remove after running.
 function zzApplyAudit() {
-   var url = "https://raw.githubusercontent.com/cayers-dev/ayers-aquariums/AUDITCOMMIT/apps-script/audit-changes.json";
+   var url = "https://raw.githubusercontent.com/cayers-dev/ayers-aquariums/1428ac4/apps-script/audit-changes.json";
    var spec = JSON.parse(UrlFetchApp.fetch(url, { muteHttpExceptions: false }).getContentText());
    var tabs = {
       species: "Species",
