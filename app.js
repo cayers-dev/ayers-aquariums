@@ -225,7 +225,8 @@
     plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
     // Need to order: a shopping basket.
     cart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16l-1.6 11.2a2 2 0 0 1-2 1.8H7.6a2 2 0 0 1-2-1.8z"/><path d="M8.5 7V5.5a3.5 3.5 0 0 1 7 0V7"/></svg>',
-    check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>'
+    check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>',
+    copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 6.5V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h1.5"/></svg>'
   };
 
   // ------------------------------------------------------------------
@@ -2242,6 +2243,8 @@
           (canPrices() ? '<button class="btn small" data-act="set-stock" data-id="' + esc(id) + '">Change</button>' : "") + '</div>'
         : inStorage(type, r) ? '<div class="counts"><span class="pill">In storage</span></div>' : "") +
       (isAdmin() ? '<div class="actions"><button class="btn" data-act="edit-record" data-type="' + type + '" data-id="' + esc(id) + '">Edit</button>' +
+        // Several of the same filter or heater: copy the one that's already filled in.
+        (type === "equipment" ? '<button class="btn" data-act="duplicate-record" data-type="' + type + '" data-id="' + esc(id) + '">' + ICONS.copy + 'Duplicate</button>' : "") +
         (!isRetired(r) && "Status" in r ? '<button class="btn danger" data-act="retire" data-type="' + type + '" data-id="' + esc(id) + '">Retire</button>' : "") +
         '<button class="btn danger" data-act="delete-record" data-type="' + type + '" data-id="' + esc(id) + '">Delete</button></div>'
         : canEditItem(type, r) ? '<div class="actions"><button class="btn" data-act="edit-record" data-type="' + type + '" data-id="' + esc(id) + '">Edit details</button></div>' : "") +
@@ -2421,7 +2424,7 @@
 
   // prefill (optional): { suggestions: { field: value }, notes, source } from Read label;
   // fills blank fields only, outlined so they can be checked before saving.
-  // opts: { seed: { field: value }, note: "shown at the top", onCreated: fn(id) }
+  // opts: { seed: { field: value }, note: "shown at the top", title, onCreated: fn(id) }
   // Opened from another form (a receipt line, say), it stacks on top: the form
   // underneath keeps everything typed into it, and onCreated hands back the new ID.
   function recordForm(type, id, prefill, opts) {
@@ -2438,7 +2441,7 @@
     const tanks = !editing && ITEM_TYPES.indexOf(type) !== -1 ? tanksICanAddTo() : [];
     const ai = AI_TYPES.indexOf(type) !== -1 && (isAdmin() || canEditItem(type, rec));
     openSheet({
-      title: (editing ? "Edit " : "Add ") + T.one.toLowerCase(),
+      title: opts.title || (editing ? "Edit " : "Add ") + T.one.toLowerCase(),
       submitLabel: editing ? "Save" : "Add",
       body: (opts.note ? '<p class="hint from-note">' + esc(opts.note) + '</p>' : "") +
         (ai ? aiBarHtml() : "") + fields.map(f => fieldHtml(f, values[f.name])).join("") +
@@ -2483,6 +2486,31 @@
         if (newId && opts.onCreated) { await refreshInBackground(); opts.onCreated(newId, type); }
         return res;
       }
+    });
+  }
+
+  // Same model, second unit: opens an Add form already filled in from an existing
+  // record. Everything that describes the product carries over; everything that
+  // belongs to the one unit is left blank, and the ID and its links are made fresh
+  // when it saves.
+  const DUP_SKIP = ["Serial Number", "Purchase Date", "Notes", "Status", "Equipment Doc URL", "QR Code URL"];
+
+  function duplicateRecord(type, id) {
+    const rec = findRec(type, id);
+    if (!rec) { toast("That record isn't there any more", true); return; }
+    const T = TYPES[type];
+    const seed = {};
+    (state.schema[type] || []).forEach(f => {
+      if (f.readOnly || DUP_SKIP.indexOf(f.name) !== -1) return;
+      const v = rec[f.name];
+      if (v === undefined || v === null || v === "") return;
+      seed[f.name] = String(v);
+    });
+    recordForm(type, null, null, {
+      seed: seed,
+      title: "Duplicate " + T.one.toLowerCase(),
+      note: "Copied from " + id + " " + T.title(rec) + ". Serial number, purchase date and notes are blank, and it gets its own ID when you add it.",
+      onCreated: newId => { location.hash = "#/item/" + type + "/" + encodeURIComponent(newId); }
     });
   }
 
@@ -5126,6 +5154,7 @@
       case "toggle-removed": state.showRemoved = !state.showRemoved; render(); break;
       case "add-record": recordForm(d.type); break;
       case "edit-record": recordForm(d.type, d.id); break;
+      case "duplicate-record": duplicateRecord(d.type, d.id); break;
       case "retire": retireForm(d.type, d.id); break;
       case "add-photo": addPhotoForm(d.type, d.id); break;
       case "delete-record": deleteRecordForm(d.type, d.id); break;
@@ -5309,7 +5338,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "60";
+  const APP_VERSION = "61";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
