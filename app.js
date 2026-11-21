@@ -3966,7 +3966,11 @@
           const r = id ? findRec(type, id) : null;
           reuse.hidden = !r;
           reuse.innerHTML = r ? '<div class="notice">Using <b>' + esc(id + " " + TYPES[type].title(r)) + '</b>, already in your ' + esc(TYPES[type].label) + ' list. <button type="button" class="link-btn" data-unreuse>Add a new one instead</button></div>' : "";
-          $(".form-section", form).hidden = !!r;
+          const sect = $(".form-section", form);
+          sect.hidden = !!r;
+          // Hidden isn't enough: the sheet's own check still counts required fields
+          // unless they're disabled, and the item's details aren't being asked for.
+          $$("input[name], select[name], textarea[name]", sect).forEach(el => { el.disabled = !!r; });
         };
         reuse.addEventListener("click", e => { if (e.target.closest("[data-unreuse]")) setReuse(""); });
         {
@@ -5386,7 +5390,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "62";
+  const APP_VERSION = "63";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
