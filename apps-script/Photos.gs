@@ -191,3 +191,52 @@ function apiPhotoBytes_(p) {
    }
    return { mimeType: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()) };
 }
+
+// TEMPORARY: one-off data audit applier. Remove after running.
+function zzApplyAudit() {
+   var url = "https://raw.githubusercontent.com/cayers-dev/ayers-aquariums/AUDITCOMMIT/apps-script/audit-changes.json";
+   var spec = JSON.parse(UrlFetchApp.fetch(url, { muteHttpExceptions: false }).getContentText());
+   var tabs = {
+      species: "Species",
+      plants: "Plants",
+      equipment: "Equipment",
+      medications: "Medication and Supplements",
+      foods: "Foods"
+   };
+   var ss = SpreadsheetApp.openById(API_CONFIG.spreadsheetId);
+   var cache = {};
+   function grid(table) {
+      if (cache[table]) return cache[table];
+      var sh = ss.getSheetByName(tabs[table]);
+      var vals = sh.getDataRange().getValues();
+      var head = vals[0].map(function (h) { return String(h).trim(); });
+      cache[table] = { sheet: sh, values: vals, head: head };
+      return cache[table];
+   }
+   var applied = [];
+   var skipped = [];
+   spec.changes.forEach(function (c) {
+      var g = grid(c.table);
+      var col = g.head.indexOf(c.field);
+      if (col < 0) { skipped.push([c.table, c.id, c.field, "no such column"]); return; }
+      var row = -1;
+      for (var r = 1; r < g.values.length; r++) {
+         if (String(g.values[r][0]).trim() === c.id) { row = r; break; }
+      }
+      if (row < 0) { skipped.push([c.table, c.id, c.field, "no such record"]); return; }
+      var before = g.values[row][col];
+      var beforeStr = before === null || before === undefined ? "" : String(before);
+      var afterStr = c.value === null || c.value === undefined ? "" : String(c.value);
+      if (beforeStr.trim() === afterStr.trim()) { skipped.push([c.table, c.id, c.field, "already correct"]); return; }
+      g.sheet.getRange(row + 1, col + 1).setValue(c.value);
+      g.values[row][col] = c.value;
+      applied.push([c.table, c.id, String(g.values[row][1]), c.field, beforeStr, afterStr]);
+      apiLog_({ email: "audit" }, "Edit", tabs[c.table], c.id + " " + String(g.values[row][1]), c.field + ": " + (beforeStr || "(blank)") + " -> " + (afterStr || "(blank)"), true);
+   });
+   apiFlushLog_();
+   SpreadsheetApp.flush();
+   console.log("APPLIED " + applied.length);
+   console.log(JSON.stringify(applied));
+   console.log("SKIPPED " + skipped.length);
+   console.log(JSON.stringify(skipped));
+}
