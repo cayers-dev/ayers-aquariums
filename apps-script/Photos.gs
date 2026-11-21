@@ -203,7 +203,7 @@ function zzApplyAudit() {
       medications: "Medication and Supplements",
       foods: "Foods"
    };
-   var ss = SpreadsheetApp.openById(API_CONFIG.spreadsheetId);
+   var ss = apiSs_();
    var cache = {};
    function grid(table) {
       if (cache[table]) return cache[table];
