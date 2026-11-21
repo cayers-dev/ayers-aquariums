@@ -2198,8 +2198,9 @@
     const rest = names.slice(2);
     return '<span class="pills">' +
       names.slice(0, 2).map(n => '<span class="pill tankpill">' + esc(n) + '</span>').join("") +
-      // The ones that didn't fit are named on hover, and on a long press on a touch screen.
-      (rest.length ? '<span class="pill tankpill more" title="' + esc(rest.join(", ")) + '">+' + rest.length + '</span>' : "") +
+      // The ones that didn't fit are named on hover, or on a tap on a touch screen.
+      (rest.length ? '<span class="pill tankpill more" data-act="tank-more" tabindex="0">+' + rest.length +
+        '<span class="tankpill-tip">' + esc(rest.join(", ")) + '</span></span>' : "") +
       '</span>';
   }
 
@@ -5240,6 +5241,9 @@
       if (idx !== null) showTrendTip(tw, idx);
       return;
     }
+    // A tapped "+2" keeps its tooltip open until something else is tapped.
+    const tp = e.target.closest(".tankpill.more");
+    $$(".tankpill.more.on").forEach(x => { if (x !== tp) x.classList.remove("on"); });
     const el = e.target.closest("[data-act]");
     if (!el || !state.me) return;
     const act = el.dataset.act;
@@ -5256,6 +5260,7 @@
         if (e.target.closest("button") && e.target.closest("button") !== el) return;
         location.hash = "#/item/" + d.type + "/" + encodeURIComponent(d.id);
         break;
+      case "tank-more": e.stopPropagation(); el.classList.toggle("on"); break;
       case "browse-type": state.browseType = d.type; state.query = ""; render(); break;
       case "home-browse": state.browseType = d.type; state.query = ""; break;   // the link then opens Browse
       case "toggle-removed": state.showRemoved = !state.showRemoved; render(); break;
@@ -5447,7 +5452,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "67";
+  const APP_VERSION = "68";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });
