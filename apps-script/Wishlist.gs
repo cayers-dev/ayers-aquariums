@@ -140,7 +140,7 @@ const apiWishIsOpen_ = w => ["Purchased", "Not getting"].indexOf(String(w["Wish 
 function apiWishBootstrap_(user, assignments) {
    let wishes = apiReadWishes_();
    let compat = apiReadCompat_(true);
-   if (user.role !== "Admin") {
+   if (!apiCan_(user, "allTanks")) {
       const mine = {};
       user.tanks.forEach(t => mine[t] = true);
       const forMyTank = {};
@@ -159,21 +159,21 @@ function apiWishBootstrap_(user, assignments) {
 // Permissions
 // ------------------------------------------------------------
 function apiRequireWishUser_(user) {
-   if (user.role !== "Admin" && user.role !== "Editor") throw apiError_("FORBIDDEN", "Only admins and editors can change the wishlist.");
+   if (!apiCan_(user, "wishlist")) throw apiError_("FORBIDDEN", "Your role can't change the wishlist.");
 }
 
 // Admins, the person who added the wish, or an editor of one of its tanks.
 function apiCanManageWish_(user, wish, pendingTanks) {
-   if (user.role === "Admin") return true;
-   if (user.role !== "Editor") return false;
+   if (apiCan_(user, "allTanks")) return true;
+   if (!apiCan_(user, "wishlist")) return false;
    if (wish["Added By"] === apiWho_(user)) return true;
    return pendingTanks.some(t => user.tanks.indexOf(t) !== -1);
 }
 
 // Editors can edit the details of a Wishlist item they added.
 function apiCanEditWishItem_(user, table, record) {
-   if (user.role === "Admin") return true;
-   if (user.role !== "Editor" || WISH_CONFIG.types.indexOf(table) === -1) return false;
+   if (apiCan_(user, "editRecords")) return true;
+   if (!apiCan_(user, "wishlist") || WISH_CONFIG.types.indexOf(table) === -1) return false;
    if (String(record["Status"]) !== "Wishlist") return false;
    const id = record[API_TABLES[table].id];
    return apiReadWishes_().some(w => w["Item ID"] === id && w["New Item"] === true && w["Added By"] === apiWho_(user));
@@ -337,7 +337,7 @@ function apiAddWishLocked_(req, user, type, commons) {
    const def = API_TABLES[type];
    const sheet = apiSheet_(def.sheetKey);
    const tanks = apiCleanWishTanks_(req.tanks, user);
-   if (user.role !== "Admin" && !tanks.length) throw apiError_("INVALID", "Check at least one of your tanks.");
+   if (!apiCan_(user, "allTanks") && !tanks.length) throw apiError_("INVALID", "Check at least one of your tanks.");
    const wishVals = apiCleanWish_(req.wish, true);
    const assignments = apiReadTable_("assignments").rows;
    let itemId, rec, newItem = false;
@@ -463,8 +463,8 @@ function apiCloseWish_(req, user) {
    if (!apiWishIsOpen_(wish)) throw apiError_("INVALID", "This wish is already closed.");
    const pending = apiPendingWishRows_(wish["Wish ID"]);
    const pendingTanks = pending.map(a => a["Tank ID"]);
-   const ok = user.role === "Admin" || wish["Added By"] === apiWho_(user) ||
-              (user.role === "Editor" && pendingTanks.length && pendingTanks.every(t => user.tanks.indexOf(t) !== -1));
+   const ok = apiCan_(user, "allTanks") || wish["Added By"] === apiWho_(user) ||
+              (apiCan_(user, "wishlist") && pendingTanks.length && pendingTanks.every(t => user.tanks.indexOf(t) !== -1));
    if (!ok) throw apiError_("FORBIDDEN", "Only an admin, the person who added it, or an editor of all its tanks can close this wish.");
    const now = new Date();
    const changes = apiWriteChanges_(tabs.wishes, wish._row, wish, { "Wish Status": "Not getting", "Closed At": now });
@@ -627,7 +627,7 @@ function apiCheckWish_(req, user) {
    const assignments = apiReadTable_("assignments").rows;
    const wished = apiPendingWishRows_(wish["Wish ID"], assignments).map(a => a["Tank ID"]);
    const tanks = apiReadTable_("tanks").rows.filter(t => String(t["Status"]) !== "Retired" &&
-      (user.role === "Admin" || user.tanks.indexOf(t["Tank ID"]) !== -1 || wished.indexOf(t["Tank ID"]) !== -1));
+      (apiCan_(user, "allTanks") || user.tanks.indexOf(t["Tank ID"]) !== -1 || wished.indexOf(t["Tank ID"]) !== -1));
    if (!tanks.length) throw apiError_("INVALID", "There are no tanks to check against.");
 
    // Describe each tank for the AI: size, target ranges, current livestock, plants, equipment.
@@ -811,7 +811,7 @@ function apiWishLabel_(w) {
 // req: { wishId }
 // ------------------------------------------------------------
 function apiDeleteWish_(req, user) {
-   apiRequireAdmin_(user);
+   apiRequireCan_(user, "deleteRecords");
    const tabs = apiEnsureWishTabs_();
    const wish = apiFindWish_(req.wishId);
    const id = wish["Wish ID"];

@@ -68,7 +68,7 @@ function apiTankFilters_(tankId) {
 
 // Admins, or the person who logged the entry, can correct or retire it.
 function apiCanCorrectBy_(user, who) {
-   return user.role === "Admin" || (!!who && who === apiWho_(user));
+   return apiCan_(user, "allTanks") || (!!who && who === apiWho_(user));
 }
 
 // Percentage and gallons: either may be given; the other is filled in
@@ -247,7 +247,7 @@ function apiCleanMaintNote_(req, user, isNew, current) {
       const known = apiMaintNoteTypes_().find(t => t.toLowerCase() === type.toLowerCase());
       // A new kind is added to the list, for admins only (same rule as the other lists).
       if (known) type = known;
-      else if (user.role === "Admin") type = apiEnsureLookupValue_(MNOTE_CONFIG.typeList, type, user);
+      else if (apiCan_(user, "manageLists")) type = apiEnsureLookupValue_(MNOTE_CONFIG.typeList, type, user);
       else throw apiError_("INVALID", "Choose a kind from the list.");
       out["Maintenance Type"] = type;
    }

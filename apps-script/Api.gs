@@ -123,6 +123,9 @@ function apiRoute_(req, user) {
       case "retire":            return apiWrite_(() => apiRetire_(req, user));
       case "removeAssignment":  return apiWrite_(() => apiRemoveAssignment_(req, user));
       case "saveUser":          return apiWrite_(() => apiSaveUser_(req, user));
+      // Roles and permissions (Roles.gs)
+      case "saveRole":          return apiWrite_(() => apiSaveRole_(req, user));
+      case "deleteRole":        return apiWrite_(() => apiDeleteRole_(req, user));
       // Receipts (Receipts.gs)
       case "uploadReceipt":     return apiWrite_(() => apiUploadReceipt_(req, user));
       case "receiptPhoto":      return apiReceiptPhoto_(req, user);
@@ -280,12 +283,12 @@ function apiVerifySession_(token) {
 
 // Admins can change every tank; editors only the tanks assigned to them.
 function apiCanEditTank_(user, tankId) {
-   return user.role === "Admin" || (user.role === "Editor" && user.tanks.indexOf(tankId) !== -1);
+   return apiCan_(user, "allTanks") || (apiCan_(user, "workInTanks") && user.tanks.indexOf(tankId) !== -1);
 }
 
 // Throws unless the person is an admin.
 function apiRequireAdmin_(user) {
-   if (user.role !== "Admin") throw apiError_("FORBIDDEN", "Only admins can do that.");
+   if (!apiIsAdminRole_(user.role)) throw apiError_("FORBIDDEN", "Only admins can do that.");
 }
 
 
@@ -316,9 +319,14 @@ function apiBootstrap_(user) {
       schema: schema,
       data: data
    };
-   if (user.role === "Admin") { out.users = apiGetUsers_(); out.changeLog = apiLogOn_(); }
+   out.caps = apiCapsFor_(user);
+   Object.assign(out, apiRolesBootstrap_(user));
+   if (apiIsAdminRole_(user.role)) {
+      out.users = apiGetUsers_();
+      out.changeLog = apiLogOn_();
+   }
    // User ID -> name, so the app can show who uploaded or changed things.
-   if (user.role === "Admin" || user.role === "Editor") {
+   if (apiCan_(user, "receipts") || apiCan_(user, "allTanks")) {
       out.people = apiGetUsers_().map(u => ({ id: u.id, name: u.name || u.email }));
    }
    Object.assign(out, apiReceiptsBootstrap_(user, lists));
@@ -332,7 +340,7 @@ function apiBootstrap_(user) {
    Object.assign(out, apiLookupsBootstrap_(user));
    Object.assign(out, apiReceiptLinesBootstrap_(user));
    Object.assign(out, apiTreatmentsBootstrap_(lists));
-   if (user.role !== "Admin") apiLimitToAssignedTanks_(out, user);
+   if (!apiCan_(user, "allTanks")) apiLimitToAssignedTanks_(out, user);
    API_GRID = null;
    return out;
 }
@@ -535,8 +543,8 @@ function apiAdd_(req, user) {
       return { added: { table: table, row: row } };
    }
 
-   // Tanks and shared records: admins only.
-   apiRequireAdmin_(user);
+   // Tanks and shared records: whoever may add records.
+   apiRequireCan_(user, "addRecords");
    apiCheckRequired_(def, values);
    const sheet = apiSheet_(def.sheetKey);
    const id = apiNextId_(table);
@@ -630,8 +638,8 @@ function apiUpdate_(req, user) {
       if (table === "tanks") {
          if (!apiCanEditTank_(user, record[def.id])) throw apiError_("FORBIDDEN", "You can't change that tank.");
       } else if (!apiCanEditWishItem_(user, table, record)) {
-         apiRequireAdmin_(user);
-      } else if (user.role !== "Admin") {
+         apiRequireCan_(user, "editRecords");
+      } else if (!apiIsAdminRole_(user.role)) {
          delete values["Status"];   // editors fix a wishlist item's details, not its status
       }
       delete values[def.id];
@@ -665,7 +673,7 @@ function apiRetire_(req, user) {
    const table = req.table;
    const def = API_TABLES[table];
    if (!def || !def.id) throw apiError_("BAD_REQUEST", "That record can't be retired.");
-   apiRequireAdmin_(user);
+   apiRequireCan_(user, "retireRecords");
    const record = apiFindById_(table, req.id);
    if (!record) throw apiError_("NOT_FOUND", "That record no longer exists.");
    const changes = apiWriteChanges_(apiSheet_(def.sheetKey), record._row, record, { "Status": "Retired" });
@@ -748,7 +756,7 @@ function apiGetUsers_(fresh) {
          id: col("User ID") === -1 ? "" : String(r[col("User ID")]).trim(),
          email: String(r[col("Email")]).trim().toLowerCase(),
          name: String(r[col("Name")] || "").trim(),
-         role: API_ROLES.indexOf(String(r[col("Role")]).trim()) !== -1 ? String(r[col("Role")]).trim() : "Viewer",
+         role: String(r[col("Role")]).trim() || "Viewer",
          tanks: String(r[tanksCol] || "").split(",").map(s => s.trim()).filter(Boolean),
          active: r[col("Active")] === true || String(r[col("Active")]).toUpperCase() === "TRUE"
       }));
@@ -785,7 +793,8 @@ function apiSaveUser_(req, user) {
    const u = req.user || {};
    const email = String(u.email || "").trim().toLowerCase();
    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw apiError_("INVALID", "Enter a valid email address.");
-   const role = API_ROLES.indexOf(u.role) !== -1 ? u.role : null;
+   const known = apiRoleNames_().find(function (r) { return apiSameName_(r, String(u.role || "")); });
+   const role = known || null;
    if (!role) throw apiError_("INVALID", "Choose a role.");
    const active = u.active !== false;
 
@@ -796,7 +805,7 @@ function apiSaveUser_(req, user) {
    const clash = all.find(x => x.email === email && (!existing || x.id !== existing.id));
    if (clash) throw apiError_("INVALID", email + " is already on the list (" + clash.id + ").");
    if (existing && existing.id === user.id) {
-      if (role !== "Admin" || !active) throw apiError_("INVALID", "You can't remove your own admin access.");
+      if (!apiIsAdminRole_(role) || !active) throw apiError_("INVALID", "You can't remove your own admin access.");
       if (email !== existing.email) throw apiError_("INVALID", "You can't change your own email here. Edit it in the App Users tab if you need to.");
    }
 
@@ -807,7 +816,8 @@ function apiSaveUser_(req, user) {
    // Admins see and change every tank, so they have no assigned tanks.
    const tanksHeader = "Assigned Tanks";
    const record = { "Email": email, "Name": String(u.name || "").trim(), "Role": role, "Active": active };
-   record[tanksHeader] = role === "Admin" ? "" : tanks.join(", ");
+   // A role that reaches every tank doesn't need a list of them.
+   record[tanksHeader] = apiCan_({ role: role, tanks: [] }, "allTanks") ? "" : tanks.join(", ");
 
    if (existing) {
       const before = { "Email": existing.email, "Name": existing.name, "Role": existing.role, "Active": existing.active };
@@ -1005,7 +1015,7 @@ function apiEnsureSupportTabs_() {
       users.setFrozenRows(1);
       users.getRange("F2:F").insertCheckboxes();
       users.getRange("D2:D").setDataValidation(SpreadsheetApp.newDataValidation()
-         .requireValueInList(API_ROLES, true).setAllowInvalid(false).build());
+         .requireValueInList(apiRoleNames_(), true).setAllowInvalid(false).build());
       users.getRange("G2:G").setNumberFormat("m/d/yyyy");
       users.setColumnWidths(2, 1, 220);
       users.setColumnWidths(5, 1, 200);

@@ -175,19 +175,19 @@ function apiWaterHistory_(req, user) {
    const j = apiReadWaterJoined_(apiEnsureWaterTabs_());
    const w = apiWaterTestsSince_(j.tests, days);
    // Everyone but an Admin sees their assigned tanks only, as on startup.
-   const tests = user.role === "Admin" ? w.tests
+   const tests = apiCan_(user, "allTanks") ? w.tests
       : w.tests.filter(r => user.tanks.indexOf(r["Tank ID"]) !== -1);
    return { waterTests: tests, waterDaysLoaded: days, waterAllLoaded: w.all };
 }
 
 // Admins can log tests for any tank; everyone else for their assigned tanks.
 function apiCanLogTank_(user, tankId) {
-   return user.role === "Admin" || user.tanks.indexOf(tankId) !== -1;
+   return apiCan_(user, "allTanks") || (apiCan_(user, "logTests") && user.tanks.indexOf(tankId) !== -1);
 }
 
 // Admins, or the person who logged the reading, can correct or retire it.
 function apiCanCorrect_(user, row) {
-   return user.role === "Admin" || (row["Tested By"] && row["Tested By"] === apiWho_(user));
+   return apiCan_(user, "allTanks") || (row["Tested By"] && row["Tested By"] === apiWho_(user));
 }
 
 // Range for a tank + test type from Water Parameters.
@@ -372,7 +372,7 @@ function apiUpdateWaterSession_(req, user) {
 // req: { id?, values: { name, units, methods: [..], order, notes } }
 // ------------------------------------------------------------
 function apiSaveTestType_(req, user) {
-   apiRequireAdmin_(user);
+   apiRequireCan_(user, "manageTestTypes");
    const tabs = apiEnsureWaterTabs_();
    const types = apiReadTestTypes_();
    // Validate name, methods and order; names must be unique.
@@ -410,7 +410,7 @@ function apiSaveTestType_(req, user) {
 
 // Retires (or restores) a test type (admins). Retired tests stop appearing for new entries.
 function apiRetireTestType_(req, user) {
-   apiRequireAdmin_(user);
+   apiRequireCan_(user, "manageTestTypes");
    const tabs = apiEnsureWaterTabs_();
    const t = apiReadTestTypes_().find(x => x["Test Type ID"] === req.id);
    if (!t) throw apiError_("NOT_FOUND", "That test type no longer exists.");

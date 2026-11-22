@@ -29,7 +29,7 @@ function apiReadLookups_() {
 
 // Admins get the lists for the Dropdown lists screen.
 function apiLookupsBootstrap_(user) {
-   if (user.role !== "Admin") return {};
+   if (!apiCan_(user, "manageLists")) return {};
    const rows = apiReadLookups_();
    const types = [];
    rows.forEach(r => { if (types.indexOf(r.type) === -1) types.push(r.type); });
@@ -38,7 +38,7 @@ function apiLookupsBootstrap_(user) {
 
 // req: { type, value, description }
 function apiAddLookup_(req, user) {
-   apiRequireAdmin_(user);
+   apiRequireCan_(user, "manageLists");
    const type = String(req.type || "").trim();
    const value = String(req.value || "").replace(/\s+/g, " ").trim();
    if (!type) throw apiError_("INVALID", "Choose a list.");
@@ -59,7 +59,7 @@ function apiAddLookup_(req, user) {
 
 // req: { row, type, value (current), newValue?, description?, inactive? }
 function apiUpdateLookup_(req, user) {
-   apiRequireAdmin_(user);
+   apiRequireCan_(user, "manageLists");
    const rows = apiReadLookups_();
    const rec = rows.find(r => r.row === Number(req.row));
    if (!rec || rec.type !== req.type || rec.value !== req.value) throw apiError_("NOT_FOUND", "That value changed. Refresh and try again.");
@@ -135,7 +135,7 @@ function apiRenameLookupUses_(type, oldValue, newValue, user) {
 function apiLookupValueFor_(f, v, user) {
    const hit = (f.options || []).find(o => String(o).toLowerCase() === String(v).toLowerCase());
    if (hit !== undefined) return hit;
-   if (user && user.role === "Admin" && f.lookup && f.name !== "Status") {
+   if (user && apiCan_(user, "manageLists") && f.lookup && f.name !== "Status") {
       const added = f.lookup === "Vendor" ? apiEnsureVendor_(v, user) : apiEnsureLookupValue_(f.lookup, v, user);
       // DropDownOptions reads Lookups by formula, and the sheet's own dropdowns read
       // DropDownOptions: recalculate now, or writing the new value is refused.

@@ -77,7 +77,7 @@ function apiTreatmentUnit_(unit, user) {
    const list = apiReadLists_(apiSs_())[TRT_CONFIG.unitList] || [];
    const hit = list.find(o => String(o).toLowerCase() === unit.toLowerCase());
    if (hit !== undefined) return hit;
-   if (user && user.role === "Admin") return apiEnsureLookupValue_(TRT_CONFIG.unitList, unit, user);
+   if (user && apiCan_(user, "manageLists")) return apiEnsureLookupValue_(TRT_CONFIG.unitList, unit, user);
    if (list.length) throw apiError_("INVALID", "Dose unit must be one of: " + list.join(", ") + ".");
    return unit;
 }
@@ -258,7 +258,7 @@ function apiSetStock_(req, user) {
    const stock = String(req.stock || "").replace(/\s+/g, " ").trim();
    const list = apiReadLists_(apiSs_())[TRT_CONFIG.stockList] || [];
    const value = stock === "" ? "" : (list.find(o => String(o).toLowerCase() === stock.toLowerCase()) ||
-      (user.role === "Admin" ? apiEnsureLookupValue_(TRT_CONFIG.stockList, stock, user) : null));
+      (apiCan_(user, "manageLists") ? apiEnsureLookupValue_(TRT_CONFIG.stockList, stock, user) : null));
    if (value === null) throw apiError_("INVALID", "Stock must be one of: " + list.join(", ") + ".");
    if (req.priceItemId) {
       const rec = apiReadPriceItems_().find(r => r["Price Item ID"] === req.priceItemId);

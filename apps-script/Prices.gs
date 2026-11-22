@@ -36,7 +36,7 @@ function apiSeedPriceUnits_() {
 }
 
 function apiCanUsePrices_(user) {
-   return user.role === "Admin" || user.role === "Editor";
+   return apiCan_(user, "prices");
 }
 function apiRequirePrices_(user) {
    if (!apiCanUsePrices_(user)) throw apiError_("FORBIDDEN", "Only admins and editors can change prices.");

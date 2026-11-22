@@ -34,7 +34,7 @@ const RECEIPT_LINK_TABLES = ["tanks", "species", "equipment", "plants", "medicat
 
 // Admins and editors can upload and view receipts.
 function apiCanUseReceipts_(user) {
-   return user.role === "Admin" || user.role === "Editor";
+   return apiCan_(user, "receipts");
 }
 
 // Throws unless the person can use receipts.
@@ -205,7 +205,7 @@ function apiReceiptPhoto_(req, user) {
 // Edit details (admins). Renames the Drive file when the name changes.
 // ------------------------------------------------------------
 function apiUpdateReceipt_(req, user) {
-   apiRequireAdmin_(user);
+   apiRequireCan_(user, "receipts");
    const tabs = apiEnsureReceiptTabs_();
    const rec = apiReadReceipts_().find(r => r["Receipt ID"] === req.id);
    if (!rec) throw apiError_("NOT_FOUND", "That receipt no longer exists.");
@@ -247,7 +247,7 @@ function apiUpdateReceipt_(req, user) {
 
 // Retires (or, with req.restore, restores) a receipt (admins).
 function apiRetireReceipt_(req, user) {
-   apiRequireAdmin_(user);
+   apiRequireCan_(user, "retireRecords");
    const tabs = apiEnsureReceiptTabs_();
    const rec = apiReadReceipts_().find(r => r["Receipt ID"] === req.id);
    if (!rec) throw apiError_("NOT_FOUND", "That receipt no longer exists.");
@@ -276,8 +276,8 @@ function apiLinkReceipt_(req, user) {
 // Who may link receipts to records: admins to any record; editors only to species,
 // equipment or plants that are currently in one of their tanks (from the item's page).
 function apiRequireLinkRights_(user, itemIds) {
-   if (user.role === "Admin") return;
-   if (user.role !== "Editor") throw apiError_("FORBIDDEN", "Only admins and editors can link receipts.");
+   if (apiCan_(user, "allTanks")) return;
+   if (!apiCan_(user, "receipts")) throw apiError_("FORBIDDEN", "Your role can't link receipts.");
    const inMyTanks = {};
    apiReadTable_("assignments").rows.forEach(a => {
       if (a["Active"] === true && !a["Date Removed"] && user.tanks.indexOf(a["Tank ID"]) !== -1) inMyTanks[a["Item ID"]] = true;
@@ -313,7 +313,7 @@ function apiAddReceiptLinks_(tabs, receiptId, itemIds, user) {
 
 // Ends one receipt-to-record link (admins): unchecks Active and sets Date Unlinked.
 function apiUnlinkReceipt_(req, user) {
-   apiRequireAdmin_(user);
+   apiRequireCan_(user, "receipts");
    const tabs = apiEnsureReceiptTabs_();
    const key = req.key || {};
    const link = apiReadReceiptLinks_().find(l => l._row === Number(key.row));

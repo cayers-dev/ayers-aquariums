@@ -97,7 +97,7 @@ function apiUpdateAssignment_(req, user) {
       if (want) {
          const known = apiFeedFrequencies_().find(f => f.toLowerCase() === want.toLowerCase());
          if (known) freq = known;
-         else if (user.role === "Admin") freq = apiEnsureLookupValue_(FOOD_CONFIG.frequencyList, want, user);
+         else if (apiCan_(user, "manageLists")) freq = apiEnsureLookupValue_(FOOD_CONFIG.frequencyList, want, user);
          else throw apiError_("INVALID", "Choose how often from the list.");
       }
       values["Feed Frequency"] = freq;

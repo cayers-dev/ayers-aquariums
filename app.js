@@ -226,7 +226,9 @@
     // Need to order: a shopping basket.
     cart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16l-1.6 11.2a2 2 0 0 1-2 1.8H7.6a2 2 0 0 1-2-1.8z"/><path d="M8.5 7V5.5a3.5 3.5 0 0 1 7 0V7"/></svg>',
     check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>',
-    copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 6.5V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h1.5"/></svg>'
+    copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 6.5V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h1.5"/></svg>',
+    // Roles: a padlock.
+    lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10.5" width="16" height="10.5" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>'
   };
 
   // ------------------------------------------------------------------
@@ -274,8 +276,44 @@
   const ITEM_TYPES = ["species", "equipment", "plants", "foods"];
 
   const isAdmin = () => state.me && state.me.role === "Admin";
-  const canEditTank = id => isAdmin() || (state.me && state.me.role === "Editor" && state.me.tanks.indexOf(id) !== -1);
-  const canReceipts = () => state.me && (state.me.role === "Admin" || state.me.role === "Editor");
+  // What the person's role may do. The server sends state.caps; without it (an older
+  // server) fall back to what the three built-in roles used to mean, so the app keeps
+  // working either way. Admins always have everything.
+  const CAP_FALLBACK = {
+    Admin: ["addRecords", "editRecords", "retireRecords", "deleteRecords", "manageLists", "manageTestTypes",
+            "photos", "receipts", "prices", "useAi", "wishlist", "logTests", "workInTanks", "allTanks"],
+    Editor: ["receipts", "prices", "useAi", "wishlist", "logTests", "workInTanks"],
+    Viewer: ["logTests"]
+  };
+  const can = cap => {
+    if (isAdmin()) return true;
+    if (state.caps) return !!state.caps[cap];
+    return (CAP_FALLBACK[state.me && state.me.role] || []).indexOf(cap) !== -1;
+  };
+  const canEditTank = id => can("allTanks") || (can("workInTanks") && state.me && state.me.tanks.indexOf(id) !== -1);
+  const canReceipts = () => can("receipts");
+  // "1 role" / "3 roles", without each caller spelling it out.
+  const plural = (k, one, many) => k + " " + (k === 1 ? one : (many || one + "s"));
+  // Role names are compared the way the sheet does it: trimmed, case-insensitive.
+  const sameName = (a, b) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+  // The roles themselves, for the Users and Roles screens. Only admins are sent them.
+  const roleNames = () => {
+    const names = (state.roles || []).map(r => r.role);
+    return names.length ? names : ["Admin", "Editor", "Viewer"];
+  };
+  const roleDef = name => (state.roles || []).find(r => sameName(r.role, name));
+  const roleHas = (name, cap) => {
+    const d = roleDef(name);
+    if (d) return !!d.caps[cap];
+    return (CAP_FALLBACK[name] || []).indexOf(cap) !== -1;
+  };
+  const roleIsAdmin = name => sameName(name, "Admin");
+  const tankPickHint = name => {
+    const bits = [];
+    if (roleHas(name, "workInTanks")) bits.push("work in");
+    if (roleHas(name, "logTests")) bits.push("log tests and maintenance on");
+    return bits.length ? "Can see, and " + bits.join(" and ") + ", these tanks." : "Can see these tanks.";
+  };
   const isRetired = r => String(r["Status"] || "").toLowerCase() === "retired";
   const findRec = (type, id) => (state.data[type] || []).find(r => r[TYPES[type].id] === id);
   function itemType(id) {
@@ -408,6 +446,11 @@
     state.schema = r.schema;
     state.data = r.data;
     state.users = r.users || null;
+    // What this person's role may do. An older server sends none: fall back to the
+    // roles the app used to hard-code, so nothing changes until it's deployed.
+    state.caps = r.caps || null;
+    state.roles = r.roles || null;
+    state.roleCaps = r.roleCaps || null;
     state.receipts = r.receipts || [];
     state.receiptLinks = r.receiptLinks || [];
     state.vendors = r.vendors || [];
@@ -627,12 +670,13 @@
       case "browse": view = viewBrowse(); break;
       case "item": view = viewItem(route.args[0], route.args[1]); break;
       case "users": view = isAdmin() ? viewUsers() : viewTanks(); break;
-      case "lists": view = isAdmin() ? viewLists() : viewHome(); break;
+      case "roles": view = isAdmin() ? viewRoles() : viewHome(); break;
+      case "lists": view = can("manageLists") ? viewLists() : viewHome(); break;
       case "wish": view = route.args[0] ? viewWish(route.args[0]) : viewWishlist(); break;
       case "account": view = viewAccount(); break;
       case "receipts": view = canReceipts() ? viewReceipts() : viewTanks(); break;
       case "water": view = route.args[1] ? viewWaterType(route.args[0], route.args[1]) : viewWater(route.args[0]); break;
-      case "testtypes": view = isAdmin() ? viewTestTypes() : viewWater(); break;
+      case "testtypes": view = can("manageTestTypes") ? viewTestTypes() : viewWater(); break;
       case "maint": view = viewMaintenance(route.args[0]); break;
       case "receipt": view = canReceipts() ? viewReceipt(route.args[0]) : viewTanks(); break;
       case "prices": view = viewPrices(); break;
@@ -834,7 +878,7 @@
   // ---------- Price tracker ----------
   // Price Items: one per item (linked to a record, or a typed name). Prices: every price gathered.
   // The list shows the latest price at each store; Best = lowest price per unit.
-  const canPrices = () => state.me && (state.me.role === "Admin" || state.me.role === "Editor");
+  const canPrices = () => can("prices");
   const UNIT_INFO = { oz: ["weight", 28.3495], lb: ["weight", 453.592], g: ["weight", 1], kg: ["weight", 1000],
                       mL: ["volume", 1], L: ["volume", 1000], "fl oz": ["volume", 29.5735], gal: ["volume", 3785.41],
                       count: ["count", 1], each: ["count", 1] };
@@ -1653,7 +1697,7 @@
         '<button type="button" class="icon-btn rline-remove" data-remove-line aria-label="Remove item ' + (i + 1) + '">' + ICONS.close + '</button></div>' +
       comboHtml({ name: "li_item_" + i, label: "Item", mode: "free", noThumbs: true, value: line.label || "",
                   placeholder: "Choose or type an item", newLabel: "will be added as a new item" }, ch.items) +
-      (isAdmin() ? '<div class="field rline-new" hidden>' +
+      (can("addRecords") ? '<div class="field rline-new" hidden>' +
         '<span class="hint">Not one of your records — it will be tracked in Prices only.</span>' +
         '<button type="button" class="btn small" data-new-record>' + ICONS.plus + 'Add it as a record…</button></div>' : "") +
       '<div class="rline-grid">' +
@@ -2051,8 +2095,10 @@
           (stockRows().filter(r => isOnOrder(r.stock)).length ? " \u00b7 " + stockRows().filter(r => isOnOrder(r.stock)).length + " ordered" : ""))])
        .concat([link("#/prices", "tag", "Prices", n(state.priceItems.length, state.priceItems.length === 1 ? "item" : "items") + " · " + n(state.prices.length, state.prices.length === 1 ? "price" : "prices"))])) +
       group("Account", [link("#/account", "account", "My account", state.me ? state.me.name || state.me.email : "")]
-        .concat(isAdmin() ? [link("#/users", "users", "Users", ""), link("#/testtypes", "flask", "Test types", ""),
-                          link("#/lists", "list", "Dropdown lists", (state.lookupTypes || []).length + " lists")] : []), 1);
+        .concat(isAdmin() ? [link("#/users", "users", "Users", ""),
+                             link("#/roles", "lock", "Roles & permissions", plural((state.roles || []).length, "role"))] : [])
+        .concat(can("manageTestTypes") ? [link("#/testtypes", "flask", "Test types", "")] : [])
+        .concat(can("manageLists") ? [link("#/lists", "list", "Dropdown lists", (state.lookupTypes || []).length + " lists")] : []), 1);
     return { title: "Ayers Aquariums", html: html };
   }
   const browseCount = type => (state.data[type] || []).filter(r => !isWishItem(r) && !isRetired(r)).length;
@@ -2084,8 +2130,8 @@
           (counts.plants ? '<span class="pill">' + counts.plants + ' plants</span>' : "") +
         '</div></a>';
     }).join("");
-    const addBtn = isAdmin() ? '<div class="actions" style="margin:0 0 12px"><button class="btn primary" data-act="add-record" data-type="tanks">' + ICONS.plus + 'Add tank</button></div>' : "";
-    return { title: "Tanks", html: addBtn + (cards || '<div class="empty">' + (isAdmin() ? "No tanks yet." : "No tanks are assigned to you yet. Ask Chris to add you to a tank.") + '</div>') };
+    const addBtn = can("addRecords") ? '<div class="actions" style="margin:0 0 12px"><button class="btn primary" data-act="add-record" data-type="tanks">' + ICONS.plus + 'Add tank</button></div>' : "";
+    return { title: "Tanks", html: addBtn + (cards || '<div class="empty">' + (can("allTanks") ? "No tanks yet." : "No tanks are assigned to you yet. Ask Chris to add you to a tank.") + '</div>') };
   }
 
   // ---------- Tank detail ----------
@@ -2147,8 +2193,8 @@
       (editable ? '<div class="actions">' +
         '<button class="btn primary" data-act="add-assignment" data-tank="' + esc(id) + '">' + ICONS.plus + 'Add to tank</button>' +
         '<button class="btn" data-act="edit-record" data-type="tanks" data-id="' + esc(id) + '">Edit tank</button>' +
-        (isAdmin() && !isRetired(t) ? '<button class="btn danger" data-act="retire" data-type="tanks" data-id="' + esc(id) + '">Retire</button>' : "") +
-        (isAdmin() ? '<button class="btn danger" data-act="delete-record" data-type="tanks" data-id="' + esc(id) + '">Delete</button>' : "") +
+        (can("retireRecords") && !isRetired(t) ? '<button class="btn danger" data-act="retire" data-type="tanks" data-id="' + esc(id) + '">Retire</button>' : "") +
+        (can("deleteRecords") ? '<button class="btn danger" data-act="delete-record" data-type="tanks" data-id="' + esc(id) + '">Delete</button>' : "") +
       '</div>' : "") + '</div>';
 
     return {
@@ -2229,7 +2275,7 @@
         '<div class="segmented">' + segs + '</div>' +
         '<input class="search" type="search" placeholder="Search ' + esc(T.label.toLowerCase()) + '…" value="' + esc(state.query) + '" data-act="search">' +
         '<div class="toggle-row"><label class="check" style="padding:0"><input type="checkbox" data-act="toggle-retired" ' + (state.showRetired ? "checked" : "") + '> Show retired</label>' +
-        (isAdmin() ? '<button class="btn small primary" data-act="add-record" data-type="' + type + '">' + ICONS.plus + 'Add</button>' : "") + '</div>' +
+        (can("addRecords") ? '<button class="btn small primary" data-act="add-record" data-type="' + type + '">' + ICONS.plus + 'Add</button>' : "") + '</div>' +
         '<div class="card list">' + (list || '<div class="empty">Nothing found.</div>') + '</div>'
     };
   }
@@ -2260,20 +2306,22 @@
     // whether "Add to wishlist" is worth offering.
     const openWishes = state.wishes.filter(w => w["Item ID"] === id && wishIsOpen(w));
     const acts = [];
-    if (isAdmin()) {
+    if (can("editRecords")) {
       acts.push('<button class="btn" data-act="edit-record" data-type="' + type + '" data-id="' + esc(id) + '">Edit</button>');
       // Several of the same filter or heater: copy the one that's already filled in.
-      if (type === "equipment") acts.push('<button class="btn" data-act="duplicate-record" data-type="' + type + '" data-id="' + esc(id) + '">' + ICONS.copy + 'Duplicate</button>');
+      if (type === "equipment" && can("addRecords")) acts.push('<button class="btn" data-act="duplicate-record" data-type="' + type + '" data-id="' + esc(id) + '">' + ICONS.copy + 'Duplicate</button>');
     } else if (canEditItem(type, r)) {
       acts.push('<button class="btn" data-act="edit-record" data-type="' + type + '" data-id="' + esc(id) + '">Edit details</button>');
     }
     // Another one of something already on the list: the wish opens with this record chosen.
     if (WISH_TYPES.indexOf(type) !== -1 && !openWishes.length && !isWishItem(r) && !isRetired(r) &&
-        (isAdmin() || wishTanksAllowed().length > 0)) {
+        can("wishlist") && (can("allTanks") || wishTanksAllowed().length > 0)) {
       acts.push('<button class="btn" data-act="wish-item" data-type="' + type + '" data-id="' + esc(id) + '">' + ICONS.wish + 'Add to wishlist</button>');
     }
-    if (isAdmin()) {
-      if (!isRetired(r) && "Status" in r) acts.push('<button class="btn danger" data-act="retire" data-type="' + type + '" data-id="' + esc(id) + '">Retire</button>');
+    if (can("retireRecords") && !isRetired(r) && "Status" in r) {
+      acts.push('<button class="btn danger" data-act="retire" data-type="' + type + '" data-id="' + esc(id) + '">Retire</button>');
+    }
+    if (can("deleteRecords")) {
       acts.push('<button class="btn danger" data-act="delete-record" data-type="' + type + '" data-id="' + esc(id) + '">Delete</button>');
     }
     const hero = '<div class="card">' +
@@ -2301,13 +2349,14 @@
       '<div class="list-item user-row ' + (u.active ? "" : "dim") + '" data-act="edit-user" data-id="' + esc(u.id) + '">' +
       '<div class="body"><div class="title">' + esc(u.name || u.email) + '</div>' +
       '<div class="sub">' + esc([u.id, u.email].filter(Boolean).join(" · ")) + '</div>' +
-      (u.role !== "Admin" ? '<div class="sub">Tanks: ' + esc(u.tanks.map(tankName).join(", ") || "none yet") + '</div>' : "") + '</div>' +
-      '<span class="pill ' + (u.role === "Admin" ? "edit" : "") + '">' + esc(u.active ? u.role : "Inactive") + '</span></div>').join("");
+      (!roleHas(u.role, "allTanks") ? '<div class="sub">Tanks: ' + esc(u.tanks.map(tankName).join(", ") || "none yet") + '</div>' : "") + '</div>' +
+      '<span class="pill ' + (roleIsAdmin(u.role) ? "edit" : "") + '">' + esc(u.active ? u.role : "Inactive") + '</span></div>').join("");
     return {
       title: "Users", back: true,
       html: '<div class="actions" style="margin:0 0 12px"><button class="btn primary" data-act="add-user">' + ICONS.plus + 'Add user</button></div>' +
         '<div class="card list">' + (rows || '<div class="empty">No users.</div>') + '</div>' +
-        '<p class="hint">Admins see and change everything. Editors see, edit and log water tests on their assigned tanks. Viewers see and log water tests on their assigned tanks. Everyone can browse species, equipment, plants and medications. Users sign in with the Google account email listed here.</p>'
+        '<p class="hint">A person\'s role decides what they can do. Admin always has everything; ' +
+          'the rest is set on <a href="#/roles">Roles &amp; permissions</a>.</p>'
     };
   }
 
@@ -2315,19 +2364,28 @@
   function viewAccount() {
     const me = state.me;
     const assigned = me.tanks.map(tankName).join(", ") || "None yet";
-    const tankList = me.role === "Admin" ? "All tanks" : me.role === "Editor" ? assigned : "None (view only)";
-    const testList = me.role === "Admin" ? "All tanks" : assigned;
+    const seeList = can("allTanks") ? "All tanks" : assigned;
+    const tankList = can("allTanks") ? "All tanks" : can("workInTanks") ? assigned : "None (view only)";
+    const testList = can("allTanks") ? "All tanks" : can("logTests") ? assigned : "None";
+    // What this role may do, in the same words as the Roles screen.
+    const myCaps = (state.roleCaps || []).filter(c => can(c.key) &&
+      ["allTanks", "workInTanks", "logTests"].indexOf(c.key) === -1);
     return {
       title: "Account",
       html: '<div class="card kv">' +
         '<div class="k">Name</div><div>' + esc(me.name || "") + '</div>' +
         '<div class="k">Email</div><div>' + esc(me.email) + '</div>' +
         '<div class="k">Role</div><div>' + esc(me.role) + '</div>' +
-        '<div class="k">Can see</div><div>' + esc(me.role === "Admin" ? "All tanks" : assigned) + '</div>' +
+        '<div class="k">Can see</div><div>' + esc(seeList) + '</div>' +
         '<div class="k">Can edit</div><div>' + esc(tankList) + '</div>' +
         '<div class="k">Can log tests</div><div>' + esc(testList) + '</div>' +
         '<div class="k">App version</div><div>' + esc(APP_VERSION) + '</div></div>' +
-        (isAdmin() ? '<div class="actions"><a class="btn primary" href="#/users">' + ICONS.users + 'Manage users</a></div>' +
+        (myCaps.length ? '<div class="section"><div class="section-head"><h3>Your role can</h3></div><div class="card list">' +
+          myCaps.map(c => '<div class="list-item"><span class="thumb">' + ICONS.check + '</span>' +
+            '<div class="body"><div class="title">' + esc(c.label) + '</div><div class="sub">' + esc(c.hint) + '</div></div></div>').join("") +
+          '</div></div>' : "") +
+        (isAdmin() ? '<div class="actions"><a class="btn primary" href="#/users">' + ICONS.users + 'Manage users</a>' +
+          '<a class="btn" href="#/roles">' + ICONS.lock + 'Roles &amp; permissions</a></div>' +
           '<div class="card"><label class="check switch-row"><input type="checkbox" data-act="toggle-changelog"' + (state.changeLog ? " checked" : "") + '> ' +
             '<span><b>Change log</b><span class="hint">Every add, edit and link is written to the Change Log tab. Turning it off makes saving a little quicker ' +
             '(about half a second on a receipt with several lines). Permanent deletes are recorded either way.</span></span></label></div>' : "") +
@@ -2340,7 +2398,7 @@
   // Forms
   // ------------------------------------------------------------------
   // Admins can type a new value into a dropdown that comes from the Lookups tab (never Status).
-  const adminListField = (f, ro) => f.type === "list" && !!f.lookup && f.name !== "Status" && !ro && isAdmin();
+  const adminListField = (f, ro) => f.type === "list" && !!f.lookup && f.name !== "Status" && !ro && can("manageLists");
   function fieldHtml(f, value, opts) {
     opts = opts || {};
     const id = "f_" + f.name.replace(/\W+/g, "_");
@@ -2478,7 +2536,7 @@
     });
     // A new item can go into tanks right away, so nothing has to be done twice.
     const tanks = !editing && ITEM_TYPES.indexOf(type) !== -1 ? tanksICanAddTo() : [];
-    const ai = AI_TYPES.indexOf(type) !== -1 && (isAdmin() || canEditItem(type, rec));
+    const ai = AI_TYPES.indexOf(type) !== -1 && canUseAi() && (can("allTanks") || canEditItem(type, rec));
     openSheet({
       title: opts.title || (editing ? "Edit " : "Add ") + T.one.toLowerCase(),
       submitLabel: editing ? "Save" : "Add",
@@ -2769,7 +2827,7 @@
   // Admins: any item. Editors: species, equipment or plants currently in one of their tanks.
   function canItemReceipts(type, r) {
     if (!canReceipts() || !r) return false;
-    if (isAdmin()) return true;
+    if (can("allTanks")) return true;
     const id = r[TYPES[type].id];
     return ITEM_TYPES.indexOf(type) !== -1 &&
       state.data.assignments.some(a => a["Item ID"] === id && isActiveAssignment(a) && canEditTank(a["Tank ID"]));
@@ -2864,9 +2922,9 @@
       submitLabel: "Save",
       body: '<p class="meta">' + esc(tankName(tankId)) + '</p>' +
         '<div class="field"><label for="f_famt">How much</label><input type="text" id="f_famt" maxlength="100" autocomplete="off" value="' + esc(a["Feed Amount"] || "") + '" placeholder="A small pinch"></div>' +
-        comboHtml({ name: "frequency", label: "How often", noThumbs: true, mode: isAdmin() ? "free" : "single",
+        comboHtml({ name: "frequency", label: "How often", noThumbs: true, mode: can("manageLists") ? "free" : "single",
                     newLabel: "will be added to the list", value: cur,
-                    placeholder: isAdmin() ? "Choose or type how often" : "Choose how often" },
+                    placeholder: can("manageLists") ? "Choose or type how often" : "Choose how often" },
                   freqs.map(f => ({ value: f, label: f }))) +
         '<div class="field"><label for="f_fnotes">Notes</label><textarea id="f_fnotes" placeholder="For the plecos, after lights out">' + esc(a["Notes"] || "") + '</textarea></div>',
       onReady: form => { $$("[data-combo]", form).forEach(wireCombo); },
@@ -2905,16 +2963,16 @@
       body:
         comboHtml({ name: "Item IDs", label: "Items", mode: "multi", required: true,
                     placeholder: "Tap to choose, or type to search. Pick as many as you like",
-                    newRecord: isAdmin() ? "Add one that isn't in the list…" : "" }, items) +
+                    newRecord: can("addRecords") ? "Add one that isn't in the list…" : "" }, items) +
         fieldHtml({ name: "Date Added", type: "date" }, today()) +
         fieldHtml({ name: "Notes", type: "longtext" }, "") +
         '<p class="hint">The date and notes are saved on every item you pick.' +
-          (isAdmin() ? ' Anything missing can be added from the list itself.'
-                     : ' Only admins can add new species, equipment, plants or food to the lists. Ask Chris if something is missing.') + '</p>',
+          (can("addRecords") ? ' Anything missing can be added from the list itself.'
+                             : ' Your role can\'t add new species, equipment, plants or food to the lists. Ask Chris if something is missing.') + '</p>',
       onReady: form => {
         $$("[data-combo]", form).forEach(wireCombo);
         const combo = $("[data-combo]", form);
-        if (!combo || !isAdmin()) return;
+        if (!combo || !can("addRecords")) return;
         combo.addEventListener("combo-add-record", e => {
           newRecordFlow(e.detail.typed, (newId, newType) => {
             const rec = findRec(newType, newId);
@@ -3083,6 +3141,97 @@
     });
   }
 
+  // ---------- Roles and permissions (admin only) ----------
+  // One row per role. Admin is fixed: it always has everything, so there's no way
+  // to lock yourself out of the app from in here.
+  function viewRoles() {
+    const caps = state.roleCaps || [];
+    const roles = (state.roles || []).slice();
+    const rows = roles.map(r => {
+      const on = caps.filter(c => r.caps[c.key]);
+      const sub = r.fixed ? "Everything, always" :
+        (on.length ? on.map(c => c.label).join(", ") : "Can look, nothing else");
+      return '<div class="list-item" ' + (r.fixed ? "" : 'data-act="edit-role" data-role="' + esc(r.role) + '"') + '>' +
+        '<div class="body"><div class="title">' + esc(r.role) + '</div>' +
+        (r.description ? '<div class="sub">' + esc(r.description) + '</div>' : "") +
+        '<div class="sub">' + esc(sub) + '</div></div>' +
+        '<span class="pill' + (r.fixed ? " edit" : "") + '">' +
+          esc(r.fixed ? "Fixed" : plural(r.users, "person", "people")) + '</span></div>';
+    }).join("");
+    return {
+      title: "Roles & permissions", back: true,
+      html: '<div class="actions" style="margin:0 0 12px"><button class="btn primary" data-act="add-role">' +
+          ICONS.plus + 'Add role</button></div>' +
+        '<div class="card list">' + (rows || '<div class="empty">Loading roles…</div>') + '</div>' +
+        '<p class="hint">Tap a role to change what it can do. A person\'s tanks still apply on top: ' +
+          '<b>All tanks</b> is what lets a role reach past the tanks assigned to it. Managing users and ' +
+          'roles stays with Admin.</p>'
+    };
+  }
+
+  function roleForm(name) {
+    const caps = state.roleCaps || [];
+    const editing = !!name;
+    const r = editing ? roleDef(name) : null;
+    if (editing && !r) { toast("That role changed. Refresh and try again.", true); return; }
+    if (r && r.fixed) { toast("The Admin role always has every permission.", true); return; }
+    const has = k => !!(r && r.caps[k]);
+    const switches = caps.map(c =>
+      '<label class="check switch-row"><input type="checkbox" name="cap:' + esc(c.key) + '"' +
+        (has(c.key) ? " checked" : "") + '> ' +
+        '<span><b>' + esc(c.label) + '</b><span class="hint">' + esc(c.hint) + '</span></span></label>').join("");
+    openSheet({
+      title: editing ? "Edit " + name : "Add role",
+      body:
+        '<div class="field"><label for="f_rolename">Role name <span class="req">*</span></label>' +
+          '<input type="text" id="f_rolename" name="role" maxlength="40" required value="' + esc(r ? r.role : "") + '">' +
+          (editing ? '<div class="hint">Renaming it moves everyone who has it.</div>' : "") + '</div>' +
+        '<div class="field"><label for="f_roledesc">What it\'s for</label>' +
+          '<input type="text" id="f_roledesc" name="description" maxlength="120" value="' + esc(r ? r.description || "" : "") + '"' +
+          ' placeholder="Helps whoever assigns it"></div>' +
+        '<div class="form-section"><h3>Can do</h3>' + switches + '</div>' +
+        (editing && !r.users ? '<div class="actions"><button type="button" class="btn danger" data-del-role>Delete role</button></div>'
+         : editing ? '<p class="hint">' + esc(plural(r.users, "person", "people")) + ' still ' + (r.users === 1 ? "has" : "have") +
+             ' this role, so it can\'t be deleted. Move them to another role first.</p>' : ""),
+      onReady: form => {
+        const del = $("[data-del-role]", form);
+        if (!del) return;
+        del.addEventListener("click", async () => {
+          const yes = await confirmSheet({
+            title: "Delete " + r.role + "?",
+            body: '<p>Nobody has this role, so nothing else changes. It can be added again later.</p>',
+            yes: "Delete", no: "Keep it"
+          });
+          if (!yes) return;
+          const res = await write("deleteRole", { role: r.role }, "Role deleted");
+          applyRoles(res);
+          form.closest(".sheet-backdrop").remove();
+          document.body.style.overflow = "";
+        });
+      },
+      onSubmit: async (vals, form) => {
+        const typed = String(vals.role || "").replace(/\s+/g, " ").trim();
+        if (!typed) throw new Error("Enter a role name.");
+        const picked = {};
+        caps.forEach(c => { picked[c.key] = !!$("input[name='cap:" + c.key + "']", form).checked; });
+        const payload = editing
+          ? { role: r.role, newName: sameName(typed, r.role) ? "" : typed, description: vals.description, caps: picked }
+          : { role: typed, description: vals.description, caps: picked };
+        const res = await write("saveRole", payload, "Role saved");
+        applyRoles(res);
+        return true;
+      }
+    });
+  }
+
+  // saveRole and deleteRole hand back the whole set, so the screen is right away.
+  function applyRoles(res) {
+    if (!res || typeof res !== "object") return;
+    if (res.roles) state.roles = res.roles;
+    if (res.roleCaps) state.roleCaps = res.roleCaps;
+    render();
+  }
+
   function userForm(id) {
     const editing = !!id;
     const u = editing ? state.users.find(x => x.id === id) : { id: "", email: "", name: "", role: "Viewer", tanks: [], active: true };
@@ -3099,15 +3248,16 @@
           (editing && !isMe ? '<div class="hint">Changing the email keeps this person’s User ID and history.</div>' : "") + '</div>' +
         '<div class="field"><label for="f_name">Name</label><input type="text" id="f_name" name="name" value="' + esc(u.name) + '"></div>' +
         '<div class="field"><label for="f_role">Role</label><select id="f_role" name="role">' +
-          ["Admin", "Editor", "Viewer"].map(r => '<option' + (r === u.role ? " selected" : "") + '>' + r + '</option>').join("") + '</select>' +
-          '<div class="hint">Admin: everything. Editor: sees, edits + logs tests on assigned tanks. Viewer: sees + logs tests on assigned tanks.</div></div>' +
-        '<div class="field" id="tank-picks"' + (u.role === "Admin" ? " hidden" : "") + '><label>Assigned tanks</label>' +
-          '<div class="hint" id="tank-picks-hint">' + (u.role === "Editor" ? "Can see and edit these tanks and log water tests on them." : "Can see these tanks and log water tests on them.") + '</div>' + tankBoxes + '</div>' +
+          roleNames().map(r => '<option' + (sameName(r, u.role) ? " selected" : "") + '>' + esc(r) + '</option>').join("") + '</select>' +
+          '<div class="hint">Admin always has everything. What the other roles can do is set on ' +
+            '<a href="#/roles">Roles &amp; permissions</a>.</div></div>' +
+        '<div class="field" id="tank-picks"' + (roleHas(u.role, "allTanks") ? " hidden" : "") + '><label>Assigned tanks</label>' +
+          '<div class="hint" id="tank-picks-hint">' + esc(tankPickHint(u.role)) + '</div>' + tankBoxes + '</div>' +
         '<div class="field"><label class="check"><input type="checkbox" name="active"' + (u.active ? " checked" : "") + '> Active (can sign in)</label></div>',
       onReady: form => {
         $("#f_role", form).addEventListener("change", e => {
-          $("#tank-picks", form).hidden = e.target.value === "Admin";
-          $("#tank-picks-hint", form).textContent = e.target.value === "Editor" ? "Can see and edit these tanks and log water tests on them." : "Can see these tanks and log water tests on them.";
+          $("#tank-picks", form).hidden = roleHas(e.target.value, "allTanks");
+          $("#tank-picks-hint", form).textContent = tankPickHint(e.target.value);
         });
       },
       onSubmit: async (vals, form) => {
@@ -3208,7 +3358,7 @@
           '<button class="' + (state.receiptFilter === "unassigned" ? "on" : "") + '" data-act="receipt-filter" data-f="unassigned">Unassigned (' + unassigned + ')</button>' +
         '</div>' +
         '<input class="search" type="search" placeholder="Search receipts…" value="' + esc(state.receiptQuery) + '" data-act="receipt-search">' +
-        (isAdmin() ? '<div class="toggle-row"><label class="check" style="padding:0"><input type="checkbox" data-act="toggle-retired-receipts" ' + (state.showRetiredReceipts ? "checked" : "") + '> Show retired</label></div>' : "") +
+        (can("receipts") ? '<div class="toggle-row"><label class="check" style="padding:0"><input type="checkbox" data-act="toggle-retired-receipts" ' + (state.showRetiredReceipts ? "checked" : "") + '> Show retired</label></div>' : "") +
         '<div class="card list">' + (rows.map(receiptRow).join("") || '<div class="empty">' + (state.receipts.length ? "Nothing found." : "No receipts yet.") + '</div>') + '</div>'
     };
   }
@@ -3226,12 +3376,12 @@
     const hero = '<div class="card hero"><h2>' + esc(receiptTitle(r)) + '</h2>' +
       '<div class="meta">' + esc([id, r["Vendor"], money(r["Total"])].filter(Boolean).join(" · ")) + '</div>' +
       (isRetired(r) ? '<div class="counts"><span class="pill retired">Retired</span></div>' : links.length ? "" : '<div class="counts"><span class="pill warn">Unassigned</span></div>') +
-      (isAdmin() ? '<div class="actions">' +
+      (can("receipts") ? '<div class="actions">' +
         '<button class="btn primary" data-act="link-receipt" data-id="' + esc(id) + '">' + ICONS.plus + 'Assign to records</button>' +
         '<button class="btn" data-act="edit-receipt" data-id="' + esc(id) + '">Edit</button>' +
-        (isRetired(r) ? '<button class="btn" data-act="restore-receipt" data-id="' + esc(id) + '">Restore</button>'
-                      : '<button class="btn danger" data-act="retire-receipt" data-id="' + esc(id) + '">Retire</button>') +
-        '<button class="btn danger" data-act="delete-receipt" data-id="' + esc(id) + '">Delete</button>' +
+        (can("retireRecords") ? (isRetired(r) ? '<button class="btn" data-act="restore-receipt" data-id="' + esc(id) + '">Restore</button>'
+                      : '<button class="btn danger" data-act="retire-receipt" data-id="' + esc(id) + '">Retire</button>') : "") +
+        (can("deleteRecords") ? '<button class="btn danger" data-act="delete-receipt" data-id="' + esc(id) + '">Delete</button>' : "") +
         '</div>' : "") + '</div>';
     const linked = '<div class="section"><div class="section-head"><h3>Linked to (' + links.length + ')</h3></div><div class="card list">' +
       (links.map(l => {
@@ -3241,16 +3391,16 @@
           '<span class="thumb">' + esc(String(l["Item ID"]).split("-")[0]) + '</span>' +
           '<div class="body"><div class="title">' + esc(x ? TYPES[x.type].title(x.rec) : l["Item ID"]) + '</div>' +
           '<div class="sub">' + esc([l["Item ID"], x ? TYPES[x.type].one : "", l["Date Linked"] ? "Linked " + fmtDate(l["Date Linked"]) : ""].filter(Boolean).join(" · ")) + '</div></div>' +
-          (isAdmin() ? '<button class="btn small danger" data-act="unlink-receipt" data-row="' + l._row + '" data-id="' + esc(id) + '" data-item="' + esc(l["Item ID"]) + '">Remove</button>' : "") +
+          (can("receipts") ? '<button class="btn small danger" data-act="unlink-receipt" data-row="' + l._row + '" data-id="' + esc(id) + '" data-item="' + esc(l["Item ID"]) + '">Remove</button>' : "") +
           '</div>';
-      }).join("") || '<div class="empty">' + (isAdmin() ? "Not linked yet. Tap “Assign to records”." : "Not linked yet. An admin will assign it.") + '</div>') +
+      }).join("") || '<div class="empty">' + (can("receipts") ? "Not linked yet. Tap “Assign to records”." : "Not linked yet. An admin will assign it.") + '</div>') +
       '</div></div>';
     const details = '<div class="section"><div class="section-head"><h3>Details</h3></div><div class="card kv">' +
       [["Vendor", esc(r["Vendor"])], ["Purchase date", esc(fmtDate(r["Purchase Date"]))], ["Total", esc(money(r["Total"]))],
        ["Notes", esc(r["Notes"])], ["File name", esc(r["File Name"])], ["Uploaded by", esc(personName(r["Uploaded By"]))],
        ["Uploaded", esc(r["Uploaded At"] ? fmtDate(String(r["Uploaded At"]).slice(0, 10)) + " " + String(r["Uploaded At"]).slice(11) : "")],
        ["Receipt ID", esc(id)]]
-        .concat(isAdmin() && r["Photo Link"] ? [["Drive", '<a href="' + esc(r["Photo Link"]) + '" target="_blank" rel="noopener">Open in Drive</a>']] : [])
+        .concat(can("receipts") && r["Photo Link"] ? [["Drive", '<a href="' + esc(r["Photo Link"]) + '" target="_blank" rel="noopener">Open in Drive</a>']] : [])
         .filter(p => p[1] !== "").map(p => '<div class="k">' + p[0] + '</div><div>' + p[1] + '</div>').join("") +
       '</div></div>';
     return { title: receiptTitle(r), back: true, html: photo + hero + receiptLinesSection(r) + linked + details, after: () => loadReceiptPhoto(id) };
@@ -3348,7 +3498,7 @@
     if (PHOTO_TYPES.indexOf(type) === -1 || !state.photosOn) return "";
     const id = r[TYPES[type].id];
     const list = photosFor(id);
-    if (!list.length && !isAdmin()) return "";
+    if (!list.length && !can("photos")) return "";
     const tiles = list.map(p =>
       '<button type="button" class="photo-tile" data-act="open-photo" data-id="' + esc(p["Photo ID"]) + '">' +
         photoHtml(p["Photo URL"], "tile-img", 400, "") +
@@ -3356,7 +3506,7 @@
         (p["Caption"] ? '<span class="tile-cap">' + esc(p["Caption"]) + '</span>' : "") +
       '</button>').join("");
     return '<div class="section"><div class="section-head"><h3>Photos (' + list.length + ')</h3>' +
-      (isAdmin() ? '<button class="btn small" data-act="add-photo" data-type="' + type + '" data-id="' + esc(id) + '">' + ICONS.plus + 'Add</button>' : "") + '</div>' +
+      (can("photos") ? '<button class="btn small" data-act="add-photo" data-type="' + type + '" data-id="' + esc(id) + '">' + ICONS.plus + 'Add</button>' : "") + '</div>' +
       (tiles ? '<div class="photo-grid">' + tiles + '</div>' : '<div class="card"><div class="empty">No photos yet. Add the whole item, its label (serial / model), the box…</div></div>') + '</div>';
   }
 
@@ -3395,7 +3545,7 @@
     const type = p["Item Type"], itemId = p["Item ID"];
     const r = findRec(type, itemId);
     const isList = !!r && String(r["Thumbnail URL"] || "") === String(p["Photo URL"]);
-    const admin = isAdmin();
+    const admin = can("photos");
     openSheet({
       title: p["Caption"] || "Photo",
       submitLabel: admin ? "Save caption" : "Close",
@@ -3538,8 +3688,8 @@
         fieldHtml({ name: "purchaseDate", label: "Purchase date", type: "date" }, today()) +
         '<div class="field"><label for="f_total">Total</label><input type="text" inputmode="decimal" id="f_total" name="total" placeholder="0.00" autocomplete="off"></div>' +
         fieldHtml({ name: "notes", label: "Notes", type: "longtext" }, "") +
-        (presetItem && !isAdmin() ? '<p class="hint">This receipt will be linked to <b>' + esc(presetItem + (preRec ? " " + TYPES[preRec.type].title(preRec.rec) : "")) + '</b>.</p>' : "") +
-        (isAdmin() ? '<div class="form-section"><h3>Assign to records <span class="opt">optional</span></h3>' +
+        (presetItem && !can("allTanks") ? '<p class="hint">This receipt will be linked to <b>' + esc(presetItem + (preRec ? " " + TYPES[preRec.type].title(preRec.rec) : "")) + '</b>.</p>' : "") +
+        (can("allTanks") ? '<div class="form-section"><h3>Assign to records <span class="opt">optional</span></h3>' +
           comboHtml({ name: "itemIds", label: "Records on this receipt", mode: "multi", value: presetItem || "",
                       placeholder: "Search tanks, species, equipment, plants, medications" }, linkableItems(new Set())) +
           '<p class="hint">Leave empty to assign later from the receipt’s page.</p></div>' : "") +
@@ -3582,7 +3732,7 @@
         if (!(await checkVendorField(vals, form, "vendor"))) return false;
         const total = String(vals.total || "").replace(/[$,\s]/g, "");
         if (total && isNaN(Number(total))) throw new Error("Total must be an amount like 24.99.");
-        const itemIds = isAdmin() ? String(vals.itemIds || "").split(",").filter(Boolean) : (presetItem ? [presetItem] : []);
+        const itemIds = can("allTanks") ? String(vals.itemIds || "").split(",").filter(Boolean) : (presetItem ? [presetItem] : []);
         const lines = state.hasReceiptLines ? await collectLines(vals, form, lineChoices) : [];
         if (lines === null) return false;
         return write("uploadReceipt", {
@@ -3686,11 +3836,11 @@
   // Fill with AI (species, plants, equipment, medications)
   // ------------------------------------------------------------------
   const AI_TYPES = ["species", "plants", "equipment", "medications", "foods"];
-  const canUseAi = () => state.me && (state.me.role === "Admin" || state.me.role === "Editor");
+  const canUseAi = () => can("useAi");
   // Editors can fix the details of a wishlist item they added.
   function canEditItem(type, r) {
-    if (isAdmin()) return true;
-    if (!r || !state.me || state.me.role !== "Editor" || !isWishItem(r)) return false;
+    if (can("editRecords")) return true;
+    if (!r || !state.me || !can("wishlist") || !isWishItem(r)) return false;
     const id = r[TYPES[type].id];
     return state.wishes.some(w => w["Item ID"] === id && w["New Item"] === true && w["Added By"] === state.me.id);
   }
@@ -3831,18 +3981,18 @@
   const wishesNeedingTank = () => state.wishes.filter(wishNeedsTank);
   const wishTitle = w => { const r = wishItem(w); return r ? TYPES[w["Item Type"]].title(r) : w["Item ID"]; };
   const compatFor = (wishId, tankId) => state.compat.find(c => c["Wish ID"] === wishId && c["Tank ID"] === tankId);
-  const canAddWish = () => isAdmin() || (state.me && state.me.role === "Editor" && state.me.tanks.length > 0);
+  const canAddWish = () => can("wishlist") && (can("allTanks") || (state.me && state.me.tanks.length > 0));
   const wishTanksAllowed = () => state.data.tanks.filter(t => !isRetired(t) && canEditTank(t["Tank ID"]))
     .sort((a, b) => String(a["Tank Name"]).localeCompare(String(b["Tank Name"])));
   function canManageWish(w) {
-    if (isAdmin()) return true;
-    if (!state.me || state.me.role !== "Editor") return false;
+    if (can("allTanks") && can("wishlist")) return true;
+    if (!state.me || !can("wishlist")) return false;
     return w["Added By"] === state.me.id || wishPending(w["Wish ID"]).some(a => canEditTank(a["Tank ID"]));
   }
   function canCloseWish(w) {
-    if (isAdmin() || (state.me && w["Added By"] === state.me.id && state.me.role === "Editor")) return true;
+    if ((can("allTanks") && can("wishlist")) || (state.me && w["Added By"] === state.me.id && can("wishlist"))) return true;
     const pt = wishPending(w["Wish ID"]);
-    return !!state.me && state.me.role === "Editor" && pt.length > 0 && pt.every(a => canEditTank(a["Tank ID"]));
+    return !!state.me && can("wishlist") && pt.length > 0 && pt.every(a => canEditTank(a["Tank ID"]));
   }
   const PRIORITY_ORDER = { High: 0, Medium: 1, Low: 2 };
 
@@ -3941,9 +4091,9 @@
       '<div class="actions">' +
         (canBuy ? '<button class="btn primary" data-act="purchase-wish" data-id="' + esc(id) + '">' + (needsTank ? "Choose a tank" : "Mark purchased") + '</button>' : "") +
         (manage ? '<button class="btn" data-act="edit-wish" data-id="' + esc(id) + '">Edit wish</button>' : "") +
-        (r && canEditItem(type, r) && (isWishItem(r) || isAdmin()) ? '<button class="btn" data-act="edit-record" data-type="' + type + '" data-id="' + esc(w["Item ID"]) + '">Edit item</button>' : "") +
+        (r && canEditItem(type, r) && (isWishItem(r) || can("editRecords")) ? '<button class="btn" data-act="edit-record" data-type="' + type + '" data-id="' + esc(w["Item ID"]) + '">Edit item</button>' : "") +
         (open && canCloseWish(w) ? '<button class="btn danger" data-act="close-wish" data-id="' + esc(id) + '">Not getting</button>' : "") +
-        (isAdmin() ? '<button class="btn danger" data-act="delete-wish" data-id="' + esc(id) + '">Delete</button>' : "") +
+        (can("deleteRecords") ? '<button class="btn danger" data-act="delete-wish" data-id="' + esc(id) + '">Delete</button>' : "") +
       '</div></div></div>';
 
     const tankBlock = (tankId, extra) => {
@@ -3988,7 +4138,7 @@
   // record already chosen, so nothing about the item has to be typed again.
   function addWishForm(prefTank, preset) {
     const tanks = wishTanksAllowed();
-    if (!tanks.length && !isAdmin()) { toast("You don’t manage any tanks yet.", true); return; }
+    if (!tanks.length && !can("allTanks")) { toast("You don’t manage any tanks yet.", true); return; }
     const pre = preset && WISH_TYPES.indexOf(preset.type) !== -1 && findRec(preset.type, preset.id) ? preset : null;
     let image = null, commons = null, reuseId = "", type = pre ? pre.type : "species";
     const pri = state.wishOptions.priorities, sts = ["Researching", "Want"];
@@ -4006,7 +4156,7 @@
         '<div class="form-section"><h3>Which tanks?</h3>' +
           (tanks.map(t => '<label class="check"><input type="checkbox" name="tank:' + esc(t["Tank ID"]) + '"' + (t["Tank ID"] === prefTank ? " checked" : "") + '> ' +
             esc(t["Tank Name"]) + ' <span class="meta">' + esc(t["Tank ID"]) + '</span></label>').join("") || '<p class="hint">No tanks.</p>') +
-          (isAdmin() ? '<p class="hint">Leave all unchecked to just research it; the compatibility check will suggest tanks.</p>' : "") + '</div>' +
+          (can("allTanks") ? '<p class="hint">Leave all unchecked to just research it; the compatibility check will suggest tanks.</p>' : "") + '</div>' +
         '<div class="form-section"><h3>Wish details</h3>' +
           fieldHtml({ name: "w_priority", label: "Priority", type: "select", html: pri.map(p => '<option' + (p === "Medium" ? " selected" : "") + '>' + esc(p) + '</option>').join("") }) +
           fieldHtml({ name: "w_status", label: "Wish status", type: "select", html: sts.map(p => '<option' + (p === "Want" ? " selected" : "") + '>' + esc(p) + '</option>').join("") }) +
@@ -4134,7 +4284,7 @@
       },
       onSubmit: async (vals, form) => {
         const picked = $$("input[name^='tank:']", form).filter(el => el.checked).map(el => el.name.slice(5));
-        if (!isAdmin() && !picked.length) throw new Error("Check at least one of your tanks.");
+        if (!can("allTanks") && !picked.length) throw new Error("Check at least one of your tanks.");
         if (!(await checkVendorField(vals, form, "w_vendor"))) return false;
         if (!reuseId && !(await checkListFields(vals, form, wishItemFields(type)))) return false;
         const price = String(vals.w_price || "").replace(/[$,\s]/g, "");
@@ -4217,7 +4367,7 @@
         const payload = { wishId: id, wish: changed };
         if (open) {
           const picked = $$("input[name^='tank:']", form).filter(el => el.checked).map(el => el.name.slice(5));
-          if (!isAdmin() && !picked.length) throw new Error("Keep at least one tank checked, or use “Not getting”.");
+          if (!can("allTanks") && !picked.length) throw new Error("Keep at least one tank checked, or use “Not getting”.");
           const same = picked.length === pend.length && picked.every(t => pend.indexOf(t) !== -1);
           if (!same) payload.tanks = picked;
         }
@@ -4357,8 +4507,8 @@
   // ------------------------------------------------------------------
   // Water testing
   // ------------------------------------------------------------------
-  const canLogTank = id => isAdmin() || (state.me && state.me.tanks.indexOf(id) !== -1);
-  const canCorrect = row => isAdmin() || (state.me && row["Tested By"] === state.me.id);
+  const canLogTank = id => can("allTanks") || (can("logTests") && state.me && state.me.tanks.indexOf(id) !== -1);
+  const canCorrect = row => can("allTanks") || (state.me && row["Tested By"] === state.me.id);
   const isLive = r => String(r["Status"] || "Active") !== "Retired";
   const activeTypes = () => state.testTypes.filter(isLive);
   const findType = id => state.testTypes.find(t => t["Test Type ID"] === id);
@@ -4541,7 +4691,7 @@
 
   function viewWater(tankId) {
     tankId = tankId || defaultWaterTank();
-    if (!tankId) return { title: "Test", html: '<div class="empty">' + (isAdmin() ? "No tanks yet." : "No tanks are assigned to you yet.") + '</div>' };
+    if (!tankId) return { title: "Test", html: '<div class="empty">' + (can("allTanks") ? "No tanks yet." : "No tanks are assigned to you yet.") + '</div>' };
     const types = activeTypes().concat(state.testTypes.filter(t => !isLive(t) && readings(tankId, t["Test Type ID"]).length));
     const tested = types.filter(t => readings(tankId, t["Test Type ID"]).length);
     const untested = types.filter(t => !readings(tankId, t["Test Type ID"]).length);
@@ -4550,7 +4700,7 @@
       .sort((x, y) => parseDT(y["Tested At"]) - parseDT(x["Tested At"])).slice(0, 15);
     const actions = '<div class="actions" style="margin:0 0 12px">' +
       (canLogTank(tankId) ? '<button class="btn primary" data-act="log-water" data-tank="' + esc(tankId) + '">' + ICONS.plus + 'Log water test</button>' : "") +
-      (isAdmin() ? '<a class="btn" href="#/testtypes">Test types</a>' : "") + '</div>';
+      (can("manageTestTypes") ? '<a class="btn" href="#/testtypes">Test types</a>' : "") + '</div>';
     const sessHtml = '<div class="section"><div class="section-head"><h3>Recent tests (' + sessions.length + ')</h3></div><div class="card list">' +
       (sessions.map(s => {
         const rs = state.waterTests.filter(r => r["Session ID"] === s["Session ID"] && isLive(r));
@@ -4860,7 +5010,7 @@
   // ------------------------------------------------------------------
   // Maintenance (water changes for now; more types later)
   // ------------------------------------------------------------------
-  const canCorrectBy = who => isAdmin() || (state.me && !!who && who === state.me.id);
+  const canCorrectBy = who => can("allTanks") || (state.me && !!who && who === state.me.id);
   const tankVolume = id => { const t = findRec("tanks", id); return t ? num(t["Volume (gal)"]) : null; };
   function equipLabel(id) {
     const r = findRec("equipment", id);
@@ -5007,9 +5157,9 @@
              : '<div class="field"><label for="f_ntank">Tank</label><select id="f_ntank">' + loggable.map(t => '<option value="' + esc(t["Tank ID"]) + '"' + (t["Tank ID"] === tankId ? " selected" : "") + '>' + esc(t["Tank Name"]) + '</option>').join("") + '</select></div>') +
         (from ? '<p class="hint">Last done ' + esc(fmtDate(from["Done At"])) + '. Saving this clears the reminder on that one.</p>' : "") +
         '<div class="field"><label for="f_ndate">Date done</label><input type="date" id="f_ndate" value="' + esc(rec ? String(rec["Done At"]).slice(0, 10) : today()) + '" max="' + esc(today()) + '"></div>' +
-        comboHtml({ name: "type", label: "Kind", required: true, noThumbs: true, mode: isAdmin() ? "free" : "single",
+        comboHtml({ name: "type", label: "Kind", required: true, noThumbs: true, mode: can("manageLists") ? "free" : "single",
                     newLabel: "will be added to the list", value: cur["Maintenance Type"] || "",
-                    placeholder: isAdmin() ? "Choose or type a kind" : "Choose a kind" },
+                    placeholder: can("manageLists") ? "Choose or type a kind" : "Choose a kind" },
                   types.map(t => ({ value: t, label: t }))) +
         '<div class="field"><label for="f_nsum">What was done <span class="req">*</span></label><input type="text" id="f_nsum" maxlength="200" autocomplete="off" value="' + esc(cur["Summary"] || "") + '" placeholder="Moved the filter intake lower"></div>' +
         '<div class="field"><label for="f_nitem">Equipment (optional)</label><select id="f_nitem"><option value="">None</option>' + itemsFor(tankId) + '</select></div>' +
@@ -5089,7 +5239,7 @@
 
   function viewMaintenance(tankId) {
     tankId = tankId || defaultMaintTank();
-    if (!tankId) return { title: "Maintenance", html: '<div class="empty">' + (isAdmin() ? "No tanks yet." : "No tanks are assigned to you yet.") + '</div>' };
+    if (!tankId) return { title: "Maintenance", html: '<div class="empty">' + (can("allTanks") ? "No tanks yet." : "No tanks are assigned to you yet.") + '</div>' };
     const tanks = state.data.tanks.slice().sort((x, y) => (isRetired(x) - isRetired(y)) || String(x["Tank Name"]).localeCompare(String(y["Tank Name"])));
     const all = waterChangesFor(tankId, true);
     const live = all.filter(isLive);
@@ -5325,6 +5475,8 @@
       case "add-param": paramForm(d.tank); break;
       case "edit-param": paramForm(null, Number(d.row)); break;
       case "add-user": userForm(); break;
+      case "add-role": roleForm(); break;
+      case "edit-role": roleForm(d.role); break;
       case "log-water": logWaterForm(d.tank); break;
       case "log-wc": e.stopPropagation(); waterChangeForm(d.tank); break;
       case "toggle-list": {
@@ -5494,7 +5646,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "69";
+  const APP_VERSION = "70";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

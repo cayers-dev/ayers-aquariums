@@ -129,7 +129,7 @@ function apiSetThumbnail_(user, type, rec, url) {
 
 // req: { itemId, photo: { data, mimeType }, caption?, useAsListPicture? }
 function apiAddItemPhoto_(req, user) {
-   apiRequireAdmin_(user);
+   apiRequireCan_(user, "photos");
    const item = apiPhotoItem_(String(req.itemId || ""));
    const def = API_TABLES[item.type];
    const itemId = item.rec[def.id];
@@ -150,7 +150,7 @@ function apiAddItemPhoto_(req, user) {
 
 // req: { photoId, caption }
 function apiUpdatePhoto_(req, user) {
-   apiRequireAdmin_(user);
+   apiRequireCan_(user, "photos");
    const p = apiFindPhoto_(String(req.photoId || ""));
    const caption = String(req.caption || "").replace(/\s+/g, " ").trim().slice(0, 100);
    const changes = apiWriteChanges_(apiPhotosSheet_(), p._row, p, { "Caption": caption });
@@ -160,7 +160,7 @@ function apiUpdatePhoto_(req, user) {
 
 // req: { photoId } -> the photo becomes its item's list picture.
 function apiSetListPhoto_(req, user) {
-   apiRequireAdmin_(user);
+   apiRequireCan_(user, "photos");
    const p = apiFindPhoto_(String(req.photoId || ""));
    const item = apiPhotoItem_(p["Item ID"]);
    apiSetThumbnail_(user, item.type, item.rec, p["Photo URL"]);
@@ -170,7 +170,7 @@ function apiSetListPhoto_(req, user) {
 // req: { photoId } -> marked Removed (hidden in the app; the Drive file stays).
 // If it was the item's list picture, the item's Thumbnail URL is cleared.
 function apiRemoveItemPhoto_(req, user) {
-   apiRequireAdmin_(user);
+   apiRequireCan_(user, "photos");
    const p = apiFindPhoto_(String(req.photoId || ""));
    apiWriteChanges_(apiPhotosSheet_(), p._row, p, { "Status": "Removed", "Removed By": apiWho_(user), "Removed At": new Date() });
    apiLog_(user, "Remove", PHOTO_CONFIG.sheetName, p["Photo ID"], p["Item ID"] + (p["Caption"] ? " · " + p["Caption"] : ""));

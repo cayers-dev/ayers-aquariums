@@ -62,7 +62,7 @@ function apiLineItemInfo_(item, user, receiptId) {
       const name = String(item.name || "").replace(/\s+/g, " ").trim();
       if (!name) throw apiError_("INVALID", "A new " + API_TABLES[type].label.toLowerCase() + " needs a name.");
       // Only admins add records to the shared lists.
-      if (user.role !== "Admin") throw apiError_("FORBIDDEN", "Only admins can add new records, so “" + name + "” can't be added as a " +
+      if (!apiCan_(user, "addRecords")) throw apiError_("FORBIDDEN", "Your role can't add new records, so “" + name + "” can't be added as a " +
          API_TABLES[type].label.toLowerCase() + " here. Leave it as a price-tracker item, or ask an admin to add the record.");
       if (!receiptId) return { recordId: "", priceItemId: "", name: name, newType: type };   // checking only
       // Tanks and equipment are one record per unit, so two of the same name are expected.

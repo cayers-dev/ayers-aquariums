@@ -206,7 +206,7 @@ function aiParseJson_(s) {
 
 // Only admins and editors may use the AI (viewers can't add or edit records).
 function aiRequireUser_(user) {
-   if (user.role !== "Admin" && user.role !== "Editor") throw apiError_("FORBIDDEN", "Only admins and editors can use the AI.");
+   if (!apiCan_(user, "useAi")) throw apiError_("FORBIDDEN", "Your role can't use the AI lookups.");
 }
 
 
@@ -986,7 +986,7 @@ function aiCleanSuggestions_(fields, raw, rejected) {
 // req: { photoId, values: { field: current value } }
 // ------------------------------------------------------------
 function apiAiReadLabel_(req, user) {
-   apiRequireAdmin_(user);
+   apiRequireCan_(user, "useAi");
    const p = apiFindPhoto_(String(req.photoId || ""));
    if (p["Item Type"] !== "equipment") throw apiError_("INVALID", "Read label works on equipment photos.");
    const img = apiPhotoBytes_(p);

@@ -80,7 +80,7 @@ function apiCountsText_(counts) {
 // req: { table, id }
 // ------------------------------------------------------------
 function apiDeleteRecord_(req, user) {
-   apiRequireAdmin_(user);
+   apiRequireCan_(user, "deleteRecords");
    const table = req.table;
    const def = API_TABLES[table];
    if (!def || !def.id || ["tanks", "species", "equipment", "plants", "medications", "foods"].indexOf(table) === -1) {
@@ -163,7 +163,7 @@ function apiDeleteRecord_(req, user) {
 // req: { id }
 // ------------------------------------------------------------
 function apiDeleteReceipt_(req, user) {
-   apiRequireAdmin_(user);
+   apiRequireCan_(user, "deleteRecords");
    const tabs = apiEnsureReceiptTabs_();
    const id = String(req.id || "");
    const rec = apiReadReceipts_().find(r => r["Receipt ID"] === id);
@@ -198,7 +198,7 @@ function apiDeleteReceipt_(req, user) {
 // req: { photoId }
 // ------------------------------------------------------------
 function apiDeletePhoto_(req, user) {
-   apiRequireAdmin_(user);
+   apiRequireCan_(user, "deleteRecords");
    const p = apiFindPhoto_(String(req.photoId || ""));
    const trashed = apiTrashDriveFile_(apiDriveFileId_(p["Photo URL"]));
    apiDeleteRowsWhere_(apiPhotosSheet_(), "Photo ID", v => String(v).trim() === p["Photo ID"]);
