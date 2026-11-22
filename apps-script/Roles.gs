@@ -14,20 +14,20 @@ const ROLE_CONFIG = {
    admin: "Admin",
    // Order here is the order of the columns and of the app's Roles screen.
    caps: [
-      ["addRecords", "Add records", "Create species, plants, equipment, food and medications"],
-      ["editRecords", "Edit records", "Change the details of an existing record"],
-      ["retireRecords", "Retire records", "Mark a record retired so it drops out of the lists"],
-      ["deleteRecords", "Delete records", "Permanently delete records, receipts, photos and wishes"],
-      ["manageLists", "Dropdown lists", "Add and rename values on the Lookups lists, in the screen or by typing one into a form"],
-      ["manageTestTypes", "Test types", "Add, change and retire water test types"],
-      ["photos", "Photos", "Add, caption and remove item photos"],
-      ["receipts", "Receipts", "Upload receipts, link them to records and edit their lines"],
-      ["prices", "Prices", "Use the price tracker"],
-      ["useAi", "AI lookups", "Fill in fields with the AI, read a label and check a wish"],
-      ["wishlist", "Wishlist", "Add wishes and manage them"],
-      ["logTests", "Log tests and maintenance", "Record water tests and maintenance in the tanks assigned to them"],
+      ["addRecords", "Add records", "Create new tanks, species, plants, equipment, food and medications, including an item typed straight into a receipt's lines"],
+      ["editRecords", "Edit records", "Change the details of an existing record. Setting Status by hand stays with Admin."],
+      ["retireRecords", "Retire records", "Retire a record or a receipt so it drops out of the lists, and restore it later"],
+      ["deleteRecords", "Delete records", "Permanently delete a record, receipt, photo or wish. This can't be undone."],
+      ["manageLists", "Dropdown lists", "Add and rename values on the dropdown lists, either on the Dropdown lists screen or by typing a new one into a form"],
+      ["manageTestTypes", "Test types", "Add, change and retire the water test types that everyone's tests use"],
+      ["photos", "Photos", "Add, caption and remove item photos, and choose which one shows in the lists"],
+      ["receipts", "Receipts", "Upload and edit receipts, link and unlink them to records, and edit the items listed on them"],
+      ["prices", "Prices", "Record and change prices and stock levels in the price tracker. Everyone can see prices either way."],
+      ["useAi", "AI lookups", "Fill a record's fields with the AI, identify an item from a photo of its label, and check a wish against a tank"],
+      ["wishlist", "Wishlist", "Add wishes, and change or close the ones they added or that are for their tanks"],
+      ["logTests", "Log tests and maintenance", "Record water tests and maintenance in the tanks assigned to them, and correct their own entries"],
       ["workInTanks", "Work in their tanks", "Add, remove and change the items in the tanks assigned to them"],
-      ["allTanks", "All tanks", "See and work in every tank, not only the ones assigned to them"]
+      ["allTanks", "All tanks", "See and work in every tank, not only the ones assigned to them, and link receipts to any record"]
    ],
    // Exactly what the app did before the tab existed.
    defaults: {
