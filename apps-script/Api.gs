@@ -69,7 +69,13 @@ const API_FIELD_LISTS = {
                       "Status": ["Status", true] },
    equipment:       { "Category": ["Equipment Type", true], "Manufacturer": ["Manufacturer", false],
                       "Filter Model": ["Filter Model", false], "Status": ["Status", true] },
-   plants:          { "Difficulty": ["Difficulty", true], "Status": ["Status", true] },
+   // Plant care fields are lists so they stop drifting, but not strict: a value
+   // that isn't there yet can still be typed into the form and joins the list.
+   plants:          { "Difficulty": ["Difficulty", true], "Status": ["Status", true],
+                      "Light": ["Plant Light", false], "CO2": ["Plant CO2", false],
+                      "Placement": ["Plant Placement", false],
+                      "Primary Nutrient Source": ["Plant Nutrient Source", false],
+                      "Growth Rate": ["Plant Growth Rate", false] },
    medications:     { "Stock": ["Stock Status", true] },
    foods:           { "Food Type": ["Food Type", true], "Manufacturer": ["Manufacturer", false],
                       "Status": ["Status", true], "Stock": ["Stock Status", true] },
@@ -126,6 +132,9 @@ function apiRoute_(req, user) {
       // Roles and permissions (Roles.gs)
       case "saveRole":          return apiWrite_(() => apiSaveRole_(req, user));
       case "deleteRole":        return apiWrite_(() => apiDeleteRole_(req, user));
+      // Change log (ChangeLog.gs) — reads only, so no write lock.
+      case "changeLog":         return apiChangeLog_(req, user);
+      case "changeLogFilters":  return apiChangeLogFilters_(user);
       // Receipts (Receipts.gs)
       case "uploadReceipt":     return apiWrite_(() => apiUploadReceipt_(req, user));
       case "receiptPhoto":      return apiReceiptPhoto_(req, user);

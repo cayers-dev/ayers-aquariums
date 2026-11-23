@@ -158,6 +158,26 @@
   function isUrl(v) { return /^https?:\/\//i.test(String(v || "")); }
   // Item photos uploaded from the app live in Drive and are loaded through the server.
   function driveId(url) { const m = /drive\.google\.com\/file\/d\/([A-Za-z0-9_-]+)/.exec(String(url || "")); return m ? m[1] : ""; }
+  // The hero card sticks under the app bar. A 1px sentinel sits just above it:
+  // once that scrolls out of sight the card has stuck, and it condenses to its
+  // buttons. The app bar already shows the record's name, so the condensed card
+  // doesn't repeat it.
+  let heroWatcher = null;
+  function stickHero() {
+    if (heroWatcher) { heroWatcher.disconnect(); heroWatcher = null; }
+    const bar = $(".topbar");
+    const barH = bar ? bar.offsetHeight : 56;
+    document.documentElement.style.setProperty("--appbar-h", barH + "px");
+    const dock = $(".hero-dock"), sentinel = $(".hero-sentinel");
+    if (!dock || !sentinel || !window.IntersectionObserver) return;
+    // The app bar is sticky and covers the top of the page, so the sentinel counts
+    // as gone once it slips behind the bar, not when it leaves the viewport.
+    heroWatcher = new IntersectionObserver(
+      entries => dock.classList.toggle("is-stuck", !entries[0].isIntersecting),
+      { threshold: 0, rootMargin: -barH + "px 0px 0px 0px" });
+    heroWatcher.observe(sentinel);
+  }
+
   function photoHtml(url, cls, width, fallback) {
     if (!url) return fallback ? '<span class="' + cls + '">' + esc(fallback) + '</span>' : "";
     const id = driveId(url);
@@ -227,6 +247,8 @@
     cart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16l-1.6 11.2a2 2 0 0 1-2 1.8H7.6a2 2 0 0 1-2-1.8z"/><path d="M8.5 7V5.5a3.5 3.5 0 0 1 7 0V7"/></svg>',
     check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>',
     copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 6.5V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h1.5"/></svg>',
+    // Change log: a clock with an arrow turning back.
+    history: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"/><path d="M3 4v4h4"/><path d="M12 7.5V12l3 1.8"/></svg>',
     // Roles: a padlock.
     lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10.5" width="16" height="10.5" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>'
   };
@@ -270,7 +292,7 @@
       label: "Tanks", one: "Tank", id: "Tank ID",
       title: r => r["Tank Name"] || r["Tank ID"],
       sub: r => [r["Volume (gal)"] ? r["Volume (gal)"] + " gal" : "", r["Aquarium Type"]].filter(Boolean).join(" · "),
-      img: () => ""
+      img: r => r["Thumbnail URL"]
     }
   };
   const ITEM_TYPES = ["species", "equipment", "plants", "foods"];
@@ -671,6 +693,7 @@
       case "item": view = viewItem(route.args[0], route.args[1]); break;
       case "users": view = isAdmin() ? viewUsers() : viewTanks(); break;
       case "roles": view = isAdmin() ? viewRoles() : viewHome(); break;
+      case "changelog": view = isAdmin() ? viewChangeLog() : viewHome(); break;
       case "lists": view = can("manageLists") ? viewLists() : viewHome(); break;
       case "wish": view = route.args[0] ? viewWish(route.args[0]) : viewWishlist(); break;
       case "account": view = viewAccount(); break;
@@ -2096,7 +2119,8 @@
        .concat([link("#/prices", "tag", "Prices", n(state.priceItems.length, state.priceItems.length === 1 ? "item" : "items") + " · " + n(state.prices.length, state.prices.length === 1 ? "price" : "prices"))])) +
       group("Account", [link("#/account", "account", "My account", state.me ? state.me.name || state.me.email : "")]
         .concat(isAdmin() ? [link("#/users", "users", "Users", ""),
-                             link("#/roles", "lock", "Roles & permissions", plural((state.roles || []).length, "role"))] : [])
+                             link("#/roles", "lock", "Roles & permissions", plural((state.roles || []).length, "role")),
+                             link("#/changelog", "history", "Change log", state.changeLog ? "" : "paused")] : [])
         .concat(can("manageTestTypes") ? [link("#/testtypes", "flask", "Test types", "")] : [])
         .concat(can("manageLists") ? [link("#/lists", "list", "Dropdown lists", (state.lookupTypes || []).length + " lists")] : []), 1);
     return { title: "Ayers Aquariums", html: html };
@@ -2118,7 +2142,10 @@
       const assigned = tankAssignments(id, true);
       const counts = { species: 0, equipment: 0, plants: 0 };
       assigned.forEach(a => { const ty = itemType(a["Item ID"]); if (ty) counts[ty]++; });
-      return '<a class="card tank-card ' + (isRetired(t) ? "dim" : "") + '" href="#/tank/' + encodeURIComponent(id) + '">' +
+      // A tank with a picture leads with it; one without keeps the old compact card.
+      const banner = TYPES.tanks.img(t) ? '<div class="tank-banner">' + photoHtml(TYPES.tanks.img(t), "tank-banner-img", 800, "") + '</div>' : "";
+      return '<a class="card tank-card ' + (banner ? "has-banner " : "") + (isRetired(t) ? "dim" : "") + '" href="#/tank/' + encodeURIComponent(id) + '">' +
+        banner +
         '<div class="row1"><h2>' + esc(t["Tank Name"]) + '</h2>' +
           '<div class="tank-side">' + (t["Volume (gal)"] ? '<span class="vol">' + esc(t["Volume (gal)"]) + ' gal</span>' : "") +
           '<span class="pill tank-status ' + esc(tankStatus(t).toLowerCase()) + '">' + esc(tankStatus(t)) + '</span></div></div>' +
@@ -2159,8 +2186,11 @@
         (editable ? '<button class="btn small danger" data-act="remove-assignment" data-row="' + a._row + '" data-tank="' + esc(id) + '" data-item="' + esc(a["Item ID"]) + '">Remove</button>' : "") +
         '</div>';
     };
+    // Each section adds its own kind, so the picker opens already narrowed to it.
     const group = (ty, label) =>
-      '<div class="section"><div class="section-head"><h3>' + label + ' (' + groups[ty].length + ')</h3></div>' +
+      '<div class="section"><div class="section-head"><h3>' + label + ' (' + groups[ty].length + ')</h3>' +
+      (editable ? '<button class="btn small" data-act="add-assignment" data-tank="' + esc(id) + '" data-itemtype="' + ty + '">' +
+        ICONS.plus + 'Add</button>' : "") + '</div>' +
       '<div class="card list">' + (groups[ty].map(a => itemRow(a, ty)).join("") || '<div class="empty">None</div>') + '</div></div>';
 
     const params = state.data.waterParameters.filter(p => p["Tank ID"] === id);
@@ -2188,18 +2218,21 @@
       }).join("") + '</div>' : "") + '</div>' : "";
 
     const hero =
-      '<div class="card hero"><h2>' + esc(t["Tank Name"]) + '</h2>' +
+      '<div class="hero-sentinel"></div><div class="hero-dock">' +
+      '<div class="card">' + photoHtml(TYPES.tanks.img(t), "big-img", 800, "") +
+      '<div class="hero"><h2>' + esc(t["Tank Name"]) + '</h2>' +
       '<div class="meta">' + esc([id, t["Volume (gal)"] ? t["Volume (gal)"] + " gal" : "", t["Aquarium Type"], t["Status"]].filter(Boolean).join(" · ")) + '</div>' +
       (editable ? '<div class="actions">' +
-        '<button class="btn primary" data-act="add-assignment" data-tank="' + esc(id) + '">' + ICONS.plus + 'Add to tank</button>' +
+        '<button class="btn primary" data-hero-hide data-act="add-assignment" data-tank="' + esc(id) + '">' + ICONS.plus + 'Add to tank</button>' +
         '<button class="btn" data-act="edit-record" data-type="tanks" data-id="' + esc(id) + '">Edit tank</button>' +
         (can("retireRecords") && !isRetired(t) ? '<button class="btn danger" data-act="retire" data-type="tanks" data-id="' + esc(id) + '">Retire</button>' : "") +
         (can("deleteRecords") ? '<button class="btn danger" data-act="delete-record" data-type="tanks" data-id="' + esc(id) + '">Delete</button>' : "") +
-      '</div>' : "") + '</div>';
+      '</div>' : "") + '</div></div></div>';
 
     return {
       title: t["Tank Name"], back: true,
-      html: hero + group("species", "Livestock") + group("equipment", "Equipment") + group("plants", "Plants") + group("foods", "Food") +
+      after: stickHero,
+      html: hero + photosSection("tanks", t) + group("species", "Livestock") + group("equipment", "Equipment") + group("plants", "Plants") + group("foods", "Food") +
             wishSection(id) + waterSection(id) + maintSection(id) + tankNotesSection(id) + (state.hasTreatments ? treatmentSection(id, { showPast: true }) : "") + paramsHtml + receiptsSection(id) + detailsSection("tanks", t, "Tank details") + removedHtml
     };
   }
@@ -2324,7 +2357,7 @@
     if (can("deleteRecords")) {
       acts.push('<button class="btn danger" data-act="delete-record" data-type="' + type + '" data-id="' + esc(id) + '">Delete</button>');
     }
-    const hero = '<div class="card">' +
+    const hero = '<div class="hero-sentinel"></div><div class="hero-dock"><div class="card">' +
       photoHtml(img, "big-img", 800, "") +
       '<div class="hero"><h2>' + esc(T.title(r)) + '</h2><div class="meta">' + esc([r[T.id], T.sub(r)].filter(Boolean).join(" · ")) + '</div>' +
       (isRetired(r) ? '<div class="counts"><span class="pill retired">Retired</span></div>' : isWishItem(r) ? '<div class="counts"><span class="pill wishpill">' + ICONS.wish + 'Wishlist</span></div>' : "") +
@@ -2333,12 +2366,13 @@
           (canPrices() ? '<button class="btn small" data-act="set-stock" data-id="' + esc(id) + '">Change</button>' : "") + '</div>'
         : inStorage(type, r) ? '<div class="counts"><span class="pill">In storage</span></div>' : "") +
       (acts.length ? '<div class="actions">' + acts.join("") + '</div>' : "") +
-      '</div></div>';
+      '</div></div></div>';
     const wishNote = openWishes.length
       ? '<div class="section"><div class="section-head"><h3>On the wishlist (' + openWishes.length + ')</h3></div>' +
         '<div class="card list">' + openWishes.map(wishRow).join("") + '</div></div>'
       : "";
-    return { title: T.title(r), back: true, html: hero + wishNote + photosSection(type, r) + inTanks + itemNotesSection(id) +
+    return { title: T.title(r), back: true, after: stickHero,
+      html: hero + wishNote + photosSection(type, r) + inTanks + itemNotesSection(id) +
       receiptsSection(id, canItemReceipts(type, r) ? type : "") + detailsSection(type, r, "Details") };
   }
 
@@ -2536,6 +2570,13 @@
     });
     // A new item can go into tanks right away, so nothing has to be done twice.
     const tanks = !editing && ITEM_TYPES.indexOf(type) !== -1 ? tanksICanAddTo() : [];
+    // A thing you just bought usually has a receipt in hand, so it can be attached
+    // here instead of saving the record and going to its page to link one.
+    const mayReceipt = !editing && canReceipts() && RECEIPT_LINK_TYPES.indexOf(type) !== -1;
+    const receiptChoices = mayReceipt ? (state.receipts || []).filter(x => !isRetired(x))
+      .sort((x, y) => receiptSortKey(y).localeCompare(receiptSortKey(x)))
+      .map(x => ({ value: x["Receipt ID"], label: receiptTitle(x),
+                   sub: [x["Receipt ID"], x["Vendor"], money(x["Total"])].filter(Boolean).join(" \u00b7 ") })) : [];
     const ai = AI_TYPES.indexOf(type) !== -1 && canUseAi() && (can("allTanks") || canEditItem(type, rec));
     openSheet({
       title: opts.title || (editing ? "Edit " : "Add ") + T.one.toLowerCase(),
@@ -2544,10 +2585,26 @@
         (ai ? aiBarHtml() : "") + fields.map(f => fieldHtml(f, values[f.name])).join("") +
         (tanks.length ? '<div class="form-section"><h3>Add to tanks <span class="opt">optional</span></h3>' +
           comboHtml({ name: "__tanks", label: "Tanks", mode: "multi", noThumbs: true, placeholder: "Tap to choose tanks" },
-                    tanks.map(t => ({ value: t["Tank ID"], label: t["Tank Name"], sub: t["Tank ID"] }))) + '</div>' : ""),
+                    tanks.map(t => ({ value: t["Tank ID"], label: t["Tank Name"], sub: t["Tank ID"] }))) + '</div>' : "") +
+        (mayReceipt ? '<div class="form-section"><h3>Receipt <span class="opt">optional</span></h3>' +
+          comboHtml({ name: "__receipt", label: "Receipt", mode: "single", noThumbs: true,
+                      placeholder: receiptChoices.length ? "Search by name, store, date or total" : "No receipts uploaded yet",
+                      newRecord: "Upload a receipt\u2026" }, receiptChoices) +
+          '<p class="hint">It will be linked to this ' + esc(T.one.toLowerCase()) + ' once it is saved.</p></div>' : ""),
       onReady: form => {
         $$("[data-combo]", form).forEach(wireCombo);
         if (prefill) applyPrefill(form, prefill);
+        const rCombo = $('[data-combo] input[name="__receipt"]', form);
+        if (rCombo) {
+          const box = rCombo.closest("[data-combo]");
+          box.addEventListener("combo-add-record", () => {
+            uploadReceiptForm("", rid => {
+              const rec = findReceipt(rid);
+              box.comboAddPick({ value: rid, label: rec ? receiptTitle(rec) : rid,
+                                 sub: rec ? [rid, rec["Vendor"], money(rec["Total"])].filter(Boolean).join(" \u00b7 ") : rid });
+            });
+          });
+        }
         if (!ai) return;
         const thumb = $('[name="Thumbnail URL"]', form);
         // Species and plants: a free Wikimedia Commons photo fills a blank Thumbnail URL (link only).
@@ -2570,6 +2627,8 @@
         }
         const tankIds = String(vals.__tanks || "").split(",").map(x => x.trim()).filter(Boolean);
         delete vals.__tanks;
+        const receiptId = String(vals.__receipt || "").trim();
+        delete vals.__receipt;
         const res = await write("add", { table: type, values: vals }, T.one + " added");
         const newId = res && res.added ? res.added.id : "";
         // Put it in the tanks that were picked, then tell whoever opened this form.
@@ -2579,6 +2638,10 @@
             for (let i = 1; i < tankIds.length; i++) await api("addAssignments", { tankId: tankIds[i], itemIds: [newId] });
             toast("Added to " + tankIds.map(tankName).join(", "));
           } catch (err) { toast("Saved, but not added to a tank: " + err.message, true); }
+        }
+        if (newId && receiptId) {
+          try { await api("linkReceipt", { id: receiptId, itemIds: [newId] }); toast("Receipt linked"); }
+          catch (err) { toast("Saved, but the receipt wasn\u2019t linked: " + err.message, true); }
         }
         if (newId && opts.onCreated) { await refreshInBackground(); opts.onCreated(newId, type); }
         return res;
@@ -2690,8 +2753,31 @@
     const groups = $$(".combo-group", list);
     const empty = $(".combo-empty", list);
     const picked = [];
-    const open = () => { list.hidden = false; input.setAttribute("aria-expanded", "true"); };
-    const close = () => { list.hidden = true; input.setAttribute("aria-expanded", "false"); };
+    // A list that opens near the foot of a sheet runs past the bottom of the
+    // scrolling area and its last options get clipped by the footer. So: scroll
+    // the sheet just enough to show the whole list, and when there isn't room
+    // below the input even after that, open the list upward instead.
+    const placeList = () => {
+      const body = root.closest(".sheet-body");
+      root.classList.remove("combo-up");
+      if (!body || list.hidden) return;
+      requestAnimationFrame(() => {
+        if (list.hidden) return;
+        const bodyBox = body.getBoundingClientRect();
+        const inputBox = input.getBoundingClientRect();
+        const rootBox = root.getBoundingClientRect();
+        const cap = parseFloat(getComputedStyle(list).maxHeight) || Infinity;
+        const listH = Math.min(list.scrollHeight, cap);
+        const below = bodyBox.bottom - inputBox.bottom - 8;
+        const above = rootBox.top - bodyBox.top - 8;
+        // Only flip when going up genuinely shows more of the list.
+        if (listH > below && above > below) { root.classList.add("combo-up"); return; }
+        const overflow = inputBox.bottom + listH + 8 - bodyBox.bottom;
+        if (overflow > 0) body.scrollTop += overflow;
+      });
+    };
+    const open = () => { list.hidden = false; input.setAttribute("aria-expanded", "true"); placeList(); };
+    const close = () => { list.hidden = true; root.classList.remove("combo-up"); input.setAttribute("aria-expanded", "false"); };
     const filter = q => {
       q = q.trim().toLowerCase();
       const words = q.split(/\s+/).filter(Boolean);
@@ -2708,6 +2794,7 @@
         newRow.textContent = "“" + input.value.trim() + "” " + (root.dataset.newLabel || "will be added as new");
       }
       empty.hidden = anyShown || (newRow && !newRow.hidden);
+      placeList();
     };
     const renderChips = () => {
       chips.innerHTML = picked.map(v => {
@@ -2886,6 +2973,7 @@
       onSubmit: async vals => {
         const ids = String(vals.receiptIds || "").split(",").filter(Boolean);
         if (!ids.length) throw new Error("Choose at least one receipt.");
+        if (!(await confirmSecondReceipt(ids.map(rid => ({ itemId: id, receiptId: rid }))))) return false;
         // One link call per receipt, then reload the data once.
         busy(true);
         try {
@@ -2942,10 +3030,13 @@
     });
   }
 
-  function assignmentForm(tankId) {
+  // onlyType narrows the picker to one kind, for the Add button in a tank
+  // section's head; the hero's "Add to tank" still opens it across all kinds.
+  function assignmentForm(tankId, onlyType) {
     const inTank = new Set(tankAssignments(tankId, true).map(a => a["Item ID"]));
+    const types = onlyType && ITEM_TYPES.indexOf(onlyType) !== -1 ? [onlyType] : ITEM_TYPES;
     const items = [];
-    ITEM_TYPES.forEach(ty => {
+    types.forEach(ty => {
       const T = TYPES[ty];
       // Items already in this tank stay in the list, greyed out and labelled, so nobody thinks they're missing.
       (state.data[ty] || []).filter(r => !isWishItem(r) && (!isRetired(r) || inTank.has(r[T.id])))
@@ -2958,10 +3049,10 @@
         });
     });
     openSheet({
-      title: "Add to " + tankName(tankId),
+      title: (onlyType ? "Add " + TYPES[onlyType].label.toLowerCase() + " to " : "Add to ") + tankName(tankId),
       submitLabel: "Add",
       body:
-        comboHtml({ name: "Item IDs", label: "Items", mode: "multi", required: true,
+        comboHtml({ name: "Item IDs", label: onlyType ? TYPES[onlyType].label : "Items", mode: "multi", required: true,
                     placeholder: "Tap to choose, or type to search. Pick as many as you like",
                     newRecord: can("addRecords") ? "Add one that isn't in the list…" : "" }, items) +
         fieldHtml({ name: "Date Added", type: "date" }, today()) +
@@ -2979,7 +3070,7 @@
             if (!rec) return;
             const T = TYPES[newType];
             combo.comboAddPick({ value: newId, label: T.title(rec), sub: T.sub(rec), group: T.label });
-          }, NEW_RECORD_TYPES.filter(t => ITEM_TYPES.indexOf(t[0]) !== -1));
+          }, NEW_RECORD_TYPES.filter(t => types.indexOf(t[0]) !== -1));
         });
       },
       onSubmit: vals => {
@@ -3139,6 +3230,84 @@
         return ok;
       }
     });
+  }
+
+  // ---------- Change log (admin only) ----------
+  // The tab grows without limit, so the app asks for a page at a time and keeps
+  // what it has in state.log; "Load more" asks for the next page from the last row.
+  function viewChangeLog() {
+    const L = state.log || (state.log = { entries: [], more: false, loading: false, filters: {}, total: 0 });
+    const f = L.filters || {};
+    const opts = (name, values, cur, blank) =>
+      '<select data-act="log-filter" data-f="' + name + '"><option value="">' + blank + '</option>' +
+        values.map(v => '<option value="' + esc(v) + '"' + (cur === v ? " selected" : "") + '>' + esc(name === "who" ? personName(v) : v) + '</option>').join("") +
+      '</select>';
+    const rows = L.entries.map(e => {
+      const x = recordOf(e.record);
+      const href = x ? (x.type === "tanks" ? "#/tank/" : "#/item/" + x.type + "/") + encodeURIComponent(e.record) : "";
+      const title = x ? e.record + " " + TYPES[x.type].title(x.rec) : (e.record || e.table);
+      return '<div class="list-item"' + (href ? ' data-act="go" data-href="' + esc(href) + '"' : "") + '>' +
+        '<span class="thumb">' + esc(String(e.action || "?").slice(0, 2)) + '</span>' +
+        '<div class="body"><div class="title">' + esc(e.action + " \u00b7 " + title) + '</div>' +
+        '<div class="sub">' + esc([personName(e.who), e.table, logWhen(e.when)].filter(Boolean).join(" \u00b7 ")) + '</div>' +
+        (e.changes ? '<div class="sub">' + esc(e.changes) + '</div>' : "") + '</div></div>';
+    }).join("");
+    const note = !state.changeLog
+      ? '<p class="hint">Routine logging is off, so only permanent deletes are being recorded. Turn it back on from My account.</p>' : "";
+    return {
+      title: "Change log", back: true,
+      html: note +
+        '<div class="log-controls">' +
+          opts("who", L.filters.peopleList || [], f.who || "", "Anyone") +
+          opts("action", L.filters.actionsList || [], f.action || "", "Any change") +
+        '</div>' +
+        '<input class="search" type="search" placeholder="Search records and changes\u2026" value="' + esc(f.text || "") + '" data-act="log-search">' +
+        '<div class="card list">' +
+          (rows || (L.loading ? '<div class="empty"><div class="spinner"></div></div>'
+                              : '<div class="empty">' + (L.entries.length || !L.loaded ? "Loading\u2026" : "Nothing recorded yet.") + '</div>')) +
+        '</div>' +
+        (L.more ? '<div class="actions"><button class="btn" data-act="log-more"' + (L.loading ? " disabled" : "") + '>' +
+          (L.loading ? "Loading\u2026" : "Load more") + '</button></div>' : "") +
+        (L.total ? '<p class="hint">' + esc(plural(L.total, "entry", "entries")) + ' in the log' +
+          (L.stoppedEarly ? ", and this filter has more further back than one look can reach" : "") + '.</p>' : ""),
+      after: () => { if (!L.loaded && !L.loading) loadChangeLog(true); }
+    };
+  }
+
+  // "2026-11-23 14:05" reads better as a date people recognise.
+  const logWhen = w => {
+    if (!w) return "";
+    const d = String(w).slice(0, 10), t = String(w).slice(11, 16);
+    return (d === today() ? "Today" : fmtDate(d)) + (t ? " " + t : "");
+  };
+
+  async function loadChangeLog(reset) {
+    const L = state.log || (state.log = { entries: [], filters: {} });
+    if (L.loading) return;
+    L.loading = true;
+    if (reset) { L.entries = []; L.before = null; L.more = false; }
+    render();
+    try {
+      const f = L.filters || {};
+      const res = await api("changeLog", { before: reset ? null : L.before,
+                                           who: f.who || "", kind: f.action || "", text: f.text || "" });
+      L.entries = (reset ? [] : L.entries).concat(res.entries || []);
+      L.before = res.before; L.more = !!res.more; L.total = res.total;
+      L.stoppedEarly = !!res.stoppedEarly;
+      L.loaded = true;
+      if (!L.filters.actionsList) {
+        const ff = await api("changeLogFilters", {});
+        L.filters.actionsList = ff.actions || [];
+        L.filters.peopleList = ff.people || [];
+      }
+    } catch (err) {
+      if (["AUTH", "NOT_ALLOWED", "SETUP"].indexOf(err.code) !== -1) return authStop(err);
+      L.loaded = true;
+      toast(err.message || "The change log couldn\u2019t be loaded.", true);
+    } finally {
+      L.loading = false;
+      render();
+    }
   }
 
   // ---------- Roles and permissions (admin only) ----------
@@ -3491,7 +3660,7 @@
   // ---------- Item photos (species, equipment, plants) ----------
   // Several photos per item (e.g. the whole filter, its serial label). Admins add, caption,
   // remove and pick the list picture; everyone signed in can view them.
-  const PHOTO_TYPES = ["species", "equipment", "plants", "medications", "foods"];
+  const PHOTO_TYPES = ["tanks", "species", "equipment", "plants", "medications", "foods"];
   const photosFor = id => state.photos.filter(p => p["Item ID"] === id)
     .sort((a, b) => String(a["Added At"]).localeCompare(String(b["Added At"])));
   function photosSection(type, r) {
@@ -3670,7 +3839,7 @@
   }
 
   // presetItem (optional): an item ID to link the receipt to (opened from that item's page).
-  function uploadReceiptForm(presetItem) {
+  function uploadReceiptForm(presetItem, onCreated) {
     let image = null;
     const lineChoices = priceItemChoices();
     const preRec = presetItem ? recordOf(presetItem) : null;
@@ -3735,13 +3904,16 @@
         const itemIds = can("allTanks") ? String(vals.itemIds || "").split(",").filter(Boolean) : (presetItem ? [presetItem] : []);
         const lines = state.hasReceiptLines ? await collectLines(vals, form, lineChoices) : [];
         if (lines === null) return false;
-        return write("uploadReceipt", {
+        const out = await write("uploadReceipt", {
           receipt: { fileName: vals.fileName, vendor: vals.vendor, purchaseDate: vals.purchaseDate, total: total, notes: vals.notes },
           image: { data: image.data, mimeType: image.mimeType },
           itemIds: itemIds, lines: lines
         }, res => (itemIds.length || (res && res.linked && res.linked.length) ? "Receipt uploaded and assigned" : "Receipt uploaded") +
                   (lines.length ? " with " + lines.length + " item" + (lines.length === 1 ? "" : "s") : "") +
                   (res && res.notes && res.notes.length ? ". " + res.notes.join(". ") : ""));
+        // Whoever opened this form may be waiting for the receipt's ID.
+        if (onCreated && out && out.added) { await refreshInBackground(); onCreated(out.added.id); }
+        return out;
       }
     });
   }
@@ -3805,8 +3977,49 @@
                         placeholder: "Search tanks, species, equipment, plants, medications" }, items) +
         '<p class="hint">Tap each record that’s on this receipt. If something isn’t in the database yet, add it first (Browse → Add), then come back and link it.</p>',
       onReady: form => $$("[data-combo]", form).forEach(wireCombo),
-      onSubmit: vals => write("linkReceipt", { id: id, itemIds: String(vals.itemIds || "").split(",").filter(Boolean) }, "Linked")
+      onSubmit: async vals => {
+        const itemIds = String(vals.itemIds || "").split(",").filter(Boolean);
+        if (!(await confirmSecondReceipt(itemIds.map(x => ({ itemId: x, receiptId: id }))))) return false;
+        return write("linkReceipt", { id: id, itemIds: itemIds }, "Linked");
+      }
     });
+  }
+
+  // Equipment is normally bought once, so a second receipt on the same piece is
+  // more often a slip than a deliberate pair. It isn't blocked — tanks and
+  // livestock really do appear on several receipts — but it asks first, and shows
+  // the receipt the item is already on so the two can be compared.
+  async function confirmSecondReceipt(pairs) {
+    const clashes = [];
+    pairs.forEach(p => {
+      if (itemType(p.itemId) !== "equipment") return;
+      receiptsForRecord(p.itemId).forEach(x => {
+        if (x["Receipt ID"] !== p.receiptId && !isRetired(x)) clashes.push({ itemId: p.itemId, other: x });
+      });
+    });
+    if (!clashes.length) return true;
+    const body = clashes.map(c => {
+      const rec = recordOf(c.itemId);
+      const oid = c.other["Receipt ID"];
+      const cached = state.photoCache[oid];
+      const meta = [oid, c.other["Vendor"], money(c.other["Total"])].filter(Boolean).join(" \u00b7 ");
+      return '<div class="form-section"><h3>' + esc(c.itemId + (rec ? " " + TYPES[rec.type].title(rec.rec) : "")) + '</h3>' +
+        '<p class="hint">Already on <b>' + esc(receiptTitle(c.other)) + '</b>' + (meta ? " \u2014 " + esc(meta) : "") + '</p>' +
+        '<div class="card receipt-photo" data-photo="' + esc(oid) + '">' +
+          (cached && cached.url ? receiptFileHtml(oid, c.other, cached) :
+           cached && cached.error ? '<div class="empty">' + esc(cached.error) + '</div>' :
+           '<div class="photo-loading"><div class="spinner"></div><span>Loading photo\u2026</span></div>') + '</div></div>';
+    }).join("");
+    const one = clashes.length === 1;
+    const answer = confirmSheet({
+      title: one ? "Already on another receipt" : "Already on other receipts",
+      body: '<p>' + (one ? "This piece of equipment is" : "These pieces of equipment are") +
+        ' already linked to a receipt. Have a look before you add another \u2014 it may be the same purchase.</p>' + body,
+      yes: "Link anyway", no: "Cancel"
+    });
+    // The sheet is in the page by now, so each photo drops into its own slot as it arrives.
+    clashes.forEach(c => loadReceiptPhoto(c.other["Receipt ID"]));
+    return await answer;
   }
 
   function unlinkReceiptForm(row, id, itemId) {
@@ -5467,7 +5680,7 @@
       case "item-upload-receipt": uploadReceiptForm(d.id); break;
       case "item-link-receipt": itemLinkReceiptForm(d.type, d.id); break;
       case "open-photo": photoViewer(d.id); break;
-      case "add-assignment": assignmentForm(d.tank); break;
+      case "add-assignment": assignmentForm(d.tank, d.itemtype || ""); break;
       case "remove-assignment":
         e.stopPropagation();
         removeAssignmentForm(Number(d.row), d.tank, d.item);
@@ -5476,6 +5689,7 @@
       case "edit-param": paramForm(null, Number(d.row)); break;
       case "add-user": userForm(); break;
       case "add-role": roleForm(); break;
+      case "log-more": loadChangeLog(false); break;
       case "edit-role": roleForm(d.role); break;
       case "log-water": logWaterForm(d.tank); break;
       case "log-wc": e.stopPropagation(); waterChangeForm(d.tank); break;
@@ -5600,6 +5814,16 @@
       if (s) { s.focus(); try { s.setSelectionRange(pos, pos); } catch (err) { /* ignore */ } }
     }
   });
+  let logSearchTimer = null;
+  document.addEventListener("input", e => {
+    if (e.target.matches("[data-act='log-search']")) {
+      const L = state.log || (state.log = { entries: [], filters: {} });
+      L.filters.text = e.target.value;
+      clearTimeout(logSearchTimer);
+      // The filter runs on the server, so don't fire on every keystroke.
+      logSearchTimer = setTimeout(() => loadChangeLog(true), 400);
+    }
+  });
   document.addEventListener("input", e => {
     if (e.target.matches("[data-act='receipt-search']")) {
       state.receiptQuery = e.target.value;
@@ -5637,6 +5861,11 @@
     if (e.target.matches("[data-act='toggle-retired-receipts']")) { state.showRetiredReceipts = e.target.checked; render(); }
     if (e.target.matches("[data-act='toggle-retired']")) { state.showRetired = e.target.checked; render(); }
     if (e.target.matches("[data-act='wish-tank']")) { state.wishTank = e.target.value; render(); }
+    if (e.target.matches("[data-act='log-filter']")) {
+      const L = state.log || (state.log = { entries: [], filters: {} });
+      L.filters[e.target.dataset.f] = e.target.value;
+      loadChangeLog(true);
+    }
   });
   window.addEventListener("hashchange", () => { if (state.me) render(); });
 
@@ -5646,7 +5875,7 @@
   window.AA = { gisLoaded: gisLoaded };
 
   // ---------- Updates: reload when a newer version is published ----------
-  const APP_VERSION = "70";
+  const APP_VERSION = "71";
   async function checkForUpdate() {
     try {
       const res = await fetch("version.json?x=" + Date.now(), { cache: "no-store" });

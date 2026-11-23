@@ -1,7 +1,7 @@
 // ============================================================
 // AYERS AQUARIUMS - ITEM PHOTOS
 //
-// Several photos per species, equipment, plant, medication or food:
+// Several photos per tank, species, equipment, plant, medication or food:
 // for example the whole filter, its serial/model label, the box, the
 // dosing panel on the back of a bottle, or a tub's feeding chart.
 //
@@ -22,7 +22,7 @@
 const PHOTO_CONFIG = {
    sheetName: "Item Photos",
    prefix: "PH-",
-   types: ["species", "equipment", "plants", "medications", "foods"],
+   types: ["tanks", "species", "equipment", "plants", "medications", "foods"],
    headers: ["Photo ID", "Item ID", "Item Type", "Caption", "Photo URL", "Added By", "Added At", "Status", "Removed By", "Removed At"]
 };
 
@@ -102,13 +102,16 @@ function apiNextPhotoId_() {
    return PHOTO_CONFIG.prefix + (max + 1);
 }
 
-// Medications came to pictures after the tab was built, so their Thumbnail URL
-// column is made the first time the app loads after this change (once, ever).
+// Medications, and later tanks, came to pictures after their tabs were built, so
+// each one's Thumbnail URL column is made the first time the app loads after that
+// change (once, ever, per tab).
 function apiEnsureMedThumbColumn_() {
    const props = PropertiesService.getScriptProperties();
-   if (props.getProperty("medThumbColumn") === "done") return;
-   apiEnsureColumn_(apiSheet_(API_TABLES.medications.sheetKey), "Thumbnail URL");
-   props.setProperty("medThumbColumn", "done");
+   [["medThumbColumn", "medications"], ["tankThumbColumn", "tanks"]].forEach(function (pair) {
+      if (props.getProperty(pair[0]) === "done") return;
+      apiEnsureColumn_(apiSheet_(API_TABLES[pair[1]].sheetKey), "Thumbnail URL");
+      props.setProperty(pair[0], "done");
+   });
 }
 
 // Sets an item's list picture (Thumbnail URL) and logs the change.

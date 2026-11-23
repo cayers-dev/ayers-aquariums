@@ -92,6 +92,14 @@ img { max-width: 100%; }
   display: block; padding: 14px; margin-bottom: 10px;
   text-decoration: none; color: inherit;
 }
+/* A tank's own picture, across the top of its card. */
+.tank-card.has-banner { padding-top: 0; overflow: hidden; }
+.tank-banner { margin: 0 -14px 12px; }
+.tank-banner-img {
+  display: block; width: 100%; height: 132px; object-fit: cover;
+  border-radius: var(--radius) var(--radius) 0 0; background: var(--line);
+}
+img.tank-banner-img.drive-img:not([src]) { min-height: 132px; }
 .tank-card .row1 { display: flex; align-items: baseline; gap: 8px; }
 .tank-card h2 { margin: 0; font-size: 18px; flex: 1; }
 .tank-card .vol { font-weight: 650; color: var(--primary); white-space: nowrap; }
@@ -147,6 +155,32 @@ img { max-width: 100%; }
 .empty { padding: 14px; color: var(--muted); text-align: center; }
 
 .hero { padding: 16px; margin-bottom: 6px; }
+/* The hero card stays under the app bar while the page scrolls. At the top it
+   shows in full; once it sticks it drops to a row of buttons, because the app
+   bar is already carrying the name. */
+.hero-sentinel { height: 1px; margin-bottom: -1px; }
+.hero-dock { position: sticky; top: var(--appbar-h, 56px); z-index: 15; }
+.hero-dock > .card { margin-bottom: 12px; }
+.hero-dock.is-stuck > .card {
+  margin-bottom: 12px; border-radius: 0 0 var(--radius) var(--radius);
+  box-shadow: 0 6px 14px rgba(17, 38, 45, .10);
+}
+.hero-dock.is-stuck .big-img,
+.hero-dock.is-stuck .hero > h2,
+.hero-dock.is-stuck .hero > .meta,
+.hero-dock.is-stuck .hero > .counts,
+.hero-dock.is-stuck [data-hero-hide] { display: none; }
+.hero-dock.is-stuck .hero { padding: 8px 10px; margin-bottom: 0; }
+.hero-dock.is-stuck .hero > .actions {
+  margin-top: 0; flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.hero-dock.is-stuck .hero > .actions::-webkit-scrollbar { display: none; }
+.hero-dock.is-stuck .hero > .actions .btn { flex: 0 0 auto; padding: 8px 12px; }
+.hero-dock.is-stuck:not(:has(.actions)) { display: none; }
+@media (prefers-color-scheme: dark) {
+  .hero-dock.is-stuck > .card { box-shadow: 0 6px 14px rgba(0, 0, 0, .45); }
+}
 .hero h2 { margin: 0 0 4px; font-size: 22px; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 
@@ -269,6 +303,17 @@ img { max-width: 100%; }
   margin-top: 6px; max-height: 42vh; overflow-y: auto; -webkit-overflow-scrolling: touch;
   border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
 }
+/* No room below the input: the list opens upward over what's above it. */
+.combo.combo-up { position: relative; }
+.combo.combo-up .combo-list {
+  position: absolute; bottom: 100%; left: 0; right: 0; z-index: 6;
+  margin: 0 0 6px;
+  /* It floats over the fields above it, so it needs to read as a layer. */
+  box-shadow: 0 -2px 6px rgba(17, 38, 45, .08), 0 -10px 28px rgba(17, 38, 45, .16);
+}
+@media (prefers-color-scheme: dark) {
+  .combo.combo-up .combo-list { box-shadow: 0 -2px 6px rgba(0, 0, 0, .5), 0 -10px 28px rgba(0, 0, 0, .55); }
+}
 .combo-group {
   position: sticky; top: 0; z-index: 1; padding: 6px 12px; font-size: 12px; font-weight: 700;
   text-transform: uppercase; letter-spacing: .04em; color: var(--muted); background: var(--surface-2);
@@ -359,6 +404,13 @@ img.viewer-img.drive-img:not([src]), img.tile-img.drive-img:not([src]) { min-hei
 .water-controls select { flex: 1; min-width: 0; padding: 9px 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; }
 .water-controls .days { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 14px; white-space: nowrap; }
 .water-controls .days input { width: 64px; padding: 8px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; text-align: center; }
+/* Change log: the two filters sit side by side above the search box. */
+.log-controls { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+.log-controls select {
+  flex: 1; min-width: 0; padding: 9px 10px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  font: inherit; -webkit-appearance: menulist;
+}
 .water-card { cursor: pointer; margin-bottom: 10px; }
 .wc-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 6px; }
 .wc-head .title { font-weight: 700; }

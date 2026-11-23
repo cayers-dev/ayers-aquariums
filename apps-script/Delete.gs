@@ -120,6 +120,7 @@ function apiDeleteRecord_(req, user) {
          });
       }
       counts["user tank lists updated"] = users;
+      apiDeletePhotosFor_(is, rec, counts);
       apiClearUsersCache_();
    } else {
       counts["tank assignment rows"] = apiDeleteRowsWhere_(apiSheet_("tankAssignments"), "Item ID", is).count;
@@ -131,14 +132,7 @@ function apiDeleteRecord_(req, user) {
       counts["wishes"] = wishes.count;
       counts["compatibility checks"] = apiDeleteRowsWhere_(apiTabOrNull_(WISH_CONFIG.compatSheetName), "Wish ID", v => !!wishIds[String(v).trim()]).count +
                                        apiDeleteRowsWhere_(apiTabOrNull_(WISH_CONFIG.compatSheetName), "Item ID", is).count;
-      // Photos: rows deleted, files to the Drive trash (the list picture too, if it was an uploaded photo).
-      const photos = apiDeleteRowsWhere_(apiTabOrNull_(PHOTO_CONFIG.sheetName), "Item ID", is);
-      const trashed = {};
-      photos.rows.forEach(r => { const f = apiDriveFileId_(r["Photo URL"]); if (f && !trashed[f] && apiTrashDriveFile_(f)) trashed[f] = true; });
-      const thumb = apiDriveFileId_(rec["Thumbnail URL"]);
-      if (thumb && !trashed[thumb] && apiIsItemPhotoFile_(thumb) && apiTrashDriveFile_(thumb)) trashed[thumb] = true;
-      counts["photos"] = photos.count;
-      counts["photo files moved to Drive trash"] = Object.keys(trashed).length;
+      apiDeletePhotosFor_(is, rec, counts);
       counts["image credits"] = apiDeleteRowsWhere_(apiTabOrNull_("Image Credits"), "Species ID", is).count;
       // Price tracker (Prices.gs): its price item and every price gathered for it.
       counts["price tracker rows"] = apiDeletePricesForRecord_(id, user);
@@ -194,6 +188,19 @@ function apiDeleteReceipt_(req, user) {
 
 
 // ------------------------------------------------------------
+// Photos of a record: rows deleted, files to the Drive trash (the list picture
+// too, if it was an uploaded photo rather than a link to someone else's).
+function apiDeletePhotosFor_(is, rec, counts) {
+   const photos = apiDeleteRowsWhere_(apiTabOrNull_(PHOTO_CONFIG.sheetName), "Item ID", is);
+   const trashed = {};
+   photos.rows.forEach(r => { const f = apiDriveFileId_(r["Photo URL"]); if (f && !trashed[f] && apiTrashDriveFile_(f)) trashed[f] = true; });
+   const thumb = apiDriveFileId_(rec["Thumbnail URL"]);
+   if (thumb && !trashed[thumb] && apiIsItemPhotoFile_(thumb) && apiTrashDriveFile_(thumb)) trashed[thumb] = true;
+   counts["photos"] = photos.count;
+   counts["photo files moved to Drive trash"] = Object.keys(trashed).length;
+}
+
+
 // Item photos
 // req: { photoId }
 // ------------------------------------------------------------
